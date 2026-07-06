@@ -264,6 +264,15 @@ type PostAgentRunMessageJSONBody struct {
 // CreateDreamPolicy201JSONResponseBodyStatus defines parameters for CreateDreamPolicy.
 type CreateDreamPolicy201JSONResponseBodyStatus string
 
+// CreateMethodOutlineJSONBody defines parameters for CreateMethodOutline.
+type CreateMethodOutlineJSONBody struct {
+	OrgScope *string `json:"org_scope,omitempty"`
+
+	// Outline Sections/steps of arbitrary nesting
+	Outline map[string]interface{} `json:"outline"`
+	Title   string                 `json:"title"`
+}
+
 // CreateWorkflowDraftJSONBody defines parameters for CreateWorkflowDraft.
 type CreateWorkflowDraftJSONBody struct {
 	EnterpriseId string `json:"enterprise_id"`
@@ -293,6 +302,9 @@ type PostAgentRunMessageJSONRequestBody PostAgentRunMessageJSONBody
 
 // CreateDreamPolicyJSONRequestBody defines body for CreateDreamPolicy for application/json ContentType.
 type CreateDreamPolicyJSONRequestBody = DreamPolicyDraft
+
+// CreateMethodOutlineJSONRequestBody defines body for CreateMethodOutline for application/json ContentType.
+type CreateMethodOutlineJSONRequestBody CreateMethodOutlineJSONBody
 
 // CreateWorkflowDraftJSONRequestBody defines body for CreateWorkflowDraft for application/json ContentType.
 type CreateWorkflowDraftJSONRequestBody CreateWorkflowDraftJSONBody

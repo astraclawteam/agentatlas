@@ -25,6 +25,7 @@ type AgentRouterDeps struct {
 	Runtime   *workflow.Runtime
 	Dreams    *dream.PolicyService
 	Store     *db.Queries
+	Outlines  MethodOutlineStore // optional; defaults to Store
 	Runner    *tasks.Runner
 	Metrics   *observability.Metrics // optional; enables /metrics + latency histograms
 }
@@ -76,6 +77,11 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 	wf := &workflowHandler{deps: deps}
 	dp := &dreamPolicyHandler{deps: deps}
 	ar := newAgentRunHandler(deps)
+	outlineStore := deps.Outlines
+	if outlineStore == nil && deps.Store != nil {
+		outlineStore = deps.Store
+	}
+	mo := &methodOutlineHandler{deps: deps, store: outlineStore}
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(ticketGuard(deps.Nexus))
@@ -83,6 +89,9 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 		r.Post("/workflows/{id}/publish", wf.publish)
 		r.Post("/workflows/{id}/runs", wf.startRun)
 		r.Post("/dream-policies", dp.create)
+		r.Get("/dream-policies", dp.list)
+		r.Post("/method-outlines", mo.create)
+		r.Get("/method-outlines", mo.list)
 		r.Post("/agent/runs", ar.start)
 		r.Post("/agent/runs/{id}/messages", ar.message)
 		r.Post("/agent/runs/{id}/confirmations", ar.confirm)

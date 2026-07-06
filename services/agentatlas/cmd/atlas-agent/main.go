@@ -25,6 +25,7 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/llmroutermodel"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/retrieval"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/storage"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/tasks"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/workflow"
@@ -95,7 +96,7 @@ func run() error {
 		return fmt.Errorf("nats (production-standard dependency): %w", err)
 	}
 	taskRunner := tasks.NewRunner(bus)
-	taskRunner.AllowEnqueue(workflow.JobTypeRun)
+	taskRunner.AllowEnqueue(workflow.JobTypeRun, retrieval.JobTypeIndex)
 
 	metrics := observability.NewMetrics()
 	workflowRuntime.SetMetrics(metrics) // confirm-resume terminal statuses count here

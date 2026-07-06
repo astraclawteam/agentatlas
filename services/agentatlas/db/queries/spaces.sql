@@ -58,3 +58,6 @@ DELETE FROM space_membership_cache WHERE space_id = $1 AND org_version < $2;
 
 -- name: ListSpaceMembers :many
 SELECT * FROM space_membership_cache WHERE space_id = $1 ORDER BY user_id;
+
+-- name: ListEnterprises :many
+SELECT * FROM enterprises ORDER BY created_at;

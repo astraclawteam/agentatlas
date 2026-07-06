@@ -179,8 +179,41 @@ func (f *fakePolicyStore) GetLatestDreamPolicyVersion(_ context.Context, policyI
 	return latest, nil
 }
 
-func (f *fakePolicyStore) ListPublishedDreamPolicies(context.Context, string) ([]db.DreamPolicy, error) {
-	return nil, nil
+func (f *fakePolicyStore) ListPublishedDreamPolicies(_ context.Context, enterpriseID string) ([]db.DreamPolicy, error) {
+	var out []db.DreamPolicy
+	for _, p := range f.policies {
+		if p.EnterpriseID == enterpriseID && p.Status == "published" {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+// fakeOutlineStore backs the method-outline routes in memory.
+type fakeOutlineStore struct {
+	outlines map[string]db.MethodOutline
+	indexed  []db.CreateIndexJobParams
+}
+
+func (f *fakeOutlineStore) CreateMethodOutline(_ context.Context, arg db.CreateMethodOutlineParams) (db.MethodOutline, error) {
+	row := db.MethodOutline{ID: arg.ID, EnterpriseID: arg.EnterpriseID, Title: arg.Title, Outline: arg.Outline, OrgScope: arg.OrgScope}
+	f.outlines[arg.ID] = row
+	return row, nil
+}
+
+func (f *fakeOutlineStore) ListMethodOutlines(_ context.Context, enterpriseID string) ([]db.MethodOutline, error) {
+	var out []db.MethodOutline
+	for _, row := range f.outlines {
+		if row.EnterpriseID == enterpriseID {
+			out = append(out, row)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeOutlineStore) CreateIndexJob(_ context.Context, arg db.CreateIndexJobParams) (db.IndexJob, error) {
+	f.indexed = append(f.indexed, arg)
+	return db.IndexJob{ID: arg.ID, SourceType: arg.SourceType, SourceID: arg.SourceID}, nil
 }
 
 // fakeArtifactStore backs IngestUpload + CreateJob.
@@ -372,7 +405,7 @@ func decodeBody(t *testing.T, resp *http.Response) map[string]any {
 	return out
 }
 
-func newAgentTestServer(t *testing.T, nexusClient nexus.Client) *httptest.Server {
+func newAgentTestServer(t *testing.T, nexusClient nexus.Client) (*httptest.Server, *fakeOutlineStore) {
 	t.Helper()
 	wfSvc, err := workflow.NewService(newFakeWorkflowStore())
 	if err != nil {
@@ -382,17 +415,21 @@ func newAgentTestServer(t *testing.T, nexusClient nexus.Client) *httptest.Server
 	if err != nil {
 		t.Fatal(err)
 	}
+	outlines := &fakeOutlineStore{outlines: map[string]db.MethodOutline{}}
+	producer := tasks.NewRunner(tasks.NewMemBus())
+	producer.AllowEnqueue(retrieval.JobTypeIndex)
 	router := NewAgentRouter(AgentRouterDeps{
 		Nexus: nexusClient, Agent: agentRunner, Workflows: wfSvc,
 		Dreams: dream.NewPolicyService(newFakePolicyStore()),
+		Outlines: outlines, Runner: producer,
 	})
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, outlines
 }
 
 func TestAdminRoutesFailClosedWithoutTicket(t *testing.T) {
-	srv := newAgentTestServer(t, adminMock())
+	srv, _ := newAgentTestServer(t, adminMock())
 
 	// atlas-api routes
 	planStore := &fakePlanStore{steps: map[string][]db.RetrievalPlanStep{}}
@@ -407,7 +444,9 @@ func TestAdminRoutesFailClosedWithoutTicket(t *testing.T) {
 	for _, path := range []string{
 		srv.URL + "/v1/workflows",
 		srv.URL + "/v1/workflows/wf_x/publish",
+		srv.URL + "/v1/workflows/wf_x/runs",
 		srv.URL + "/v1/dream-policies",
+		srv.URL + "/v1/method-outlines",
 		srv.URL + "/v1/agent/runs",
 		srv.URL + "/v1/agent/runs/r1/messages",
 		srv.URL + "/v1/agent/runs/r1/confirmations",
@@ -424,7 +463,7 @@ func TestAdminRoutesFailClosedWithoutTicket(t *testing.T) {
 
 func TestWorkflowCreatePublishRoute(t *testing.T) {
 	mock := adminMock()
-	srv := newAgentTestServer(t, mock)
+	srv, _ := newAgentTestServer(t, mock)
 
 	def := workflow.Definition{
 		Kind: sdkworkflow.KindSOP, RiskLevel: sdkworkflow.RiskMedium,
@@ -465,7 +504,7 @@ func TestWorkflowCreatePublishRoute(t *testing.T) {
 }
 
 func TestWorkflowPublishFailsClosedWhenAuditDown(t *testing.T) {
-	srv := newAgentTestServer(t, &failingAuditNexus{Mock: adminMock()})
+	srv, _ := newAgentTestServer(t, &failingAuditNexus{Mock: adminMock()})
 	def := workflow.Definition{
 		Kind: sdkworkflow.KindSOP, RiskLevel: sdkworkflow.RiskLow,
 		Nodes: []sdkworkflow.Node{{ID: "in", Type: sdkworkflow.NodeInputManual}},
@@ -483,7 +522,7 @@ func TestWorkflowPublishFailsClosedWhenAuditDown(t *testing.T) {
 
 func TestDreamPolicyRoute(t *testing.T) {
 	mock := adminMock()
-	srv := newAgentTestServer(t, mock)
+	srv, _ := newAgentTestServer(t, mock)
 	resp := postJSONReq(t, srv.URL+"/v1/dream-policies", "tick_admin", map[string]any{
 		"org_scope": "project_group:pg_mes", "schedule": "0 22 * * *",
 		"input_sources": []string{"work_briefs"}, "visibility_level": "members",
@@ -509,7 +548,7 @@ func TestDreamPolicyRoute(t *testing.T) {
 }
 
 func TestAgentRunRoutes(t *testing.T) {
-	srv := newAgentTestServer(t, adminMock())
+	srv, _ := newAgentTestServer(t, adminMock())
 
 	resp := postJSONReq(t, srv.URL+"/v1/agent/runs", "tick_admin", map[string]any{"message": "给我一个检索计划"})
 	if resp.StatusCode != http.StatusCreated {
@@ -607,3 +646,83 @@ func TestArtifactJobAndRetrievalPlanRoutes(t *testing.T) {
 }
 
 var _ = strings.TrimSpace // keep strings import if assertions change
+
+func TestMethodOutlineAndDreamListRoutes(t *testing.T) {
+	srv, outlines := newAgentTestServer(t, adminMock())
+
+	// import an outline -> stored + queued for indexing
+	resp := postJSONReq(t, srv.URL+"/v1/method-outlines", "tick_admin", map[string]any{
+		"title":     "MES 异常工单排查方法",
+		"org_scope": "department:d1",
+		"outline": map[string]any{
+			"sections": []any{
+				map[string]any{"title": "定位", "steps": []any{"确认工单编号", "核对产线"}},
+				map[string]any{"title": "处置", "steps": []any{"排查原因", "上报限流风险"}},
+			},
+		},
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("outline create = %d", resp.StatusCode)
+	}
+	created := decodeBody(t, resp)
+	if created["method_outline_id"] == "" {
+		t.Fatalf("create response: %v", created)
+	}
+	if len(outlines.indexed) != 1 || outlines.indexed[0].SourceType != "method_outline" {
+		t.Fatalf("outline must enqueue an index job: %+v", outlines.indexed)
+	}
+
+	// invalid outline JSON fails loud
+	raw := []byte(`{"title":"x","outline":"not-an-object`)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/method-outlines", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Nexus-Ticket", "tick_admin")
+	badResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badResp.Body.Close()
+	if badResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("broken outline = %d, want 400", badResp.StatusCode)
+	}
+
+	// list returns the imported outline
+	listReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/method-outlines", nil)
+	listReq.Header.Set("X-Nexus-Ticket", "tick_admin")
+	listResp, err := http.DefaultClient.Do(listReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := decodeBody(t, listResp)
+	items, _ := listed["method_outlines"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("outline list: %v", listed)
+	}
+
+	// dream policy create (published) -> GET list surfaces it
+	resp = postJSONReq(t, srv.URL+"/v1/dream-policies", "tick_admin", map[string]any{
+		"org_scope": "project_group:pg_mes", "schedule": "0 22 * * *",
+		"input_sources": []string{"work_briefs"}, "visibility_level": "members",
+		"masking_rules": []string{`1[3-9]\d{9}`}, "risk_signal_rules": []string{`风险[:：]\S+`},
+		"evidence_retention": "pointer_plus_display_summary", "output_space_id": "spc_1",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("dream create = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+	dlReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/dream-policies", nil)
+	dlReq.Header.Set("X-Nexus-Ticket", "tick_admin")
+	dlResp, err := http.DefaultClient.Do(dlReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dreamList := decodeBody(t, dlResp)
+	policies, _ := dreamList["dream_policies"].([]any)
+	if len(policies) != 1 {
+		t.Fatalf("dream policy list: %v", dreamList)
+	}
+	first := policies[0].(map[string]any)
+	if first["org_scope"] != "project_group:pg_mes" || first["status"] != "published" {
+		t.Fatalf("policy entry: %v", first)
+	}
+}

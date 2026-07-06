@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -226,6 +227,42 @@ func run() error {
 	})
 	if err := w.Start(ctx); err != nil {
 		return err
+	}
+
+	// Dream scheduling: the worker ticks every published policy's cron window
+	// across all enterprises (ATLAS_DREAM_TICK_SECONDS, default 60; 0 = off).
+	tickSeconds := 60
+	if v := strings.TrimSpace(os.Getenv("ATLAS_DREAM_TICK_SECONDS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			tickSeconds = n
+		}
+	}
+	if tickSeconds > 0 {
+		scheduler := dream.NewScheduler(queries, dream.NewPolicyService(queries), runner)
+		go func() {
+			ticker := time.NewTicker(time.Duration(tickSeconds) * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case now := <-ticker.C:
+					enterprises, err := queries.ListEnterprises(ctx)
+					if err != nil {
+						logger.Warn("dream tick: list enterprises", zap.Error(err))
+						continue
+					}
+					for _, ent := range enterprises {
+						if n, err := scheduler.Tick(ctx, ent.ID, now.UTC()); err != nil {
+							logger.Warn("dream tick", zap.String("enterprise_id", ent.ID), zap.Error(err))
+						} else if n > 0 {
+							logger.Info("dream runs dispatched", zap.String("enterprise_id", ent.ID), zap.Int("count", n))
+						}
+					}
+				}
+			}
+		}()
+		logger.Info("dream scheduler ticking", zap.Int("interval_seconds", tickSeconds))
 	}
 
 	// Org-graph sync: the worker owns the AgentNexus org-event subscription
