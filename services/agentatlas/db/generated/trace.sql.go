@@ -248,3 +248,45 @@ func (q *Queries) ListAnswerTracesByTicket(ctx context.Context, arg ListAnswerTr
 	}
 	return items, nil
 }
+
+const listRecentAnswerTraces = `-- name: ListRecentAnswerTraces :many
+SELECT id, enterprise_id, case_ticket_id, actor_user_id, question_hash, sanitized_question_summary, workflow_run_id, space_ids, retrieval_plan_id, evidence_pointer_ids, agentnexus_read_grant_ids, model_route, answer_hash, created_at FROM answer_traces
+WHERE enterprise_id = $1
+ORDER BY created_at DESC
+LIMIT 20
+`
+
+func (q *Queries) ListRecentAnswerTraces(ctx context.Context, enterpriseID string) ([]AnswerTrace, error) {
+	rows, err := q.db.Query(ctx, listRecentAnswerTraces, enterpriseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AnswerTrace
+	for rows.Next() {
+		var i AnswerTrace
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnterpriseID,
+			&i.CaseTicketID,
+			&i.ActorUserID,
+			&i.QuestionHash,
+			&i.SanitizedQuestionSummary,
+			&i.WorkflowRunID,
+			&i.SpaceIds,
+			&i.RetrievalPlanID,
+			&i.EvidencePointerIds,
+			&i.AgentnexusReadGrantIds,
+			&i.ModelRoute,
+			&i.AnswerHash,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

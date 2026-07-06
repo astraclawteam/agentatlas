@@ -29,3 +29,9 @@ VALUES ($1, $2, $3, $4, $5);
 INSERT INTO answer_trace_audit_refs (trace_id, audit_ref_id)
 VALUES ($1, $2)
 ON CONFLICT DO NOTHING;
+
+-- name: ListRecentAnswerTraces :many
+SELECT * FROM answer_traces
+WHERE enterprise_id = $1
+ORDER BY created_at DESC
+LIMIT 20;

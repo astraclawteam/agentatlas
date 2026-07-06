@@ -1,53 +1,84 @@
-import { render, screen, fireEvent } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { AgentAtlasDashboard } from "./AgentAtlasDashboard";
-import type { KnowledgeSpace, TimelineNode } from "./types";
 
-const spaces: KnowledgeSpace[] = [
-  { space_id: "spc_dept", enterprise_id: "e", kind: "department", name: "研发一部", org_scope: "department:d1", org_version: 1 },
-  { space_id: "spc_emp", enterprise_id: "e", kind: "employee", name: "张予安", org_scope: "employee:u1", org_version: 1 },
-];
-
-const timeline: TimelineNode[] = [
-  {
-    timeline_node_id: "tl_1",
-    space_id: "spc_emp",
-    node_time: "2026-07-06T09:30:00+08:00",
-    source_type: "work_brief",
-    summary_text: "完成分拣规则联调",
-  },
-];
+function stubBackend() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith("/v1/spaces")) {
+        return new Response(
+          JSON.stringify({
+            spaces: [
+              { space_id: "spc_pg", enterprise_id: "e1", kind: "project_group", name: "MES 异常工单专项组", org_scope: "project_group:pg1", org_version: 1 },
+              { space_id: "spc_emp", enterprise_id: "e1", kind: "employee", name: "张予安", org_scope: "employee:u1", org_version: 1 },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      if (u.includes("/timeline")) {
+        return new Response(
+          JSON.stringify({
+            nodes: [{
+              timeline_node_id: "tl1", space_id: "spc_emp", node_time: "2026-07-06T09:00:00+08:00",
+              source_type: "work_brief", summary_text: "完成分拣规则联调。", tags: [], evidence_pointer_id: "ev1",
+            }],
+          }),
+          { status: 200 },
+        );
+      }
+      if (u.endsWith("/v1/traces")) {
+        return new Response(
+          JSON.stringify({
+            traces: [{
+              trace_id: "tr1", sanitized_question_summary: "员工询问工作内容",
+              space_ids: ["spc_emp"], evidence_pointer_ids: ["ev1"],
+              agentnexus_read_grant_ids: ["g1"], model_route: "llmrouter/x", answer_hash: "sha256:aa",
+            }],
+          }),
+          { status: 200 },
+        );
+      }
+      if (u.endsWith("/v1/dream-policies")) {
+        return new Response(JSON.stringify({ dream_policies: [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }),
+  );
+}
 
 describe("AgentAtlasDashboard", () => {
-  it("renders the four work surfaces and switches between them", () => {
-    render(
-      <AgentAtlasDashboard spaces={spaces} timeline={timeline} workflow={null} trace={null} />,
-    );
-
-    for (const label of ["组织知识地图", "梦境时间线", "知识工作流", "证据追溯"]) {
-      expect(screen.getByRole("tab", { name: label })).toBeInTheDocument();
-    }
-
-    // knowledge map is the default surface
-    expect(screen.getByTestId("knowledge-map")).toBeInTheDocument();
-    expect(screen.getByText(/研发一部/)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("tab", { name: "梦境时间线" }));
-    expect(screen.getByTestId("dream-timeline")).toBeInTheDocument();
-    expect(screen.getByText("完成分拣规则联调")).toBeInTheDocument();
-    expect(screen.getByText("工作简报")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("tab", { name: "知识工作流" }));
-    expect(screen.getByText(/暂无工作流/)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("tab", { name: "证据追溯" }));
-    expect(screen.getByText(/暂无回答追溯记录/)).toBeInTheDocument();
+  beforeEach(() => {
+    localStorage.clear();
+    vi.restoreAllMocks();
   });
 
-  it("shows the floating Atlas Agent launcher", () => {
-    render(
-      <AgentAtlasDashboard spaces={[]} timeline={[]} workflow={null} trace={null} />,
-    );
-    expect(screen.getByRole("button", { name: "打开 Atlas Agent" })).toBeInTheDocument();
+  it("guides the first-time user until a ticket is pasted, then loads real data", async () => {
+    stubBackend();
+    render(<AgentAtlasDashboard />);
+    expect(screen.getByText(/欢迎使用 AgentAtlas/)).toBeInTheDocument();
+    expect(screen.getByText(/粘贴管理员票据/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("管理员票据"), { target: { value: "tick_admin" } });
+    await waitFor(() => {
+      const hits = screen.getAllByText((content) => content.includes("MES 异常工单专项组"));
+      expect(hits.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("every surface carries a plain-language description and the agent panel is always present", async () => {
+    stubBackend();
+    localStorage.setItem("atlas_console_ticket", "tick_admin");
+    render(<AgentAtlasDashboard />);
+    expect(screen.getByRole("complementary", { name: "Atlas Agent" })).toBeInTheDocument();
+    expect(screen.getByText(/随组织架构自动生成/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "证据追溯" }));
+    expect(screen.getByText(/出处清单/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("员工询问工作内容")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "知识工作流" }));
+    expect(screen.getByText("添加步骤")).toBeInTheDocument();
+    expect(screen.getByText("人工确认")).toBeInTheDocument();
   });
 });

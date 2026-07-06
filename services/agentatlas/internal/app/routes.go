@@ -54,6 +54,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	retrievalH := &retrievalHandler{nexus: deps.Nexus, retrieval: deps.Retrieval, store: planSteps}
 
 	r := chi.NewRouter()
+	r.Use(corsMiddleware)
 	if deps.Metrics != nil {
 		r.Use(deps.Metrics.Middleware)
 		r.Method(http.MethodGet, "/metrics", deps.Metrics.Handler())
@@ -68,6 +69,52 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		r.Post("/work-briefs", briefs.handleIngest)
 		r.Post("/artifacts/jobs", artifactsH.createJob)
 		r.Post("/retrieval/plans", retrievalH.createPlan)
+
+		r.Get("/spaces", func(w http.ResponseWriter, req *http.Request) {
+			_, ticket, err := verifyTicket(req.Context(), deps.Nexus, req)
+			if err != nil {
+				writeError(w, http.StatusUnauthorized, "unauthorized", err.Error())
+				return
+			}
+			rows, err := deps.Store.ListKnowledgeSpacesByEnterprise(req.Context(), ticket.EnterpriseID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "spaces_failed", err.Error())
+				return
+			}
+			out := make([]map[string]any, 0, len(rows))
+			for _, s := range rows {
+				out = append(out, map[string]any{
+					"space_id": s.ID, "enterprise_id": s.EnterpriseID,
+					"kind": s.Kind, "name": s.Name,
+					"org_scope": s.OrgScope, "org_version": s.OrgVersion,
+				})
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"spaces": out})
+		})
+
+		r.Get("/traces", func(w http.ResponseWriter, req *http.Request) {
+			_, ticket, err := verifyTicket(req.Context(), deps.Nexus, req)
+			if err != nil {
+				writeError(w, http.StatusUnauthorized, "unauthorized", err.Error())
+				return
+			}
+			rows, err := deps.Store.ListRecentAnswerTraces(req.Context(), ticket.EnterpriseID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "traces_failed", err.Error())
+				return
+			}
+			out := make([]map[string]any, 0, len(rows))
+			for _, row := range rows {
+				out = append(out, map[string]any{
+					"trace_id": row.ID, "sanitized_question_summary": row.SanitizedQuestionSummary,
+					"space_ids": row.SpaceIds, "evidence_pointer_ids": row.EvidencePointerIds,
+					"agentnexus_read_grant_ids": row.AgentnexusReadGrantIds,
+					"model_route":               row.ModelRoute, "answer_hash": row.AnswerHash,
+					"created_at": row.CreatedAt.Time.Format(time.RFC3339),
+				})
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"traces": out})
+		})
 
 		r.Get("/spaces/{id}", func(w http.ResponseWriter, req *http.Request) {
 			if _, _, err := verifyTicket(req.Context(), deps.Nexus, req); err != nil {
