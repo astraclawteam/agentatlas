@@ -49,7 +49,9 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/workflow"
 )
 
-const enterpriseID = "ent_e2e"
+// enterpriseID is unique per run so the e2e is re-runnable against a
+// persistent database (fixture source hashes dedup per enterprise).
+var enterpriseID = newID("ent_e2e")
 
 func newID(prefix string) string {
 	b := make([]byte, 6)
@@ -172,16 +174,22 @@ func TestAgentAtlasMVP(t *testing.T) {
 		doclingURL = envOr("ATLAS_TEST_DOCLING_URL", "http://localhost:5001")
 		t.Logf("parsing through REAL docling sidecar at %s", doclingURL)
 	} else {
+		// Mirrors the REAL docling-serve v1 contract (POST /v1/convert/source,
+		// sources[] with kind=file) so the stand-in cannot drift from prod.
 		docling := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/convert/source" {
+				http.NotFound(w, r)
+				return
+			}
 			var req struct {
-				FileSources []struct {
+				Sources []struct {
 					Base64String string `json:"base64_string"`
-				} `json:"file_sources"`
+				} `json:"sources"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			md := ""
-			if len(req.FileSources) > 0 {
-				raw, _ := decodeB64(req.FileSources[0].Base64String)
+			if len(req.Sources) > 0 {
+				raw, _ := decodeB64(req.Sources[0].Base64String)
 				md = string(raw)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -220,7 +228,12 @@ func TestAgentAtlasMVP(t *testing.T) {
 	}
 
 	// ---- step 1-2: org events -> five knowledge spaces ----
+	// Fixture events carry a fixed enterprise id; rebind them to this run's
+	// unique enterprise so the e2e stays re-runnable against a persistent DB.
 	events := loadOrgEvents(t)
+	for i := range events {
+		events[i].EnterpriseID = enterpriseID
+	}
 	spaceSvc := spaces.NewService(q)
 	syncer := spaces.NewSyncer(spaceSvc, q, mock, zap.NewNop())
 	for _, ev := range events {

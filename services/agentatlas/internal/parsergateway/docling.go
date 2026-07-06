@@ -12,7 +12,8 @@ import (
 	sdkparser "github.com/astraclawteam/agentatlas/sdk/go/parser"
 )
 
-// DoclingProvider talks to docling-serve (POST /v1alpha/convert/source).
+// DoclingProvider talks to docling-serve (POST /v1/convert/source — the v1
+// contract of the current official image; verified live 2026-07-06).
 type DoclingProvider struct {
 	baseURL string
 	http    *http.Client
@@ -38,11 +39,12 @@ func (p *DoclingProvider) Descriptor() sdkparser.Provider {
 }
 
 type doclingRequest struct {
-	Options     map[string]any      `json:"options"`
-	FileSources []doclingFileSource `json:"file_sources"`
+	Options map[string]any      `json:"options"`
+	Sources []doclingFileSource `json:"sources"`
 }
 
 type doclingFileSource struct {
+	Kind         string `json:"kind"`
 	Base64String string `json:"base64_string"`
 	Filename     string `json:"filename"`
 }
@@ -58,13 +60,14 @@ type doclingResponse struct {
 func (p *DoclingProvider) Parse(ctx context.Context, in ParseInput) (ParseOutput, error) {
 	req := doclingRequest{
 		Options: map[string]any{"to_formats": []string{"md"}, "image_export_mode": "placeholder"},
-		FileSources: []doclingFileSource{{
+		Sources: []doclingFileSource{{
+			Kind:         "file",
 			Base64String: base64.StdEncoding.EncodeToString(in.Data),
 			Filename:     nonEmpty(in.Filename, in.ArtifactID),
 		}},
 	}
 	var resp doclingResponse
-	if err := postJSON(ctx, p.http, p.baseURL+"/v1alpha/convert/source", req, &resp); err != nil {
+	if err := postJSON(ctx, p.http, p.baseURL+"/v1/convert/source", req, &resp); err != nil {
 		return ParseOutput{}, err
 	}
 	if resp.Status != "" && resp.Status != "success" {
