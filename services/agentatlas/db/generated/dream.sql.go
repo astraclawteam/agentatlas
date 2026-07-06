@@ -153,6 +153,28 @@ func (q *Queries) GetDreamPolicy(ctx context.Context, id string) (DreamPolicy, e
 	return i, err
 }
 
+const getDreamSummary = `-- name: GetDreamSummary :one
+SELECT id, run_id, enterprise_id, space_id, layer, summary_text, sealed_object_key, evidence_pointer_id, risk_signals, created_at FROM dream_summaries WHERE id = $1
+`
+
+func (q *Queries) GetDreamSummary(ctx context.Context, id string) (DreamSummary, error) {
+	row := q.db.QueryRow(ctx, getDreamSummary, id)
+	var i DreamSummary
+	err := row.Scan(
+		&i.ID,
+		&i.RunID,
+		&i.EnterpriseID,
+		&i.SpaceID,
+		&i.Layer,
+		&i.SummaryText,
+		&i.SealedObjectKey,
+		&i.EvidencePointerID,
+		&i.RiskSignals,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getLatestDreamPolicyVersion = `-- name: GetLatestDreamPolicyVersion :one
 SELECT policy_id, version, definition, published_at FROM dream_policy_versions WHERE policy_id = $1 ORDER BY version DESC LIMIT 1
 `

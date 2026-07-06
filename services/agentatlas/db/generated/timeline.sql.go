@@ -11,6 +11,28 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const getTimelineNode = `-- name: GetTimelineNode :one
+SELECT id, enterprise_id, space_id, org_scope, node_time, source_type, summary_text, tags, evidence_pointer_id, created_at FROM timeline_nodes WHERE id = $1
+`
+
+func (q *Queries) GetTimelineNode(ctx context.Context, id string) (TimelineNode, error) {
+	row := q.db.QueryRow(ctx, getTimelineNode, id)
+	var i TimelineNode
+	err := row.Scan(
+		&i.ID,
+		&i.EnterpriseID,
+		&i.SpaceID,
+		&i.OrgScope,
+		&i.NodeTime,
+		&i.SourceType,
+		&i.SummaryText,
+		&i.Tags,
+		&i.EvidencePointerID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const insertTimelineNode = `-- name: InsertTimelineNode :one
 INSERT INTO timeline_nodes (id, enterprise_id, space_id, org_scope, node_time, source_type, summary_text, tags, evidence_pointer_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)

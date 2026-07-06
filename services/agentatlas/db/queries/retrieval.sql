@@ -28,6 +28,12 @@ SET status = $2, error = $3,
     finished_at = CASE WHEN $2 IN ('succeeded','failed') THEN now() ELSE finished_at END
 WHERE id = $1;
 
+-- name: GetIndexJob :one
+SELECT * FROM index_jobs WHERE id = $1;
+
+-- name: ClaimIndexJob :execrows
+UPDATE index_jobs SET status = 'running' WHERE id = $1 AND status = 'pending';
+
 -- name: ListPendingIndexJobs :many
 SELECT * FROM index_jobs WHERE status = 'pending' ORDER BY created_at LIMIT $1;
 

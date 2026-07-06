@@ -3,6 +3,9 @@ INSERT INTO timeline_nodes (id, enterprise_id, space_id, org_scope, node_time, s
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING *;
 
+-- name: GetTimelineNode :one
+SELECT * FROM timeline_nodes WHERE id = $1;
+
 -- name: ListTimelineNodes :many
 SELECT * FROM timeline_nodes
 WHERE space_id = $1
