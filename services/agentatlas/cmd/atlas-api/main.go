@@ -15,6 +15,7 @@ import (
 
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/app"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/auditrefs"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/config"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/llmroutermodel"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
@@ -96,13 +97,21 @@ func run() error {
 	}
 	defer runner.Stop()
 
-	nexusClient := nexusclient.New(cfg.AgentNexus.BaseURL, 30*time.Second)
+	metrics := observability.NewMetrics()
+	shutdownTracing, err := observability.InitTracing(ctx, "atlas-api")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = shutdownTracing(context.Background()) }()
+
+	// audit appends are counted and fail closed on the answer path
+	nexusClient := auditrefs.New(nexusclient.New(cfg.AgentNexus.BaseURL, 30*time.Second), metrics)
 	retrievalSvc := retrieval.NewService(queries, search, embedder, reranker)
 	traceSvc := trace.NewService(queries)
 
 	router := app.NewRouter(app.RouterDeps{
 		Nexus: nexusClient, Retrieval: retrievalSvc, Traces: traceSvc,
-		LLM: llm, Store: queries, Runner: runner,
+		LLM: llm, Store: queries, Runner: runner, Metrics: metrics,
 	})
 
 	addr := os.Getenv("ATLAS_API_ADDR")

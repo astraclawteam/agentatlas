@@ -14,6 +14,7 @@ import (
 
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/retrieval"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/tasks"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/trace"
@@ -35,6 +36,7 @@ type RouterDeps struct {
 	LLM       model.LLM
 	Store     *db.Queries
 	Runner    *tasks.Runner
+	Metrics   *observability.Metrics // optional; enables /metrics + latency histograms
 }
 
 // NewRouter builds the atlas-api HTTP surface (api/openapi/atlas-runtime.yaml).
@@ -43,6 +45,10 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	briefs := &briefDeps{nexus: deps.Nexus, store: deps.Store, runner: deps.Runner}
 
 	r := chi.NewRouter()
+	if deps.Metrics != nil {
+		r.Use(deps.Metrics.Middleware)
+		r.Method(http.MethodGet, "/metrics", deps.Metrics.Handler())
+	}
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, NewHealthStatus("atlas-api",
 			"postgres", "opensearch", "nats", "object-storage", "agentnexus", "llmrouter").MarkReady(true))

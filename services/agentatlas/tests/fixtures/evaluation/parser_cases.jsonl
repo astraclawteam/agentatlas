@@ -1,0 +1,4 @@
+{"case_id": "sop_headings", "artifact": "mes_work_order_sop.md", "content_type": "text/markdown", "expect": {"min_blocks": 4, "must_contain_headings": ["MES 异常工单排查", "风险点"], "must_contain_text": ["确认工单编号"]}}
+{"case_id": "table_block", "artifact": "risk_table.md", "content_type": "text/markdown", "expect": {"min_blocks": 2, "block_types": ["heading", "table"]}}
+{"case_id": "long_image_tiling", "artifact": "long_flow.png", "content_type": "image/png", "expect": {"tile_overlap_px": 128, "reading_order": "top_down"}}
+{"case_id": "audio_segments", "artifact": "standup.wav", "content_type": "audio/wav", "expect": {"min_segments": 1, "timestamps_monotonic": true}}

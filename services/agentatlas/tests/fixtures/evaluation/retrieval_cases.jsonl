@@ -1,0 +1,4 @@
+{"case_id": "work_content", "query": "我的工作内容是什么", "relevant_doc_ids": ["tl_brief_zhang"], "k": 5}
+{"case_id": "sop_lookup", "query": "MES 异常工单排查步骤", "relevant_doc_ids": ["doc_mes_sop_display", "doc_mes_sop_retrieval"], "k": 5}
+{"case_id": "risk_scan", "query": "项目组最近有哪些风险", "relevant_doc_ids": ["dsum_pg_display"], "k": 5}
+{"case_id": "tenant_isolation", "query": "异常工单", "forbidden_doc_ids": ["doc_secret_ent_b"], "k": 10}
