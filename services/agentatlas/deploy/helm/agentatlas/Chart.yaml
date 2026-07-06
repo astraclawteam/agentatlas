@@ -1,0 +1,9 @@
+apiVersion: v2
+name: agentatlas
+description: >
+  AgentAtlas open-core runtime: agent-first enterprise RAG and organizational
+  memory system. Runs against production-standard PostgreSQL, OpenSearch,
+  NATS JetStream, S3-compatible object storage, and parser sidecars.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

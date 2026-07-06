@@ -1,0 +1,53 @@
+# AgentAtlas Helm values. Core datastores are consumed as external endpoints
+# by default (enterprise-operated PostgreSQL/OpenSearch/NATS/object storage);
+# set the corresponding *.enabled flags in a parent chart or umbrella to run
+# in-cluster instances for POC.
+
+image:
+  registry: ""
+  repositoryPrefix: agentatlas
+  tag: 0.1.0
+  pullPolicy: IfNotPresent
+
+services:
+  atlasApi:
+    replicas: 2
+    port: 8080
+  atlasAgent:
+    replicas: 1
+    port: 8081
+  atlasWorker:
+    replicas: 2
+  parserGateway:
+    replicas: 1
+    port: 8090
+
+config:
+  postgresDsn: postgres://atlas:atlas@postgres:5432/agentatlas?sslmode=disable
+  opensearchAddresses: http://opensearch:9200
+  natsUrl: nats://nats:4222
+  objectEndpoint: http://minio:9000
+  objectBucket: agentatlas
+  objectAccessKey: atlas
+  objectSecretKey: atlas-secret-key
+  llmrouterBaseUrl: http://llmrouter:8000/v1
+  llmrouterApiKey: ""
+  nexusBaseUrl: http://agentnexus:8100
+  doclingUrl: http://docling-sidecar:5001
+  mineruUrl: http://mineru-sidecar:8000
+  asrUrl: http://asr-sidecar:5003
+  videoUrl: http://video-sidecar:5004
+
+resources:
+  atlasApi:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
+  atlasAgent:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
+  atlasWorker:
+    requests: { cpu: 500m, memory: 512Mi }
+    limits: { cpu: "2", memory: 2Gi }
+  parserGateway:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
