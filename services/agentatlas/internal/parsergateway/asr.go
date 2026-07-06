@@ -34,10 +34,12 @@ func (p *ASRProvider) Descriptor() sdkparser.Provider {
 type asrResponse struct {
 	Language      string `json:"language"`
 	DurationMS    int    `json:"duration_ms"`
+	Diarization   string `json:"diarization"`
 	AudioSegments []struct {
 		SegmentID string `json:"segment_id"`
 		StartMS   int    `json:"start_ms"`
 		EndMS     int    `json:"end_ms"`
+		Speaker   string `json:"speaker"`
 		Text      string `json:"text"`
 	} `json:"audio_segments"`
 }
@@ -53,7 +55,8 @@ func (p *ASRProvider) Parse(ctx context.Context, in ParseInput) (ParseOutput, er
 	segments := make([]atlasdocument.AudioSegment, 0, len(resp.AudioSegments))
 	for _, s := range resp.AudioSegments {
 		segments = append(segments, atlasdocument.AudioSegment{
-			SegmentID: s.SegmentID, StartMS: s.StartMS, EndMS: s.EndMS, Text: s.Text,
+			SegmentID: s.SegmentID, StartMS: s.StartMS, EndMS: s.EndMS,
+			Speaker: s.Speaker, Text: s.Text,
 		})
 	}
 	return ParseOutput{AudioSegments: segments, Confidence: 0.85}, nil

@@ -86,9 +86,9 @@ func TestArtifactPipeline(t *testing.T) {
 		t.Fatalf("bucket: %v", err)
 	}
 
-	// docling sidecar stand-in
+	// docling sidecar stand-in (mirrors the real /v1/convert/source contract)
 	docling := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1alpha/convert/source" {
+		if r.URL.Path != "/v1/convert/source" {
 			http.NotFound(w, r)
 			return
 		}
