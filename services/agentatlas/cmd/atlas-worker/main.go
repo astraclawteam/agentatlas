@@ -29,6 +29,7 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/parsergateway"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/retrieval"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/spaces"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/storage"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/tasks"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/trace"
@@ -225,6 +226,34 @@ func run() error {
 	})
 	if err := w.Start(ctx); err != nil {
 		return err
+	}
+
+	// Org-graph sync: the worker owns the AgentNexus org-event subscription
+	// (SSE) — spaces are created/updated from org events. v1 subscribes the
+	// enterprises listed in ATLAS_ORG_SYNC_ENTERPRISES (comma-separated);
+	// idempotent Handle makes since_version=0 resume safe.
+	if ents := strings.TrimSpace(os.Getenv("ATLAS_ORG_SYNC_ENTERPRISES")); ents != "" {
+		syncer := spaces.NewSyncer(spaces.NewService(queries), queries, nexusClient, logger)
+		for _, ent := range strings.Split(ents, ",") {
+			ent = strings.TrimSpace(ent)
+			if ent == "" {
+				continue
+			}
+			go func(enterpriseID string) {
+				for ctx.Err() == nil {
+					if err := syncer.Run(ctx, enterpriseID, 0); err != nil && ctx.Err() == nil {
+						logger.Warn("org sync stream ended; retrying",
+							zap.String("enterprise_id", enterpriseID), zap.Error(err))
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(5 * time.Second):
+					}
+				}
+			}(ent)
+		}
+		logger.Info("org sync subscribed", zap.String("enterprises", ents))
 	}
 	logger.Info("atlas-worker consuming",
 		zap.String("nats", cfg.NATS.URL),

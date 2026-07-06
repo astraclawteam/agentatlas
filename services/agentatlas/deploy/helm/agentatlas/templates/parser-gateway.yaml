@@ -25,6 +25,14 @@ spec:
             - containerPort: {{ .Values.services.parserGateway.port }}
           env:
             {{- include "agentatlas.env" . | nindent 12 }}
+          readinessProbe:
+            httpGet: { path: /healthz, port: {{ .Values.services.parserGateway.port }} }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: {{ .Values.services.parserGateway.port }} }
+            initialDelaySeconds: 15
+            periodSeconds: 20
           resources:
             {{- toYaml .Values.resources.parserGateway | nindent 12 }}
 ---
