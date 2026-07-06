@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-atlas-worker
+  labels:
+    app.kubernetes.io/name: agentatlas
+    app.kubernetes.io/component: atlas-worker
+spec:
+  replicas: {{ .Values.services.atlasWorker.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentatlas
+      app.kubernetes.io/component: atlas-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentatlas
+        app.kubernetes.io/component: atlas-worker
+    spec:
+      containers:
+        - name: atlas-worker
+          image: {{ include "agentatlas.image" (dict "root" . "service" "atlas-worker") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            {{- include "agentatlas.env" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources.atlasWorker | nindent 12 }}

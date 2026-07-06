@@ -1,0 +1,5 @@
+# Base config for the agentatlas OpenSearch node. Security plugin handling
+# is controlled by the container entrypoint (DISABLE_SECURITY_PLUGIN for the
+# local stack; production Helm deployments enable TLS + auth instead).
+cluster.name: agentatlas
+network.host: 0.0.0.0
