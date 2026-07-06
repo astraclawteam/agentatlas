@@ -1,0 +1,3 @@
+{"employee_user_id": "u_zhang", "brief_date": "2026-07-05", "summary": "推进 MES 异常工单专项：完成分拣规则联调，风险：接口限流未定。", "topics": ["MES", "联调"], "resource_ref": "fs://briefs/u_zhang/2026-07-05.md"}
+{"employee_user_id": "u_zhang", "brief_date": "2026-07-06", "summary": "复核分拣规则版本差异，输出对照表；下一步与平台组对齐限流方案。", "topics": ["MES"], "resource_ref": "fs://briefs/u_zhang/2026-07-06.md"}
+{"employee_user_id": "u_li", "brief_date": "2026-07-06", "summary": "整理 MES 工单模板与设备告警字段映射。", "topics": ["MES", "模板"], "resource_ref": "fs://briefs/u_li/2026-07-06.md"}
