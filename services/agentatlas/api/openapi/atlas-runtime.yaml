@@ -124,6 +124,33 @@ paths:
               schema:
                 $ref: '#/components/schemas/AnswerTrace'
         '404': { $ref: '#/components/responses/NotFound' }
+  /v1/artifacts/jobs:
+    post:
+      operationId: createArtifactJob
+      summary: Ingest an artifact upload and create its processing job (executed on atlas-worker)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                content_type: { type: string }
+                parser_hint: { type: string, enum: [docling, mineru, asr, video, auto], default: auto }
+      responses:
+        '202':
+          description: Artifact ingested and job enqueued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [artifact_id, job_id, status]
+                properties:
+                  artifact_id: { type: string }
+                  job_id: { type: string }
+                  status: { type: string, enum: [pending, running, succeeded, failed] }
 components:
   securitySchemes:
     NexusTicket:

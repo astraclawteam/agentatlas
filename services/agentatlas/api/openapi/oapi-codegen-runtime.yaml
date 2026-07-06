@@ -1,0 +1,5 @@
+# oapi-codegen config: Go types for the runtime API contract.
+package: runtimeapi
+output: api/openapi/gen/runtime/types.gen.go
+generate:
+  models: true

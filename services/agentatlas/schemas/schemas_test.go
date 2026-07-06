@@ -169,12 +169,12 @@ func TestAtlasDocumentSchema(t *testing.T) {
 func TestOpenAPIContractsWellFormed(t *testing.T) {
 	cases := map[string][]string{
 		"../api/openapi/atlas-runtime.yaml": {
-			"/v1/answer", "/v1/retrieval/plans", "/v1/work-briefs",
+			"/v1/answer", "/v1/retrieval/plans", "/v1/work-briefs", "/v1/artifacts/jobs",
 			"/v1/spaces/{id}", "/v1/spaces/{id}/timeline", "/v1/traces/{id}",
 		},
 		"../api/openapi/atlas-agent.yaml": {
 			"/v1/agent/runs", "/v1/agent/runs/{id}/messages", "/v1/agent/runs/{id}/confirmations",
-			"/v1/workflows", "/v1/workflows/{id}/publish", "/v1/dream-policies", "/v1/artifacts/jobs",
+			"/v1/workflows", "/v1/workflows/{id}/publish", "/v1/workflows/{id}/runs", "/v1/dream-policies",
 		},
 		"../api/openapi/agentnexus-client.yaml": {
 			"/v1/tickets/verify", "/v1/evidence/locate", "/v1/evidence/read",
