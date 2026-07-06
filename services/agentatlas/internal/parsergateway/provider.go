@@ -23,15 +23,16 @@ type ParseInput struct {
 }
 
 // ParseOutput is the provider-normalized fragment the artifact service
-// assembles into a full AtlasDocument.
+// assembles into a full AtlasDocument. JSON tags define the parser-gateway
+// HTTP contract (POST /v1/parse).
 type ParseOutput struct {
-	ProviderID    string
-	Blocks        []atlasdocument.Block
-	Tables        []atlasdocument.Table
-	Images        []atlasdocument.ImageRegion
-	AudioSegments []atlasdocument.AudioSegment
-	VideoSegments []atlasdocument.VideoSegment
-	Confidence    float64
+	ProviderID    string                       `json:"provider_id"`
+	Blocks        []atlasdocument.Block        `json:"blocks,omitempty"`
+	Tables        []atlasdocument.Table        `json:"tables,omitempty"`
+	Images        []atlasdocument.ImageRegion  `json:"images,omitempty"`
+	AudioSegments []atlasdocument.AudioSegment `json:"audio_segments,omitempty"`
+	VideoSegments []atlasdocument.VideoSegment `json:"video_segments,omitempty"`
+	Confidence    float64                      `json:"confidence"`
 }
 
 // Provider is one parsing capability (docling, mineru, asr, video, plus

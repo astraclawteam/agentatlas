@@ -36,17 +36,24 @@ type Objects interface {
 	Get(ctx context.Context, key string) ([]byte, error)
 }
 
+// ParserGateway parses artifact bytes — the in-process parsergateway.Gateway
+// or the HTTP-backed parsergateway.HTTPClient against the parser-gateway
+// service; the composition root decides which topology runs.
+type ParserGateway interface {
+	Parse(ctx context.Context, hint string, in parsergateway.ParseInput) (parsergateway.GatewayResult, error)
+}
+
 type Service struct {
 	store      Store
 	objects    Objects
-	gateway    *parsergateway.Gateway
+	gateway    ParserGateway
 	runner     *tasks.Runner
 	summarizer *Summarizer
 }
 
 // NewService wires the artifact pipeline. summarizer may be nil (or
 // model-less) — that is the explicit deterministic degraded mode.
-func NewService(store Store, objects Objects, gateway *parsergateway.Gateway, runner *tasks.Runner, summarizer *Summarizer) *Service {
+func NewService(store Store, objects Objects, gateway ParserGateway, runner *tasks.Runner, summarizer *Summarizer) *Service {
 	return &Service{store: store, objects: objects, gateway: gateway, runner: runner, summarizer: summarizer}
 }
 

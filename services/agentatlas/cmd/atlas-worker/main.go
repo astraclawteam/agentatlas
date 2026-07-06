@@ -67,14 +67,25 @@ func run() error {
 		return err
 	}
 
-	registry, err := parsergateway.NewRegistry(
-		parsergateway.NewDoclingProvider(cfg.Parsers.Docling.BaseURL),
-		parsergateway.NewMinerUProvider(cfg.Parsers.MinerU.BaseURL),
-		parsergateway.NewASRProvider(cfg.Parsers.ASR.BaseURL),
-		parsergateway.NewVideoProvider(cfg.Parsers.Video.BaseURL),
-	)
-	if err != nil {
-		return err
+	// Deployment topology: worker -> parser-gateway service over HTTP when
+	// configured; in-process gateway otherwise.
+	var parserGW artifacts.ParserGateway
+	if cfg.Parsers.GatewayURL != "" {
+		parserGW, err = parsergateway.NewHTTPClient(cfg.Parsers.GatewayURL)
+		if err != nil {
+			return err
+		}
+	} else {
+		registry, err := parsergateway.NewRegistry(
+			parsergateway.NewDoclingProvider(cfg.Parsers.Docling.BaseURL),
+			parsergateway.NewMinerUProvider(cfg.Parsers.MinerU.BaseURL),
+			parsergateway.NewASRProvider(cfg.Parsers.ASR.BaseURL),
+			parsergateway.NewVideoProvider(cfg.Parsers.Video.BaseURL),
+		)
+		if err != nil {
+			return err
+		}
+		parserGW = parsergateway.NewGateway(registry)
 	}
 
 	search, err := retrieval.NewHTTPSearchClient(cfg.OpenSearch.Addresses, cfg.OpenSearch.Username, cfg.OpenSearch.Password)
@@ -118,7 +129,7 @@ func run() error {
 	}
 	runner := tasks.NewRunner(bus)
 
-	artifactSvc := artifacts.NewService(queries, objects, parsergateway.NewGateway(registry), runner, summarizer)
+	artifactSvc := artifacts.NewService(queries, objects, parserGW, runner, summarizer)
 	dreamRunner := dream.NewRunner(queries, objects, dream.NewPolicyService(queries), runner, synthesizer)
 	indexer := retrieval.NewIndexer(queries, search, embedder)
 
