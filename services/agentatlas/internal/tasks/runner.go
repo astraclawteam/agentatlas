@@ -34,11 +34,23 @@ type Runner struct {
 	bus      Bus
 	mu       sync.Mutex
 	handlers map[string]Handler
+	allowed  map[string]bool
 	unsubs   []func()
 }
 
 func NewRunner(bus Bus) *Runner {
-	return &Runner{bus: bus, handlers: map[string]Handler{}}
+	return &Runner{bus: bus, handlers: map[string]Handler{}, allowed: map[string]bool{}}
+}
+
+// AllowEnqueue marks job types this runner may PRODUCE without consuming —
+// the producer/consumer split: atlas-api enqueues, atlas-worker registers the
+// handlers and consumes. Keeps Enqueue's typo guard for everything else.
+func (r *Runner) AllowEnqueue(jobTypes ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, t := range jobTypes {
+		r.allowed[t] = true
+	}
 }
 
 func (r *Runner) Register(jobType string, h Handler) error {
@@ -56,7 +68,8 @@ func (r *Runner) Register(jobType string, h Handler) error {
 
 func (r *Runner) Enqueue(ctx context.Context, jobType, jobID string) error {
 	r.mu.Lock()
-	_, known := r.handlers[jobType]
+	_, registered := r.handlers[jobType]
+	known := registered || r.allowed[jobType]
 	r.mu.Unlock()
 	if !known {
 		return fmt.Errorf("tasks: enqueue for unknown job type %q", jobType)
