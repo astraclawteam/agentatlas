@@ -1,36 +1,128 @@
-// atlas-agent is the agent-first control plane entrypoint: Knowledge Agent
-// runs, workflow drafts, and confirmations. Goal 1 scope: announce identity.
+// atlas-agent is the agent-first control plane: Knowledge Agent runs, workflow
+// draft/publish, dream policies, and confirmations. Composition root:
+// PostgreSQL, AgentNexus client, llmrouter model adapter, the ADK Knowledge
+// Agent runner, and the workflow/dream services.
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"go.uber.org/zap"
 
+	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/agent"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/app"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/auditrefs"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/config"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/llmroutermodel"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/storage"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/workflow"
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "atlas-agent:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	cfg, err := config.Load(os.Getenv("ATLAS_CONFIG"))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "atlas-agent: ", err)
-		os.Exit(1)
+		return err
 	}
 	logger, err := observability.NewLogger("atlas-agent")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "atlas-agent: logger: ", err)
-		os.Exit(1)
+		return err
 	}
 	defer logger.Sync()
 
-	health := app.NewHealthStatus("atlas-agent",
-		"postgres", "nats", "agentnexus", "llmrouter")
-	logger.Info("service identity",
-		zap.String("version", health.Version),
-		zap.Strings("dependencies", health.Dependencies),
-		zap.String("llmrouter", cfg.LLMRouter.BaseURL),
+	if err := storage.Migrate(ctx, cfg.Postgres.DSN); err != nil {
+		return err
+	}
+	pool, err := storage.NewPool(ctx, cfg.Postgres.DSN)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	queries := db.New(pool)
+
+	defaultModel := cfg.LLMRouter.DefaultModel
+	if defaultModel == "" {
+		defaultModel = "deepseek-v4-flash"
+	}
+	llm, err := llmroutermodel.New(llmroutermodel.Config{
+		BaseURL: cfg.LLMRouter.BaseURL, APIKey: cfg.LLMRouter.APIKey,
+		DefaultModel: defaultModel, Timeout: 120 * time.Second,
+	})
+	if err != nil {
+		return err
+	}
+	agentRunner, err := agent.NewRunner(llm)
+	if err != nil {
+		return err
+	}
+	workflowSvc, err := workflow.NewService(queries)
+	if err != nil {
+		return err
+	}
+	dreamPolicies := dream.NewPolicyService(queries)
+
+	metrics := observability.NewMetrics()
+	shutdownTracing, err := observability.InitTracing(ctx, "atlas-agent")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = shutdownTracing(context.Background()) }()
+
+	// audit appends are counted; write paths fail closed on append failure
+	nexusClient := auditrefs.New(nexusclient.New(cfg.AgentNexus.BaseURL, 30*time.Second), metrics)
+
+	router := app.NewAgentRouter(app.AgentRouterDeps{
+		Nexus: nexusClient, Agent: agentRunner, Workflows: workflowSvc,
+		Dreams: dreamPolicies, Store: queries, Metrics: metrics,
+	})
+
+	addr := os.Getenv("ATLAS_AGENT_ADDR")
+	if addr == "" {
+		addr = ":8081"
+	}
+	logger.Info("atlas-agent serving",
+		zap.String("addr", addr),
+		zap.String("version", app.Version),
+		zap.String("agentnexus", cfg.AgentNexus.BaseURL),
+		zap.String("model", defaultModel),
 	)
+	server := &http.Server{Addr: addr, Handler: router, ReadHeaderTimeout: 10 * time.Second}
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- server.ListenAndServe() }()
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		logger.Info("atlas-agent shutting down")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("graceful shutdown: %w", err)
+		}
+		if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	}
 }
