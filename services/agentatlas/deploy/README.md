@@ -59,3 +59,9 @@ The chart deploys the four AgentAtlas services and consumes PostgreSQL,
 OpenSearch, NATS, object storage, llmrouter, and AgentNexus as configurable
 endpoints (`values.yaml -> config`). Production private-deployment control
 (offline packages, license enforcement) lives in the enterprise repository.
+
+`helm lint` runs in CI; local machines without helm rely on
+`docker compose config` plus the integration/e2e suites for validation.
+
+Boundary and demo docs: `docs/specs/open-core-boundary.md`,
+`docs/mvp-demo.md`.
