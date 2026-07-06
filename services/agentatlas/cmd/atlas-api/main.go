@@ -15,7 +15,9 @@ import (
 
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/app"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/artifacts"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/auditrefs"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/config"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/llmroutermodel"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
@@ -95,15 +97,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("nats (production-standard dependency): %w", err)
 	}
+	// Producer/consumer split: atlas-api only ENQUEUES async jobs; atlas-worker
+	// registers the handlers and consumes them off NATS JetStream.
 	runner := tasks.NewRunner(bus)
-	indexer := retrieval.NewIndexer(queries, search, embedder)
-	if err := indexer.RegisterJobHandler(runner); err != nil {
-		return err
-	}
-	if err := runner.Start(ctx); err != nil {
-		return err
-	}
-	defer runner.Stop()
+	runner.AllowEnqueue(retrieval.JobTypeIndex, artifacts.JobTypeArtifact, dream.JobTypeDream)
 
 	metrics := observability.NewMetrics()
 	shutdownTracing, err := observability.InitTracing(ctx, "atlas-api")
