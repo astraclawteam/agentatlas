@@ -41,6 +41,16 @@ type DraftWorkflowResult struct {
 	Workflow workflow.Workflow `json:"workflow"`
 }
 
+// builtinNodeTypeList renders the sixteen built-in node types for prompts and
+// error messages — workflow.BuiltinNodeTypes stays the single source of truth.
+func builtinNodeTypeList() string {
+	names := make([]string, len(workflow.BuiltinNodeTypes))
+	for i, t := range workflow.BuiltinNodeTypes {
+		names[i] = string(t)
+	}
+	return strings.Join(names, ", ")
+}
+
 // DraftWorkflow builds a schema-shaped workflow draft from agent-provided
 // steps. Unknown node types fail loud — the agent must stay inside the
 // sixteen built-in types.
@@ -69,7 +79,7 @@ func DraftWorkflow(args DraftWorkflowArgs) (DraftWorkflowResult, error) {
 	for _, s := range args.Steps {
 		t := workflow.NodeType(s.Type)
 		if !workflow.IsBuiltinNodeType(t) {
-			return DraftWorkflowResult{}, fmt.Errorf("unknown node type %q (node %s)", s.Type, s.ID)
+			return DraftWorkflowResult{}, fmt.Errorf("unknown node type %q (node %s); 只允许这些内置节点类型: %s", s.Type, s.ID, builtinNodeTypeList())
 		}
 		if s.ID == "" || nodeIDs[s.ID] {
 			return DraftWorkflowResult{}, fmt.Errorf("node id %q missing or duplicated", s.ID)
@@ -201,8 +211,9 @@ func ExplainTrace(args ExplainTraceArgs) (ExplainTraceResult, error) {
 // Tools wraps the handlers as ADK function tools.
 func Tools() ([]tool.Tool, error) {
 	draftWorkflow, err := functiontool.New(functiontool.Config{
-		Name:        "draft_workflow",
-		Description: "把步骤列表整理成合法的 AgentAtlas 工作流草稿（仅允许 16 种内置节点类型）",
+		Name: "draft_workflow",
+		Description: "把步骤列表整理成合法的 AgentAtlas 工作流草稿。step.type 只允许这 16 种内置节点类型: " +
+			builtinNodeTypeList() + "。kind 取 sop/dream/ingestion/answer，risk_level 取 low/medium/high。",
 	}, func(_ adkagent.ToolContext, args DraftWorkflowArgs) (DraftWorkflowResult, error) {
 		return DraftWorkflow(args)
 	})
