@@ -1,0 +1,19 @@
+# Go build artifacts
+*.exe
+*.test
+*.out
+bin/
+dist/
+
+# Frontend
+node_modules/
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Local env
+.env
+*.local.yaml
