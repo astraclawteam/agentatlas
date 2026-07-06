@@ -197,6 +197,27 @@ func (q *Queries) GetAtlasDocument(ctx context.Context, id string) (AtlasDocumen
 	return i, err
 }
 
+const getAtlasDocumentByArtifact = `-- name: GetAtlasDocumentByArtifact :one
+SELECT id, enterprise_id, artifact_id, source_hash, content_type, provider, object_key, confidence, created_at FROM atlas_documents WHERE artifact_id = $1 ORDER BY created_at DESC LIMIT 1
+`
+
+func (q *Queries) GetAtlasDocumentByArtifact(ctx context.Context, artifactID string) (AtlasDocument, error) {
+	row := q.db.QueryRow(ctx, getAtlasDocumentByArtifact, artifactID)
+	var i AtlasDocument
+	err := row.Scan(
+		&i.ID,
+		&i.EnterpriseID,
+		&i.ArtifactID,
+		&i.SourceHash,
+		&i.ContentType,
+		&i.Provider,
+		&i.ObjectKey,
+		&i.Confidence,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const insertArtifactStep = `-- name: InsertArtifactStep :exec
 INSERT INTO artifact_processing_steps (job_id, step, status, detail)
 VALUES ($1, $2, $3, $4)
