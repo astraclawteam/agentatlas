@@ -164,26 +164,35 @@ func TestAgentAtlasMVP(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// docling sidecar stand-in: converts uploaded markdown verbatim
-	docling := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			FileSources []struct {
-				Base64String string `json:"base64_string"`
-			} `json:"file_sources"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		md := ""
-		if len(req.FileSources) > 0 {
-			raw, _ := decodeB64(req.FileSources[0].Base64String)
-			md = string(raw)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status":   "success",
-			"document": map[string]any{"md_content": md},
-		})
-	}))
-	defer docling.Close()
-	registry, err := parsergateway.NewRegistry(parsergateway.NewDoclingProvider(docling.URL))
+	// Document parsing: the REAL docling sidecar when ATLAS_PARSER_SIDECARS=1
+	// (compose docling-sidecar up); the in-process stand-in stays only as the
+	// no-sidecar CI fallback.
+	doclingURL := ""
+	if os.Getenv("ATLAS_PARSER_SIDECARS") == "1" {
+		doclingURL = envOr("ATLAS_TEST_DOCLING_URL", "http://localhost:5001")
+		t.Logf("parsing through REAL docling sidecar at %s", doclingURL)
+	} else {
+		docling := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				FileSources []struct {
+					Base64String string `json:"base64_string"`
+				} `json:"file_sources"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			md := ""
+			if len(req.FileSources) > 0 {
+				raw, _ := decodeB64(req.FileSources[0].Base64String)
+				md = string(raw)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status":   "success",
+				"document": map[string]any{"md_content": md},
+			})
+		}))
+		defer docling.Close()
+		doclingURL = docling.URL
+	}
+	registry, err := parsergateway.NewRegistry(parsergateway.NewDoclingProvider(doclingURL))
 	if err != nil {
 		t.Fatal(err)
 	}
