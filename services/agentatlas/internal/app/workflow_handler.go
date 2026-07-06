@@ -43,6 +43,44 @@ func (h *workflowHandler) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"workflow_id": id})
 }
 
+type startRunRequest struct {
+	Version int32          `json:"version"`
+	Input   map[string]any `json:"input,omitempty"`
+}
+
+// startRun registers a pending run for a published version and enqueues it for
+// atlas-worker execution (202 — execution is asynchronous).
+func (h *workflowHandler) startRun(w http.ResponseWriter, r *http.Request) {
+	actor, ok := actorFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "no verified actor")
+		return
+	}
+	if h.deps.Runtime == nil || h.deps.Runner == nil {
+		writeError(w, http.StatusServiceUnavailable, "runtime_unavailable", "workflow runtime/queue not configured")
+		return
+	}
+	var req startRunRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if req.Version <= 0 {
+		writeError(w, http.StatusBadRequest, "bad_request", "version (>0, published) is required")
+		return
+	}
+	runID, err := h.deps.Runtime.CreatePending(r.Context(), actor.Ticket.EnterpriseID, chi.URLParam(r, "id"), req.Version, req.Input)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "run_failed", err.Error())
+		return
+	}
+	if err := h.deps.Runner.Enqueue(r.Context(), workflow.JobTypeRun, runID); err != nil {
+		writeError(w, http.StatusInternalServerError, "enqueue_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"run_id": runID, "status": workflow.RunPending})
+}
+
 func (h *workflowHandler) publish(w http.ResponseWriter, r *http.Request) {
 	actor, ok := actorFrom(r.Context())
 	if !ok {

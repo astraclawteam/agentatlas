@@ -89,6 +89,33 @@ func (s *Synthesizer) Aggregate(ctx context.Context, scopeName string, windowSta
 	}, nil
 }
 
+// AggregateTexts adapts the synthesizer for workflow dream.aggregate nodes:
+// plain masked texts in (with per-node masking/risk rules), layer map out.
+// The nil-synthesizer/deterministic degraded mode applies as usual.
+func (s *Synthesizer) AggregateTexts(ctx context.Context, scopeName string, texts []string, maskingRules, riskRules []string) (map[string]any, error) {
+	masker, err := NewMasker(maskingRules)
+	if err != nil {
+		return nil, fmt.Errorf("masking rules: %w", err)
+	}
+	risks, err := NewRiskExtractor(riskRules)
+	if err != nil {
+		return nil, fmt.Errorf("risk rules: %w", err)
+	}
+	briefs := make([]db.WorkBrief, len(texts))
+	for i, t := range texts {
+		briefs[i] = db.WorkBrief{ID: fmt.Sprintf("wfb_%d", i), EmployeeUserID: "workflow", Summary: t}
+	}
+	now := time.Now().UTC()
+	agg, err := s.Aggregate(ctx, scopeName, now.Add(-24*time.Hour), now, briefs, masker, risks)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"display": agg.Display, "retrieval": agg.Retrieval,
+		"risk_signals": agg.RiskSignals, "source": agg.Source,
+	}, nil
+}
+
 func writeDigestSection(b *strings.Builder, title string, items []string) {
 	if len(items) == 0 {
 		return

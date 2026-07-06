@@ -10,22 +10,29 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"go.uber.org/zap"
 
+	sdkworkflow "github.com/astraclawteam/agentatlas/sdk/go/workflow"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/agent"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/artifacts"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/config"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/llmroutermodel"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/llmutil"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/parsergateway"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/retrieval"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/storage"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/tasks"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/trace"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/worker"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/workflow"
 )
 
 func main() {
@@ -93,15 +100,23 @@ func run() error {
 		return err
 	}
 
-	// Model-backed intelligence: embeddings for indexing, summarizer for
-	// artifacts, synthesizer for dream runs. No API key = explicit
-	// deterministic/keyword-only degraded mode.
+	// Model-backed intelligence: embeddings+rerank for retrieval, summarizer
+	// for artifacts, synthesizer for dream runs, and the Knowledge Agent for
+	// SOP extraction + answer generation in workflow nodes. No API key =
+	// explicit deterministic/keyword-only degraded mode.
 	var embedder retrieval.Embedder
+	var reranker retrieval.Reranker
 	var summarizer *artifacts.Summarizer
 	var synthesizer *dream.Synthesizer
+	var sopExtractor workflow.SOPExtractor
+	var answerGen workflow.AnswerGenerator
 	intelligence := "deterministic"
 	if cfg.LLMRouter.APIKey != "" {
 		embedder, err = retrieval.NewLLMRouterEmbedder(cfg.LLMRouter.BaseURL, cfg.LLMRouter.APIKey, "bge-m3")
+		if err != nil {
+			return err
+		}
+		reranker, err = retrieval.NewLLMRouterReranker(cfg.LLMRouter.BaseURL, cfg.LLMRouter.APIKey, cfg.LLMRouter.RerankModel)
 		if err != nil {
 			return err
 		}
@@ -118,6 +133,29 @@ func run() error {
 		}
 		summarizer = artifacts.NewSummarizer(llm)
 		synthesizer = dream.NewSynthesizer(llm)
+		agentRunner, err := agent.NewRunner(llm)
+		if err != nil {
+			return err
+		}
+		sopExtractor = func(ctx context.Context, doc agent.SOPDocument) (sdkworkflow.Workflow, error) {
+			return agent.ExtractSOP(ctx, agentRunner, doc)
+		}
+		answerGen = func(ctx context.Context, question string, snippets []string) (string, string, error) {
+			var prompt strings.Builder
+			fmt.Fprintf(&prompt, "问题：%s\n", question)
+			if len(snippets) > 0 {
+				prompt.WriteString("依据材料：\n")
+				for i, s := range snippets {
+					fmt.Fprintf(&prompt, "%d. %s\n", i+1, s)
+				}
+			}
+			text, err := llmutil.CompleteText(ctx, llm,
+				"你是 AgentAtlas 的回答生成器。只根据提供的依据材料用中文回答；材料不足时明确说不确定，不得虚构。", prompt.String())
+			if err != nil {
+				return "", "", err
+			}
+			return strings.TrimSpace(text), llm.Name(), nil
+		}
 		intelligence = "llm"
 	} else {
 		logger.Warn("llmrouter api key not configured: worker runs deterministic summaries and keyword-only indexing")
@@ -132,11 +170,33 @@ func run() error {
 	artifactSvc := artifacts.NewService(queries, objects, parserGW, runner, summarizer)
 	dreamRunner := dream.NewRunner(queries, objects, dream.NewPolicyService(queries), runner, synthesizer)
 	indexer := retrieval.NewIndexer(queries, search, embedder)
+	retrievalSvc := retrieval.NewService(queries, search, embedder, reranker)
+	nexusClient := nexusclient.New(cfg.AgentNexus.BaseURL, 30*time.Second)
+
+	// Workflow runs execute HERE: real executors behind every node type.
+	workflowSvc, err := workflow.NewService(queries)
+	if err != nil {
+		return err
+	}
+	registry := workflow.NewRegistryWithServices(workflow.Executors{
+		Artifacts: artifactSvc,
+		Documents: artifactSvc,
+		SOP:       sopExtractor,
+		Summarize: summarizer,
+		Retrieval: retrievalSvc,
+		Nexus:     nexusClient,
+		Dream:     synthesizer.AggregateTexts,
+		Answer:    answerGen,
+		Traces:    trace.NewService(queries),
+	})
+	workflowRuntime := workflow.NewRuntime(queries, workflowSvc, registry)
+	runJobs := workflow.NewRunJobHandler(workflowRuntime, queries, runner)
 
 	w := worker.New(runner, worker.Deps{
 		Artifacts: artifactSvc,
 		Dreams:    dreamRunner,
 		Indexer:   indexer,
+		Extra:     []worker.Registrar{runJobs},
 	})
 	if err := w.Start(ctx); err != nil {
 		return err
@@ -144,7 +204,7 @@ func run() error {
 	logger.Info("atlas-worker consuming",
 		zap.String("nats", cfg.NATS.URL),
 		zap.String("intelligence", intelligence),
-		zap.Strings("job_types", []string{artifacts.JobTypeArtifact, retrieval.JobTypeIndex, dream.JobTypeDream}),
+		zap.Strings("job_types", []string{artifacts.JobTypeArtifact, retrieval.JobTypeIndex, dream.JobTypeDream, workflow.JobTypeRun}),
 	)
 
 	<-ctx.Done()

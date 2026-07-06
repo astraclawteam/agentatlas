@@ -233,6 +233,12 @@ func (f *fakeArtifactStore) InsertParserProviderRun(context.Context, db.InsertPa
 func (f *fakeArtifactStore) CreateAtlasDocument(context.Context, db.CreateAtlasDocumentParams) (db.AtlasDocument, error) {
 	return db.AtlasDocument{}, fmt.Errorf("not used")
 }
+func (f *fakeArtifactStore) GetAtlasDocument(context.Context, string) (db.AtlasDocument, error) {
+	return db.AtlasDocument{}, pgx.ErrNoRows
+}
+func (f *fakeArtifactStore) GetAtlasDocumentByArtifact(context.Context, string) (db.AtlasDocument, error) {
+	return db.AtlasDocument{}, pgx.ErrNoRows
+}
 func (f *fakeArtifactStore) InsertDocumentBlock(context.Context, db.InsertDocumentBlockParams) error {
 	return nil
 }

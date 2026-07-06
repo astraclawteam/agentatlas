@@ -81,6 +81,7 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 		r.Use(ticketGuard(deps.Nexus))
 		r.Post("/workflows", wf.create)
 		r.Post("/workflows/{id}/publish", wf.publish)
+		r.Post("/workflows/{id}/runs", wf.startRun)
 		r.Post("/dream-policies", dp.create)
 		r.Post("/agent/runs", ar.start)
 		r.Post("/agent/runs/{id}/messages", ar.message)
