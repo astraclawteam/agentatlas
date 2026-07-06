@@ -22,7 +22,7 @@ export function ClawDialog({ open, title, children, onClose, footer }: ClawDialo
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "rgba(17, 24, 39, 0.4)",
+        background: "rgba(19, 19, 20, 0.4)",
         zIndex: 1000,
         fontFamily: "var(--claw-font)",
       }}
