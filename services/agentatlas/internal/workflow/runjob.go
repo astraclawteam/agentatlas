@@ -13,8 +13,17 @@ import (
 const JobTypeRun = "workflow_run"
 
 // CreatePending registers a run bound to a published version WITHOUT executing
-// it — the serving plane enqueues, atlas-worker claims and executes.
+// it — the serving plane enqueues, atlas-worker claims and executes. The
+// workflow must belong to the caller's enterprise (fail closed): version
+// definitions are looked up by id+version only, so ownership is checked here.
 func (r *Runtime) CreatePending(ctx context.Context, enterpriseID, workflowID string, version int32, input map[string]any) (string, error) {
+	wf, err := r.store.GetWorkflow(ctx, workflowID)
+	if err != nil {
+		return "", fmt.Errorf("load workflow %s: %w", workflowID, err)
+	}
+	if wf.EnterpriseID != enterpriseID {
+		return "", ErrWorkflowForbidden
+	}
 	def, err := r.service.VersionDefinition(ctx, workflowID, version)
 	if err != nil {
 		return "", err
@@ -39,7 +48,10 @@ func (r *Runtime) CreatePending(ctx context.Context, enterpriseID, workflowID st
 	return runID, nil
 }
 
-// ExecuteClaimed runs a claimed (status=running) run from the beginning.
+// ExecuteClaimed runs a claimed (status=running) run. Fresh runs start at
+// node 0; a run resumed after human.confirm approval carries its persisted
+// state in workflow_runs.output (the Claim UPDATE keeps output via COALESCE)
+// and continues from the node after the confirm gate.
 func (r *Runtime) ExecuteClaimed(ctx context.Context, runID string) (string, error) {
 	run, err := r.store.GetWorkflowRun(ctx, runID)
 	if err != nil {
@@ -60,6 +72,16 @@ func (r *Runtime) ExecuteClaimed(ctx context.Context, runID string) (string, err
 		}
 	}
 	state := runState{NextIndex: 0, Outputs: map[string]map[string]any{}, Input: input}
+	if len(run.Output) > 0 {
+		var saved runState
+		if err := json.Unmarshal(run.Output, &saved); err != nil {
+			return "", fmt.Errorf("decode persisted run state %s: %w", runID, err)
+		}
+		if saved.Outputs != nil {
+			saved.Input = input
+			state = saved
+		}
+	}
 	return r.execute(ctx, runID, run.EnterpriseID, def, order, state)
 }
 

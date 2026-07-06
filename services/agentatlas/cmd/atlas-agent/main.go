@@ -81,11 +81,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// Runtime here serves CreatePending (run starts) and confirmation resumes;
-	// full node execution happens on atlas-worker, which owns the real
-	// executor registry. Resume re-executes remaining nodes in-process, so it
-	// gets the built-in registry only for input/confirm nodes — runs with
-	// heavier nodes after a confirm re-enqueue below.
+	// Runtime here only registers pending runs (CreatePending) and records
+	// confirm decisions (Resume → back to pending); it never executes nodes.
+	// The confirm handler re-enqueues approved runs so atlas-worker — the only
+	// process with the fully wired executor registry — runs the remaining
+	// nodes. The built-in registry below is therefore intentionally inert.
 	workflowRuntime := workflow.NewRuntime(queries, workflowSvc, workflow.NewRegistry())
 	dreamPolicies := dream.NewPolicyService(queries)
 

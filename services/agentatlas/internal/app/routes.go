@@ -117,12 +117,15 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		})
 
 		r.Get("/spaces/{id}", func(w http.ResponseWriter, req *http.Request) {
-			if _, _, err := verifyTicket(req.Context(), deps.Nexus, req); err != nil {
+			_, ticket, err := verifyTicket(req.Context(), deps.Nexus, req)
+			if err != nil {
 				writeError(w, http.StatusUnauthorized, "unauthorized", err.Error())
 				return
 			}
 			space, err := deps.Store.GetKnowledgeSpace(req.Context(), chi.URLParam(req, "id"))
-			if err != nil {
+			// Cross-enterprise reads report not_found: space ids must not be
+			// enumerable across tenants (isolation invariant).
+			if err != nil || space.EnterpriseID != ticket.EnterpriseID {
 				writeError(w, http.StatusNotFound, "not_found", "knowledge space not found")
 				return
 			}
@@ -134,8 +137,14 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		})
 
 		r.Get("/spaces/{id}/timeline", func(w http.ResponseWriter, req *http.Request) {
-			if _, _, err := verifyTicket(req.Context(), deps.Nexus, req); err != nil {
+			_, ticket, err := verifyTicket(req.Context(), deps.Nexus, req)
+			if err != nil {
 				writeError(w, http.StatusUnauthorized, "unauthorized", err.Error())
+				return
+			}
+			space, err := deps.Store.GetKnowledgeSpace(req.Context(), chi.URLParam(req, "id"))
+			if err != nil || space.EnterpriseID != ticket.EnterpriseID {
+				writeError(w, http.StatusNotFound, "not_found", "knowledge space not found")
 				return
 			}
 			nodes, err := deps.Store.ListTimelineNodes(req.Context(), db.ListTimelineNodesParams{
@@ -162,7 +171,8 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		})
 
 		r.Get("/traces/{id}", func(w http.ResponseWriter, req *http.Request) {
-			if _, _, err := verifyTicket(req.Context(), deps.Nexus, req); err != nil {
+			_, ticket, err := verifyTicket(req.Context(), deps.Nexus, req)
+			if err != nil {
 				writeError(w, http.StatusUnauthorized, "unauthorized", err.Error())
 				return
 			}
@@ -173,6 +183,11 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 					return
 				}
 				writeError(w, http.StatusInternalServerError, "trace_failed", err.Error())
+				return
+			}
+			if row.EnterpriseID != ticket.EnterpriseID {
+				// Cross-enterprise trace ids are not enumerable (isolation invariant).
+				writeError(w, http.StatusNotFound, "not_found", "trace not found")
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]any{
