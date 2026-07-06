@@ -39,10 +39,13 @@ type Runner struct {
 	objects Objects
 	policy  *PolicyService
 	tasks   *tasks.Runner
+	synth   *Synthesizer
 }
 
-func NewRunner(store RunnerStore, objects Objects, policy *PolicyService, taskRunner *tasks.Runner) *Runner {
-	return &Runner{store: store, objects: objects, policy: policy, tasks: taskRunner}
+// NewRunner wires a dream runner. synth may be nil (or model-less) — that is
+// the explicit deterministic degraded mode.
+func NewRunner(store RunnerStore, objects Objects, policy *PolicyService, taskRunner *tasks.Runner, synth *Synthesizer) *Runner {
+	return &Runner{store: store, objects: objects, policy: policy, tasks: taskRunner, synth: synth}
 }
 
 func (r *Runner) RegisterJobHandler() error {
@@ -115,7 +118,10 @@ func (r *Runner) execute(ctx context.Context, runID string) error {
 		}
 	}
 
-	agg := AggregateBriefs(space.Name, run.WindowStart.Time, run.WindowEnd.Time, briefs, masker, risks)
+	agg, err := r.synth.Aggregate(ctx, space.Name, run.WindowStart.Time, run.WindowEnd.Time, briefs, masker, risks)
+	if err != nil {
+		return fmt.Errorf("aggregate: %w", err)
+	}
 	riskJSON, err := json.Marshal(agg.RiskSignals)
 	if err != nil {
 		return err

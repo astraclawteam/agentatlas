@@ -112,7 +112,7 @@ func TestDreamJob(t *testing.T) {
 
 	// scheduler tick dispatches; MemBus executes synchronously
 	runner := tasks.NewRunner(tasks.NewMemBus())
-	dreamRunner := dream.NewRunner(q, objects, policySvc, runner)
+	dreamRunner := dream.NewRunner(q, objects, policySvc, runner, nil)
 	if err := dreamRunner.RegisterJobHandler(); err != nil {
 		t.Fatal(err)
 	}
