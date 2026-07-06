@@ -160,38 +160,33 @@ paths:
                 properties:
                   dream_policy_id: { type: string }
                   status: { type: string, enum: [draft, published] }
-  /v1/artifacts/jobs:
+  /v1/workflows/{id}/runs:
     post:
-      operationId: createArtifactJob
-      summary: Create an artifact processing job (upload or evidence pointer)
+      operationId: startWorkflowRun
+      summary: Register a pending run for a published version and enqueue it for atlas-worker
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [enterprise_id, source]
+              required: [version]
               properties:
-                enterprise_id: { type: string }
-                source:
-                  type: object
-                  description: Exactly one of object_key or evidence_pointer_id
-                  properties:
-                    object_key: { type: string, description: Key of an uploaded object in the artifacts bucket }
-                    evidence_pointer_id: { type: string }
-                content_type: { type: string }
-                parser_hint: { type: string, enum: [docling, mineru, asr, video, auto], default: auto }
+                version: { type: integer, minimum: 1 }
+                input: { type: object, description: Run input visible to input.* nodes }
       responses:
-        '201':
-          description: Job created
+        '202':
+          description: Run registered and enqueued
           content:
             application/json:
               schema:
                 type: object
-                required: [job_id, status]
+                required: [run_id, status]
                 properties:
-                  job_id: { type: string }
-                  status: { type: string, enum: [pending, running, succeeded, failed] }
+                  run_id: { type: string }
+                  status: { type: string, enum: [pending] }
 components:
   securitySchemes:
     NexusTicket:

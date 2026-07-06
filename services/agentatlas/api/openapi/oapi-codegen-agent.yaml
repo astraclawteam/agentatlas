@@ -1,0 +1,5 @@
+# oapi-codegen config: Go types for the agent control-plane contract.
+package: agentapi
+output: api/openapi/gen/agent/types.gen.go
+generate:
+  models: true
