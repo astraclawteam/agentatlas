@@ -187,7 +187,7 @@ func TestAgentAtlasMVP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifactSvc := artifacts.NewService(q, objects, parsergateway.NewGateway(registry), runner)
+	artifactSvc := artifacts.NewService(q, objects, parsergateway.NewGateway(registry), runner, nil)
 	if err := artifactSvc.RegisterJobHandler(); err != nil {
 		t.Fatal(err)
 	}
