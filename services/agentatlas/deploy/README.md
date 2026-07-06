@@ -84,3 +84,27 @@ go test ./tests/e2e -run TestAgentAtlasMVP -v            # MVP parse step now ru
 Override endpoints with `ATLAS_TEST_DOCLING_URL` / `ATLAS_TEST_MINERU_URL` /
 `ATLAS_TEST_ASR_URL` / `ATLAS_TEST_VIDEO_URL` (defaults match compose ports
 5001/5002/5003/5004). First ASR run downloads whisper models — allow minutes.
+
+## Full stack up (Goal Z1, recorded 2026-07-06)
+
+`docker compose up -d` (all images digest/version-pinned; mineru-sidecar builds
+from PyPI separately — torch-scale download):
+
+```
+NAME                           STATUS
+agentatlas-asr-sidecar-1       Up About a minute (healthy)
+agentatlas-atlas-agent-1       Up About a minute (healthy)
+agentatlas-atlas-api-1         Up 32 seconds (healthy)
+agentatlas-atlas-worker-1      Up 32 seconds (healthy)
+agentatlas-docling-sidecar-1   Up About a minute (healthy)
+agentatlas-minio-1             Up About a minute (healthy)
+agentatlas-nats-1              Up 5 hours (healthy)
+agentatlas-opensearch-1        Up About a minute (healthy)
+agentatlas-parser-gateway-1    Up 57 seconds (healthy)
+agentatlas-postgres-1          Up 5 hours (healthy)
+agentatlas-video-sidecar-1     Up About a minute (healthy)
+```
+
+Build note: on a 4 GB Docker Desktop VM build the images SEQUENTIALLY
+(`docker compose build <svc>` one at a time) — a parallel 6-target build can
+OOM BuildKit. Helm validation evidence lives in `deploy/helm/HELM-VALIDATION.md`.

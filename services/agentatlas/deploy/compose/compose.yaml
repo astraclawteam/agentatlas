@@ -78,7 +78,7 @@ services:
       retries: 12
 
   minio:
-    image: ${MINIO_IMAGE:-minio/minio:latest}
+    image: ${MINIO_IMAGE:-minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e}
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-atlas}
@@ -95,7 +95,7 @@ services:
       retries: 12
 
   minio-init:
-    image: ${MC_IMAGE:-minio/mc:latest}
+    image: ${MC_IMAGE:-minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727}
     depends_on:
       minio:
         condition: service_healthy
@@ -107,8 +107,8 @@ services:
 
   atlas-api:
     build:
-      context: ../..
-      dockerfile: deploy/docker/Dockerfile
+      context: ../../../..
+      dockerfile: services/agentatlas/deploy/docker/Dockerfile
       args:
         SERVICE: atlas-api
         GOPROXY: ${GOPROXY_BUILD:-https://proxy.golang.org,direct}
@@ -116,6 +116,11 @@ services:
       <<: *atlas-env
     ports:
       - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     depends_on:
       postgres:
         condition: service_healthy
@@ -128,8 +133,8 @@ services:
 
   atlas-agent:
     build:
-      context: ../..
-      dockerfile: deploy/docker/Dockerfile
+      context: ../../../..
+      dockerfile: services/agentatlas/deploy/docker/Dockerfile
       args:
         SERVICE: atlas-agent
         GOPROXY: ${GOPROXY_BUILD:-https://proxy.golang.org,direct}
@@ -137,6 +142,11 @@ services:
       <<: *atlas-env
     ports:
       - "8081:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     depends_on:
       postgres:
         condition: service_healthy
@@ -145,13 +155,24 @@ services:
 
   atlas-worker:
     build:
-      context: ../..
-      dockerfile: deploy/docker/Dockerfile
+      context: ../../../..
+      dockerfile: services/agentatlas/deploy/docker/Dockerfile
       args:
         SERVICE: atlas-worker
         GOPROXY: ${GOPROXY_BUILD:-https://proxy.golang.org,direct}
     environment:
       <<: *atlas-env
+      # comma-separated enterprises whose AgentNexus org-event streams the
+      # worker subscribes (space sync); empty disables the subscription.
+      ATLAS_ORG_SYNC_ENTERPRISES: ${ATLAS_ORG_SYNC_ENTERPRISES:-}
+    ports:
+      - "9091:9091" # metrics/liveness listener
+    healthcheck:
+      # the worker has no API port; its /metrics listener doubles as liveness
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9091/metrics >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     depends_on:
       postgres:
         condition: service_healthy
@@ -164,8 +185,8 @@ services:
 
   parser-gateway:
     build:
-      context: ../..
-      dockerfile: deploy/docker/Dockerfile
+      context: ../../../..
+      dockerfile: services/agentatlas/deploy/docker/Dockerfile
       args:
         SERVICE: parser-gateway
         GOPROXY: ${GOPROXY_BUILD:-https://proxy.golang.org,direct}
@@ -173,12 +194,17 @@ services:
       <<: *atlas-env
     ports:
       - "8090:8090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8090/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     depends_on:
       minio:
         condition: service_healthy
 
   docling-sidecar:
-    image: ${DOCLING_IMAGE:-ghcr.io/docling-project/docling-serve:latest}
+    image: ${DOCLING_IMAGE:-ghcr.io/docling-project/docling-serve@sha256:56189f190892cc03a4a5c10ba9e56c421ac2524554aa2d36f0f4bb6564132524}
     environment:
       DOCLING_SERVE_ENABLE_UI: "0"
     ports:

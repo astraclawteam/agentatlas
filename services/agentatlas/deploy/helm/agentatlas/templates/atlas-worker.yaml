@@ -23,5 +23,15 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             {{- include "agentatlas.env" . | nindent 12 }}
+          ports:
+            - containerPort: 9091
+          readinessProbe:
+            httpGet: { path: /metrics, port: 9091 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /metrics, port: 9091 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
           resources:
             {{- toYaml .Values.resources.atlasWorker | nindent 12 }}

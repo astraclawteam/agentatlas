@@ -25,6 +25,14 @@ spec:
             - containerPort: {{ .Values.services.atlasApi.port }}
           env:
             {{- include "agentatlas.env" . | nindent 12 }}
+          readinessProbe:
+            httpGet: { path: /healthz, port: {{ .Values.services.atlasApi.port }} }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: {{ .Values.services.atlasApi.port }} }
+            initialDelaySeconds: 15
+            periodSeconds: 20
           resources:
             {{- toYaml .Values.resources.atlasApi | nindent 12 }}
 ---
