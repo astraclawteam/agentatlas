@@ -33,6 +33,9 @@ RETURNING *;
 -- name: GetAtlasDocument :one
 SELECT * FROM atlas_documents WHERE id = $1;
 
+-- name: GetAtlasDocumentByArtifact :one
+SELECT * FROM atlas_documents WHERE artifact_id = $1 ORDER BY created_at DESC LIMIT 1;
+
 -- name: InsertDocumentBlock :exec
 INSERT INTO document_blocks (atlas_document_id, block_id, block_type, page, block_order, text_hash, sanitized_excerpt)
 VALUES ($1, $2, $3, $4, $5, $6, $7);
