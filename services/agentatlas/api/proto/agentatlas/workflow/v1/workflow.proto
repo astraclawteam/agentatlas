@@ -1,0 +1,128 @@
+syntax = "proto3";
+
+package agentatlas.workflow.v1;
+
+option go_package = "github.com/astraclawteam/agentatlas/sdk/go/proto/workflow/v1;workflowv1";
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+// Internal RPC contract for the workflow runtime (ConnectRPC).
+
+enum WorkflowKind {
+  WORKFLOW_KIND_UNSPECIFIED = 0;
+  WORKFLOW_KIND_SOP = 1;
+  WORKFLOW_KIND_DREAM = 2;
+  WORKFLOW_KIND_INGESTION = 3;
+  WORKFLOW_KIND_ANSWER = 4;
+}
+
+enum RiskLevel {
+  RISK_LEVEL_UNSPECIFIED = 0;
+  RISK_LEVEL_LOW = 1;
+  RISK_LEVEL_MEDIUM = 2;
+  RISK_LEVEL_HIGH = 3;
+}
+
+enum NodeStatus {
+  NODE_STATUS_UNSPECIFIED = 0;
+  NODE_STATUS_PENDING = 1;
+  NODE_STATUS_RUNNING = 2;
+  NODE_STATUS_WAITING_CONFIRMATION = 3;
+  NODE_STATUS_SUCCEEDED = 4;
+  NODE_STATUS_FAILED = 5;
+  NODE_STATUS_SKIPPED = 6;
+}
+
+message Node {
+  string id = 1;
+  // One of the sixteen built-in node types, e.g. "parser.document".
+  string type = 2;
+  string name = 3;
+  google.protobuf.Struct config = 4;
+  bool requires_confirmation = 5;
+}
+
+message Edge {
+  string from = 1;
+  string to = 2;
+  string condition = 3;
+}
+
+message Workflow {
+  string workflow_id = 1;
+  int64 version = 2;
+  WorkflowKind kind = 3;
+  repeated Node nodes = 4;
+  repeated Edge edges = 5;
+  google.protobuf.Struct variables = 6;
+  google.protobuf.Struct input_schema = 7;
+  google.protobuf.Struct output_schema = 8;
+  RiskLevel risk_level = 9;
+}
+
+message WorkflowRun {
+  string run_id = 1;
+  string workflow_id = 2;
+  int64 version = 3;
+  string enterprise_id = 4;
+  string status = 5;
+  google.protobuf.Timestamp started_at = 6;
+  google.protobuf.Timestamp finished_at = 7;
+}
+
+message RunEvent {
+  string event_id = 1;
+  string run_id = 2;
+  string node_id = 3;
+  NodeStatus status = 4;
+  string detail = 5;
+  google.protobuf.Timestamp occurred_at = 6;
+}
+
+message CreateDraftRequest {
+  string enterprise_id = 1;
+  Workflow workflow = 2;
+}
+
+message CreateDraftResponse {
+  string workflow_id = 1;
+}
+
+message PublishRequest {
+  string enterprise_id = 1;
+  string workflow_id = 2;
+}
+
+message PublishResponse {
+  string workflow_id = 1;
+  int64 version = 2;
+}
+
+message StartRunRequest {
+  string enterprise_id = 1;
+  string workflow_id = 2;
+  int64 version = 3;
+  google.protobuf.Struct input = 4;
+}
+
+message StartRunResponse {
+  WorkflowRun run = 1;
+}
+
+message GetRunRequest {
+  string enterprise_id = 1;
+  string run_id = 2;
+}
+
+message GetRunResponse {
+  WorkflowRun run = 1;
+  repeated RunEvent events = 2;
+}
+
+service WorkflowService {
+  rpc CreateDraft(CreateDraftRequest) returns (CreateDraftResponse);
+  rpc Publish(PublishRequest) returns (PublishResponse);
+  rpc StartRun(StartRunRequest) returns (StartRunResponse);
+  rpc GetRun(GetRunRequest) returns (GetRunResponse);
+}

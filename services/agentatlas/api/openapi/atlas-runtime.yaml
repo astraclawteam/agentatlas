@@ -1,0 +1,305 @@
+openapi: 3.0.3
+info:
+  title: AgentAtlas Runtime API
+  version: 1.0.0
+  description: >
+    Stable runtime surface consumed by AgentNexus, the desktop agent, and
+    business agents: answering, retrieval planning, knowledge space queries,
+    work-brief ingestion, and answer trace lookup. Every call authenticates
+    with an AgentNexus-issued ticket.
+security:
+  - NexusTicket: []
+paths:
+  /v1/answer:
+    post:
+      operationId: createAnswer
+      summary: Answer an enterprise question with full traceability
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnswerRequest'
+      responses:
+        '200':
+          description: Answer generated (or rejected / waiting with reason)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnswerResponse'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /v1/retrieval/plans:
+    post:
+      operationId: createRetrievalPlan
+      summary: Create a retrieval plan without executing the answer step
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetrievalPlanRequest'
+      responses:
+        '201':
+          description: Plan created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetrievalPlan'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /v1/work-briefs:
+    post:
+      operationId: ingestWorkBrief
+      summary: Ingest an employee work brief summary (never raw content)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkBriefIngest'
+      responses:
+        '201':
+          description: Brief stored; employee timeline node created; index job enqueued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [work_brief_id, timeline_node_id]
+                properties:
+                  work_brief_id: { type: string }
+                  timeline_node_id: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422':
+          description: Payload rejected (e.g. raw content exceeds summary limits)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /v1/spaces/{id}:
+    get:
+      operationId: getKnowledgeSpace
+      summary: Get a knowledge space
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Knowledge space
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeSpace'
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/spaces/{id}/timeline:
+    get:
+      operationId: getSpaceTimeline
+      summary: List timeline nodes of a knowledge space
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        '200':
+          description: Timeline nodes, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [nodes]
+                properties:
+                  nodes:
+                    type: array
+                    items: { $ref: '#/components/schemas/TimelineNode' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/traces/{id}:
+    get:
+      operationId: getAnswerTrace
+      summary: Get an answer trace
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Answer trace
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnswerTrace'
+        '404': { $ref: '#/components/responses/NotFound' }
+components:
+  securitySchemes:
+    NexusTicket:
+      type: apiKey
+      in: header
+      name: X-Nexus-Ticket
+      description: AgentNexus-issued access ticket; verified on every call.
+  responses:
+    Unauthorized:
+      description: Missing or invalid ticket (fail closed)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Ticket valid but scope insufficient
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found in caller-visible scope
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+    AnswerRequest:
+      type: object
+      required: [enterprise_id, question]
+      properties:
+        enterprise_id: { type: string }
+        question: { type: string, minLength: 1 }
+        actor_user_id: { type: string }
+        space_hints:
+          type: array
+          items: { type: string }
+        locale: { type: string }
+    AnswerResponse:
+      type: object
+      required: [status, trace_id]
+      properties:
+        status: { type: string, enum: [completed, rejected, waiting_confirmation] }
+        answer: { type: string }
+        rejection_reason: { type: string }
+        trace_id: { type: string }
+        space_ids:
+          type: array
+          items: { type: string }
+        evidence:
+          type: array
+          items:
+            type: object
+            required: [evidence_pointer_id]
+            properties:
+              evidence_pointer_id: { type: string }
+              summary: { type: string }
+    RetrievalPlanRequest:
+      type: object
+      required: [enterprise_id, query]
+      properties:
+        enterprise_id: { type: string }
+        query: { type: string }
+        space_ids:
+          type: array
+          items: { type: string }
+        org_scopes:
+          type: array
+          items: { type: string }
+        time_range:
+          type: object
+          properties:
+            from: { type: string, format: date-time }
+            to: { type: string, format: date-time }
+        source_types:
+          type: array
+          items: { type: string }
+        max_risk_level: { type: string, enum: [low, medium, high] }
+    RetrievalPlan:
+      type: object
+      required: [retrieval_plan_id, enterprise_id, steps]
+      properties:
+        retrieval_plan_id: { type: string }
+        enterprise_id: { type: string }
+        steps:
+          type: array
+          items:
+            type: object
+            required: [step_id, kind]
+            properties:
+              step_id: { type: string }
+              kind: { type: string, enum: [keyword, vector, filter, rerank, nexus_locate, nexus_read] }
+              params: { type: object }
+    WorkBriefIngest:
+      type: object
+      required: [enterprise_id, employee_user_id, brief_date, summary, evidence_pointer]
+      properties:
+        enterprise_id: { type: string }
+        employee_user_id: { type: string }
+        brief_date: { type: string, format: date }
+        summary: { type: string, maxLength: 2000, description: Short sanitized summary only; raw brief stays in the source system }
+        topics:
+          type: array
+          items: { type: string }
+        project_refs:
+          type: array
+          items: { type: string }
+        source_hash: { type: string }
+        evidence_pointer: { $ref: '#/components/schemas/EvidencePointer' }
+    EvidencePointer:
+      type: object
+      required: [enterprise_id, resource_type, resource_ref, source_system]
+      properties:
+        evidence_id: { type: string }
+        enterprise_id: { type: string }
+        resource_type: { type: string }
+        resource_ref: { type: string }
+        source_system: { type: string }
+        content_hash: { type: string }
+        summary_hash: { type: string }
+        agentnexus_resource_uri: { type: string }
+        required_scopes:
+          type: array
+          items: { type: string }
+        created_at: { type: string, format: date-time }
+    KnowledgeSpace:
+      type: object
+      required: [space_id, enterprise_id, kind, name, org_scope, org_version]
+      properties:
+        space_id: { type: string }
+        enterprise_id: { type: string }
+        kind: { type: string, enum: [employee, project_group, department, business_unit, company] }
+        name: { type: string }
+        org_scope: { type: string }
+        org_version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TimelineNode:
+      type: object
+      required: [timeline_node_id, enterprise_id, space_id, node_time, source_type, summary_text]
+      properties:
+        timeline_node_id: { type: string }
+        enterprise_id: { type: string }
+        space_id: { type: string }
+        org_scope: { type: string }
+        node_time: { type: string, format: date-time }
+        source_type: { type: string, enum: [work_brief, dream_summary, sop_update, project_event, external_evidence, agent_answer] }
+        summary_text: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+        evidence_pointer_id: { type: string }
+    AnswerTrace:
+      type: object
+      required: [trace_id, enterprise_id, case_ticket_id, question_hash, answer_hash, created_at]
+      properties:
+        trace_id: { type: string }
+        enterprise_id: { type: string }
+        case_ticket_id: { type: string }
+        actor_user_id: { type: string }
+        question_hash: { type: string }
+        sanitized_question_summary: { type: string }
+        workflow_run_id: { type: string }
+        space_ids:
+          type: array
+          items: { type: string }
+        retrieval_plan_id: { type: string }
+        evidence_pointer_ids:
+          type: array
+          items: { type: string }
+        agentnexus_read_grant_ids:
+          type: array
+          items: { type: string }
+        model_route: { type: string }
+        answer_hash: { type: string }
+        created_at: { type: string, format: date-time }

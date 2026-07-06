@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package agentatlas.parser.v1;
+
+option go_package = "github.com/astraclawteam/agentatlas/sdk/go/proto/parser/v1;parserv1";
+
+import "google/protobuf/struct.proto";
+
+// Internal RPC contract between atlas-worker and parser-gateway (ConnectRPC).
+
+message ProviderCapability {
+  string provider_id = 1;
+  repeated string capabilities = 2;
+  repeated string input_types = 3;
+  string output_schema = 4; // always "atlas_document.v1" in v1
+  int64 max_file_size_mb = 5;
+  bool supports_private = 6;
+}
+
+message ParseRequest {
+  string enterprise_id = 1;
+  string artifact_id = 2;
+  string content_type = 3;
+  // Object storage key of the raw artifact; the gateway streams it to the sidecar.
+  string object_key = 4;
+  // Optional provider preference: docling | mineru | asr | video.
+  string provider_hint = 5;
+  google.protobuf.Struct options = 6;
+}
+
+message ParseResponse {
+  string provider_id = 1;
+  // Object storage key of the full AtlasDocument JSON (never inlined into
+  // metadata tables; conforms to schemas/atlasdocument/atlas-document.schema.json).
+  string atlas_document_key = 2;
+  string source_hash = 3;
+  double confidence = 4;
+}
+
+message GetCapabilitiesRequest {}
+
+message GetCapabilitiesResponse {
+  repeated ProviderCapability providers = 1;
+}
+
+service ParserGatewayService {
+  rpc Parse(ParseRequest) returns (ParseResponse);
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesResponse);
+}
