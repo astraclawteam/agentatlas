@@ -1,55 +1,70 @@
-/* AstraClaw runtime design tokens (AgentAtlas mirror).
-   Three-tier shadows/radii and status colors follow the runtime design
-   system; glass surfaces carry translucency + blur. */
+/* AstraClaw runtime design tokens — AgentAtlas mirror of ui-next's
+   "Ethos & Ink" system (ui-next/src/styles.css, exact hex from DESIGN.md):
+   米纸白底 #F9F8F0 · 墨黑 #131314 · 陶土橙 clay #D97757 · 米杏边框 #E6E1D3 ·
+   土系低饱和状态色（危险=深陶、成功=橄榄、警示=陈金，非系统红绿）·
+   chip 12 / card 18 / field 20 squircle 圆角 · 深阴影 + clay 描边强调。
+   变量名是 console 的稳定契约；对齐真身只改这里的值。 */
 :root {
-  --claw-font: "Inter", "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  /* 真身字体栈 Hanken Grotesk + Noto Sans SC（未随包分发字体时回退系统黑） */
+  --claw-font: "Hanken Grotesk Variable", "Hanken Grotesk", "Noto Sans SC",
+    ui-sans-serif, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
 
-  --claw-bg: #f5f6f8;
-  --claw-surface: rgba(255, 255, 255, 0.72);
-  --claw-surface-solid: #ffffff;
+  --claw-bg: #f9f8f0;
+  --claw-surface: rgba(249, 248, 240, 0.72);
+  --claw-surface-solid: #fcfbf5; /* 卡片=米底提半档，层次靠边框+阴影（同真身） */
   --claw-surface-blur: 14px;
-  --claw-border: rgba(17, 24, 39, 0.08);
-  --claw-border-strong: rgba(17, 24, 39, 0.16);
+  --claw-border: #e6e1d3;
+  --claw-border-strong: #d6d0be;
 
-  --claw-text: #111827;
-  --claw-text-secondary: #4b5563;
-  --claw-text-muted: #9ca3af;
+  --claw-text: #131314;
+  --claw-text-secondary: #46464a;
+  --claw-text-muted: #9d9b90;
 
-  --claw-accent: #4f46e5;
-  --claw-accent-soft: rgba(79, 70, 229, 0.1);
-  --claw-danger: #dc2626;
-  --claw-danger-soft: rgba(220, 38, 38, 0.1);
-  --claw-success: #16a34a;
-  --claw-success-soft: rgba(22, 163, 74, 0.12);
-  --claw-warning: #d97706;
-  --claw-warning-soft: rgba(217, 119, 6, 0.12);
+  --claw-accent: #d97757; /* clay 陶土橙（默认主题 --clay-rgb: 217 119 87） */
+  --claw-accent-soft: rgba(217, 119, 87, 0.12);
+  --claw-danger: #b8593b; /* 深陶，非系统红 */
+  --claw-danger-soft: rgba(184, 89, 59, 0.12);
+  --claw-success: #6e8765; /* 橄榄绿 */
+  --claw-success-soft: rgba(110, 135, 101, 0.14);
+  --claw-warning: #c8a000; /* 陈金 */
+  --claw-warning-soft: rgba(200, 160, 0, 0.14);
 
-  --claw-radius-sm: 8px;
-  --claw-radius-md: 12px;
+  /* chip / card / field —— 对应真身 --radius-chip/card/field */
+  --claw-radius-sm: 12px;
+  --claw-radius-md: 18px;
   --claw-radius-lg: 20px;
 
-  --claw-shadow-1: 0 1px 2px rgba(17, 24, 39, 0.06);
-  --claw-shadow-2: 0 4px 12px rgba(17, 24, 39, 0.08);
-  --claw-shadow-3: 0 12px 32px rgba(17, 24, 39, 0.14);
+  --claw-shadow-1: 0 1px 2px rgba(19, 19, 20, 0.05);
+  --claw-shadow-2: 0 12px 24px -12px rgba(19, 19, 20, 0.18);
+  --claw-shadow-3: 0 36px 60px -26px rgba(19, 19, 20, 0.36),
+    0 0 0 1px rgba(217, 119, 87, 0.28); /* 真身 card-hover：深影 + clay 描边 */
 }
 
 [data-theme="dark"] {
-  --claw-bg: #0f1115;
-  --claw-surface: rgba(24, 27, 33, 0.72);
-  --claw-surface-solid: #181b21;
-  --claw-border: rgba(255, 255, 255, 0.08);
-  --claw-border-strong: rgba(255, 255, 255, 0.16);
-  --claw-text: #f3f4f6;
-  --claw-text-secondary: #b7bcc5;
-  --claw-text-muted: #6b7280;
-  --claw-accent: #818cf8;
-  --claw-accent-soft: rgba(129, 140, 248, 0.14);
+  --claw-bg: #1b1c17;
+  --claw-surface: rgba(36, 37, 31, 0.72);
+  --claw-surface-solid: #24251f;
+  --claw-border: #3a3b35;
+  --claw-border-strong: #4a4b43;
+  --claw-text: #f2f1e9;
+  --claw-text-secondary: #c7c6ca;
+  --claw-text-muted: #8a897f;
+  --claw-accent: #e89b7e; /* 暗色 clay 亮档（--clay-rgb: 232 155 126） */
+  --claw-accent-soft: rgba(232, 155, 126, 0.16);
+  --claw-danger: #d0705a;
+  --claw-danger-soft: rgba(208, 112, 90, 0.16);
+  --claw-success: #8fa985;
+  --claw-success-soft: rgba(143, 169, 133, 0.16);
+  --claw-warning: #facc15;
+  --claw-warning-soft: rgba(250, 204, 21, 0.14);
+  --claw-shadow-3: 0 40px 70px -28px rgba(0, 0, 0, 0.8),
+    0 0 0 1px rgba(232, 155, 126, 0.4);
 }
 
 .claw-glass {
   background: var(--claw-surface);
   backdrop-filter: blur(var(--claw-surface-blur));
   border: 1px solid var(--claw-border);
-  border-radius: var(--claw-radius-lg);
+  border-radius: var(--claw-radius-md);
   box-shadow: var(--claw-shadow-2);
 }
