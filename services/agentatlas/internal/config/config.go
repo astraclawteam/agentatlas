@@ -52,10 +52,14 @@ type ParserEndpoint struct {
 }
 
 type Parsers struct {
-	Docling ParserEndpoint `yaml:"docling"`
-	MinerU  ParserEndpoint `yaml:"mineru"`
-	ASR     ParserEndpoint `yaml:"asr"`
-	Video   ParserEndpoint `yaml:"video"`
+	// GatewayURL switches artifact parsing to the standalone parser-gateway
+	// service over HTTP; empty keeps the in-process gateway (unit tests,
+	// single-binary runs).
+	GatewayURL string         `yaml:"gateway_url"`
+	Docling    ParserEndpoint `yaml:"docling"`
+	MinerU     ParserEndpoint `yaml:"mineru"`
+	ASR        ParserEndpoint `yaml:"asr"`
+	Video      ParserEndpoint `yaml:"video"`
 }
 
 type Config struct {
@@ -132,6 +136,7 @@ func (c *Config) applyEnv() {
 	set(&c.LLMRouter.DefaultModel, "ATLAS_LLMROUTER_MODEL")
 	set(&c.LLMRouter.RerankModel, "ATLAS_LLMROUTER_RERANK_MODEL")
 	set(&c.AgentNexus.BaseURL, "ATLAS_NEXUS_BASE_URL")
+	set(&c.Parsers.GatewayURL, "ATLAS_PARSER_GATEWAY_URL")
 	set(&c.Parsers.Docling.BaseURL, "ATLAS_DOCLING_URL")
 	set(&c.Parsers.MinerU.BaseURL, "ATLAS_MINERU_URL")
 	set(&c.Parsers.ASR.BaseURL, "ATLAS_ASR_URL")
