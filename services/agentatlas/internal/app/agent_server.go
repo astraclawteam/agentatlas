@@ -65,6 +65,7 @@ func ticketGuard(client nexus.Client) func(http.Handler) http.Handler {
 // ticket-guarded (fail closed); handlers are backed by the real services.
 func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 	r := chi.NewRouter()
+	r.Use(corsMiddleware)
 	if deps.Metrics != nil {
 		r.Use(deps.Metrics.Middleware)
 		r.Method(http.MethodGet, "/metrics", deps.Metrics.Handler())

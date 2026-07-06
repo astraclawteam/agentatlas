@@ -6,3 +6,5 @@ export { ClawDialog } from "./dialog";
 export type { ClawDialogProps } from "./dialog";
 export { AgentChatShell } from "./agent-chat";
 export type { AgentChatShellProps, AgentChatMessage } from "./agent-chat";
+export { AttachmentStrip, inferAttachmentType, numberAttachments } from "./attachment";
+export type { Attachment, AttachmentStripProps } from "./attachment";

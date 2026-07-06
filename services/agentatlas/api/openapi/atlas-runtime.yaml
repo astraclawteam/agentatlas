@@ -74,6 +74,40 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+  /v1/spaces:
+    get:
+      operationId: listKnowledgeSpaces
+      summary: List the ticket enterprise's knowledge spaces (console knowledge map)
+      responses:
+        '200':
+          description: Spaces for the enterprise
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [spaces]
+                properties:
+                  spaces:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/KnowledgeSpace'
+  /v1/traces:
+    get:
+      operationId: listRecentAnswerTraces
+      summary: List the enterprise's most recent answer traces (console audit view)
+      responses:
+        '200':
+          description: Recent traces, newest first (max 20)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [traces]
+                properties:
+                  traces:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AnswerTrace'
   /v1/spaces/{id}:
     get:
       operationId: getKnowledgeSpace
