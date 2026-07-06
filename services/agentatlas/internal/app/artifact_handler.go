@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"io"
 	"net/http"
 
@@ -10,6 +11,11 @@ import (
 
 // maxArtifactUploadBytes bounds one artifact upload through the runtime API.
 const maxArtifactUploadBytes = 512 << 20
+
+// maxMultipartMemoryBytes caps the in-RAM portion of multipart parsing; the
+// rest spills to temp files. The total body is bounded by http.MaxBytesReader
+// — never hold up to 512MB per request in memory.
+const maxMultipartMemoryBytes = 32 << 20
 
 // artifactHandler serves artifact ingestion + processing-job creation
 // (POST /v1/artifacts/jobs). Processing itself runs on atlas-worker.
@@ -29,7 +35,15 @@ func (h *artifactHandler) createJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "artifacts_unavailable", "artifact service not configured")
 		return
 	}
-	if err := r.ParseMultipartForm(maxArtifactUploadBytes); err != nil {
+	// Hard-cap the whole body first (multipart framing overhead included),
+	// then parse with a small in-RAM budget — big parts spill to temp disk.
+	r.Body = http.MaxBytesReader(w, r.Body, maxArtifactUploadBytes+(1<<20))
+	if err := r.ParseMultipartForm(maxMultipartMemoryBytes); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "too_large", "upload exceeds limit")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "bad_multipart", err.Error())
 		return
 	}

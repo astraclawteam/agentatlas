@@ -22,6 +22,14 @@ type Runtime struct {
 	metrics  *observability.Metrics
 }
 
+// ErrRunForbidden marks a run operation attempted by an actor outside the
+// run's enterprise — callers map it to 403/404, never execute.
+var ErrRunForbidden = errors.New("run belongs to a different enterprise")
+
+// ErrWorkflowForbidden marks a workflow operation attempted by an actor
+// outside the workflow's enterprise.
+var ErrWorkflowForbidden = errors.New("workflow belongs to a different enterprise")
+
 func NewRuntime(store Store, service *Service, registry Registry) *Runtime {
 	return &Runtime{store: store, service: service, registry: registry}
 }
@@ -68,11 +76,18 @@ func (r *Runtime) StartRun(ctx context.Context, enterpriseID, workflowID string,
 	return runID, status, err
 }
 
-// Resume continues a run paused at human.confirm. approve=false cancels it.
-func (r *Runtime) Resume(ctx context.Context, runID string, approve bool, comment string) (string, error) {
+// Resume records the human.confirm decision for a paused run. approve=false
+// cancels it; approve=true advances past the confirm node and puts the run
+// back to pending — the CALLER must re-enqueue it so atlas-worker (the only
+// process with the fully wired registry) executes the remaining nodes.
+// enterpriseID must match the run's enterprise (fail closed, ErrRunForbidden).
+func (r *Runtime) Resume(ctx context.Context, runID, enterpriseID string, approve bool, comment string) (string, error) {
 	run, err := r.store.GetWorkflowRun(ctx, runID)
 	if err != nil {
 		return "", fmt.Errorf("load run %s: %w", runID, err)
+	}
+	if run.EnterpriseID != enterpriseID {
+		return "", ErrRunForbidden
 	}
 	if run.Status != RunWaitingConfirmation {
 		return "", fmt.Errorf("run %s is %s, not waiting_confirmation", runID, run.Status)
@@ -109,10 +124,10 @@ func (r *Runtime) Resume(ctx context.Context, runID string, approve bool, commen
 	}
 	state.Outputs[confirmNode.ID] = map[string]any{"approved": true}
 	state.NextIndex++
-	if err := r.setRunStatus(ctx, runID, RunRunning, &state); err != nil {
+	if err := r.setRunStatus(ctx, runID, RunPending, &state); err != nil {
 		return "", err
 	}
-	return r.execute(ctx, runID, run.EnterpriseID, def, order, state)
+	return RunPending, nil
 }
 
 func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def Definition, order []sdkworkflow.Node, state runState) (string, error) {

@@ -30,15 +30,24 @@ export function AtlasAgentPanel() {
       push("user", shown);
       setBusy(true);
       try {
-        // 1) 附件全部入库：上传即触发解析与索引（知识进入库）。
+        // 1) 附件逐份入库：上传即触发解析与索引。一份失败不吞掉其余 —
+        //    成功的照常入库，失败的点名报出来（不让半批失败伪装成全成功）。
         const uploaded: string[] = [];
+        const failed: string[] = [];
         for (let i = 0; i < attachments.length; i++) {
           const att = attachments[i];
-          const res = await uploadArtifact(att.file);
-          uploaded.push(`${labels[i]}《${att.filename}》(artifact_id=${res.artifact_id})`);
+          try {
+            const res = await uploadArtifact(att.file);
+            uploaded.push(`${labels[i]}《${att.filename}》(artifact_id=${res.artifact_id})`);
+          } catch (err) {
+            failed.push(`${labels[i]}《${att.filename}》：${(err as Error).message}`);
+          }
         }
         if (uploaded.length > 0) {
           push("agent", `已入库并开始解析：${uploaded.length} 份资料。解析完成后可检索、可生成 SOP。`);
+        }
+        if (failed.length > 0) {
+          push("agent", `以下 ${failed.length} 份上传失败，请重试：\n${failed.join("\n")}`);
         }
         // 2) 有话要说才驱动 Agent；纯上传则到此为止。
         const finalText =

@@ -96,7 +96,7 @@ export function DreamPolicyPanel() {
             }}>
             <option value="members">成员可见</option>
             <option value="managers">管理者可见</option>
-            <option value="company">公司可见（默认脱敏）</option>
+            <option value="company_sanitized">公司可见（默认脱敏）</option>
           </select>
         </div>
         <div style={field}>

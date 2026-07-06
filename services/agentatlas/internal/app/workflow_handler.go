@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -71,6 +72,12 @@ func (h *workflowHandler) startRun(w http.ResponseWriter, r *http.Request) {
 	}
 	runID, err := h.deps.Runtime.CreatePending(r.Context(), actor.Ticket.EnterpriseID, chi.URLParam(r, "id"), req.Version, req.Input)
 	if err != nil {
+		if errors.Is(err, workflow.ErrWorkflowForbidden) {
+			// Cross-enterprise start attempt: report not_found so workflow ids
+			// are not enumerable across tenants.
+			writeError(w, http.StatusNotFound, "not_found", "workflow not found")
+			return
+		}
 		writeError(w, http.StatusUnprocessableEntity, "run_failed", err.Error())
 		return
 	}

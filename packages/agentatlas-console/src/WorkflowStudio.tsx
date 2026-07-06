@@ -37,10 +37,15 @@ function emptyWorkflow(): AtlasWorkflow {
   return { workflow_id: "", version: 0, kind: "sop", nodes: [], edges: [], risk_level: "medium" };
 }
 
-/** 线性追加：新节点接在最后一个节点之后（覆盖“偶尔加几个节点”的日常维护）。 */
+/** 线性追加：新节点接在最后一个节点之后（覆盖“偶尔加几个节点”的日常维护）。
+ *  id 序号取现有最大值 +1（不是 length+1）：删除中间步骤后再添加不会撞 id。 */
 export function appendNode(wf: AtlasWorkflow, type: AtlasNodeType): AtlasWorkflow {
   const meta = catalogByType.get(type);
-  const id = `n${wf.nodes.length + 1}_${type.split(".")[1] ?? type}`;
+  const maxSeq = wf.nodes.reduce((max, n) => {
+    const m = /^n(\d+)_/.exec(n.id);
+    return m ? Math.max(max, Number(m[1])) : max;
+  }, 0);
+  const id = `n${maxSeq + 1}_${type.split(".")[1] ?? type}`;
   const node: AtlasWorkflowNode = {
     id,
     type,

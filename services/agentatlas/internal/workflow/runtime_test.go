@@ -230,9 +230,27 @@ func TestRunPausesAtHumanConfirmAndResumes(t *testing.T) {
 		t.Fatalf("in events = %v", got)
 	}
 
-	final, err := rt.Resume(ctx, runID, true, "看过了")
+	// Approval only records the decision and hands the run back to pending —
+	// execution is the worker's job (it owns the wired registry).
+	resumed, err := rt.Resume(ctx, runID, "ent_1", true, "看过了")
 	if err != nil {
 		t.Fatalf("resume: %v", err)
+	}
+	if resumed != RunPending {
+		t.Fatalf("resume status = %s, want pending (re-enqueue for the worker)", resumed)
+	}
+	if store.runs[runID].Status != RunPending {
+		t.Fatalf("run row status = %s, want pending", store.runs[runID].Status)
+	}
+
+	// Worker path: claim (pending→running keeps persisted state via COALESCE)
+	// then continue from the node after the confirm gate.
+	if _, err := store.UpdateWorkflowRunStatus(ctx, db.UpdateWorkflowRunStatusParams{ID: runID, Status: RunRunning, Output: nil}); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	final, err := rt.ExecuteClaimed(ctx, runID)
+	if err != nil {
+		t.Fatalf("execute claimed: %v", err)
 	}
 	if final != RunSucceeded {
 		t.Fatalf("final = %s", final)
@@ -242,6 +260,36 @@ func TestRunPausesAtHumanConfirmAndResumes(t *testing.T) {
 	}
 	if got := store.eventStatuses(runID, "out"); len(got) != 2 || got[1] != NodeSucceeded {
 		t.Fatalf("out events = %v", got)
+	}
+	// The pre-gate node must NOT re-execute on resume (state carried over).
+	if got := store.eventStatuses(runID, "in"); len(got) != 2 {
+		t.Fatalf("in node re-executed after resume: events = %v", got)
+	}
+}
+
+func TestResumeCrossEnterpriseForbidden(t *testing.T) {
+	_, svc, rt := setup(t)
+	ctx := context.Background()
+
+	id, _ := svc.CreateDraft(ctx, "ent_1", "MES SOP", "admin", validDef("wf_xent"))
+	_, _ = svc.Publish(ctx, "ent_1", id, "admin")
+	runID, _, err := rt.StartRun(ctx, "ent_1", id, 1, nil)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if _, err := rt.Resume(ctx, runID, "ent_intruder", true, "sneaky"); !errors.Is(err, ErrRunForbidden) {
+		t.Fatalf("cross-enterprise resume must fail closed, got err=%v", err)
+	}
+}
+
+func TestCreatePendingCrossEnterpriseForbidden(t *testing.T) {
+	_, svc, rt := setup(t)
+	ctx := context.Background()
+
+	id, _ := svc.CreateDraft(ctx, "ent_1", "MES SOP", "admin", validDef("wf_xpend"))
+	_, _ = svc.Publish(ctx, "ent_1", id, "admin")
+	if _, err := rt.CreatePending(ctx, "ent_intruder", id, 1, nil); !errors.Is(err, ErrWorkflowForbidden) {
+		t.Fatalf("cross-enterprise run start must fail closed, got err=%v", err)
 	}
 }
 
@@ -256,7 +304,7 @@ func TestResumeRejectCancelsRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	status, err := rt.Resume(ctx, runID, false, "不批准")
+	status, err := rt.Resume(ctx, runID, "ent_1", false, "不批准")
 	if err != nil || status != RunCancelled {
 		t.Fatalf("reject: status=%s err=%v", status, err)
 	}

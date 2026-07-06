@@ -2,11 +2,20 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sync"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/workflow"
 )
+
+// maxTrackedAgentRuns bounds the in-memory run-ownership table on the
+// long-lived control plane: when full, an arbitrary stale entry is evicted
+// (its run can no longer be continued — acceptable for a conversation cache,
+// unlike unbounded growth).
+const maxTrackedAgentRuns = 4096
 
 // agentRunHandler serves Knowledge Agent runs. Run state (conversation
 // history) lives in the ADK in-memory session service keyed by run id; this
@@ -61,6 +70,12 @@ func (h *agentRunHandler) start(w http.ResponseWriter, r *http.Request) {
 	}
 	runID := newID("arun")
 	h.mu.Lock()
+	if len(h.owners) >= maxTrackedAgentRuns {
+		for k := range h.owners {
+			delete(h.owners, k)
+			break
+		}
+	}
 	h.owners[runID] = runOwner{EnterpriseID: actor.Ticket.EnterpriseID, ActorUserID: actor.Ticket.ActorUserID}
 	h.mu.Unlock()
 	h.execute(w, r, runID, actor.Ticket.ActorUserID, req.Message, http.StatusCreated)
@@ -111,15 +126,18 @@ type confirmRequest struct {
 	Comment string `json:"comment,omitempty"`
 }
 
-// confirm resumes a paused workflow run (human.confirm) — {id} is the
-// workflow run id produced when the run paused.
+// confirm records the human.confirm decision for a paused workflow run —
+// {id} is the workflow run id produced when the run paused. Approval puts the
+// run back to pending and re-enqueues it for atlas-worker: this process only
+// has the built-in registry, so post-gate nodes MUST execute on the worker.
 func (h *agentRunHandler) confirm(w http.ResponseWriter, r *http.Request) {
-	if _, ok := actorFrom(r.Context()); !ok {
+	actor, ok := actorFrom(r.Context())
+	if !ok {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "no verified actor")
 		return
 	}
-	if h.deps.Runtime == nil {
-		writeError(w, http.StatusServiceUnavailable, "runtime_unavailable", "workflow runtime not configured")
+	if h.deps.Runtime == nil || h.deps.Runner == nil {
+		writeError(w, http.StatusServiceUnavailable, "runtime_unavailable", "workflow runtime/queue not configured")
 		return
 	}
 	runID := chi.URLParam(r, "id")
@@ -128,10 +146,22 @@ func (h *agentRunHandler) confirm(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	status, err := h.deps.Runtime.Resume(r.Context(), runID, req.Approve, req.Comment)
+	status, err := h.deps.Runtime.Resume(r.Context(), runID, actor.Ticket.EnterpriseID, req.Approve, req.Comment)
 	if err != nil {
+		if errors.Is(err, workflow.ErrRunForbidden) {
+			writeError(w, http.StatusForbidden, "forbidden", "run belongs to a different enterprise")
+			return
+		}
 		writeError(w, http.StatusUnprocessableEntity, "resume_failed", err.Error())
 		return
+	}
+	if status == workflow.RunPending {
+		if err := h.deps.Runner.Enqueue(r.Context(), workflow.JobTypeRun, runID); err != nil {
+			// The decision is recorded but execution is not scheduled — surface
+			// loudly so the operator retries; silent success would strand the run.
+			writeError(w, http.StatusInternalServerError, "enqueue_failed", err.Error())
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"run_id": runID, "status": status})
 }

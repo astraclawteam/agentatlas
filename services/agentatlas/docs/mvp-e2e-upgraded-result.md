@@ -54,12 +54,14 @@ stream — swapping in the real AgentNexus stays a composition-root change.
 
 - mineru-sidecar image not built in this run (multi-GB torch build); the
   gated `TestParserSidecars/mineru_pdf` leg skips loudly until it exists.
-- Dream jobs execute via the in-process e2e + worker handler; the SCHEDULED
-  trigger (scheduler tick loop / admin trigger route) is not yet wired into a
-  binary — dream policies create+publish through the served route, runs
-  dispatch when a tick source lands.
 - ASR diarization runs in single-speaker fallback unless pyannote models +
   HF token are provisioned (`WHISPER_DIARIZE=1`).
+- atlas-agent keeps Knowledge Agent conversation state in the ADK in-memory
+  session service (bounded ownership table, but sessions live until restart);
+  a persisted session store is follow-up work.
+
+(Resolved since first written: the dream scheduler tick loop now runs in
+atlas-worker — `ATLAS_DREAM_TICK_SECONDS`.)
 
 ## Re-run
 

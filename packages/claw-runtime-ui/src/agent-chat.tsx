@@ -27,10 +27,17 @@ export function AgentChatShell({ messages, onSend, busy, placeholder, allowAttac
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Preview object URLs are owned by this shell: release them when the
+  // attachment leaves the strip (remove or send), or each pick leaks one.
+  const releasePreview = (att: Attachment) => {
+    if (att.previewUrl) URL.revokeObjectURL(att.previewUrl);
+  };
+
   const send = () => {
     const text = draft.trim();
     if ((text === "" && attachments.length === 0) || busy) return;
     onSend(text, attachments);
+    attachments.forEach(releasePreview);
     setDraft("");
     setAttachments([]);
   };
@@ -85,7 +92,15 @@ export function AgentChatShell({ messages, onSend, busy, placeholder, allowAttac
         ))}
         {busy ? <div style={{ fontSize: 12, color: "var(--claw-text-muted)" }}>Atlas Agent 正在思考…</div> : null}
       </div>
-      <AttachmentStrip attachments={attachments} onRemove={(id) => setAttachments((prev) => prev.filter((a) => a.id !== id))} />
+      <AttachmentStrip
+        attachments={attachments}
+        onRemove={(id) =>
+          setAttachments((prev) => {
+            prev.filter((a) => a.id === id).forEach(releasePreview);
+            return prev.filter((a) => a.id !== id);
+          })
+        }
+      />
       <div style={{ display: "flex", gap: 8, padding: 12, borderTop: "1px solid var(--claw-border)", alignItems: "flex-end" }}>
         {allowAttachments ? (
           <>

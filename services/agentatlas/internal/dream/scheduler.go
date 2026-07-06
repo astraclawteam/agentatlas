@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
@@ -104,8 +105,14 @@ func (s *Scheduler) Tick(ctx context.Context, enterpriseID string, now time.Time
 			WindowStart: pgtype.Timestamptz{Time: start, Valid: true},
 			WindowEnd:   pgtype.Timestamptz{Time: end, Valid: true},
 		}); err != nil {
-			// duplicate PK => another scheduler already created this window's run
-			continue
+			// Only a duplicate PK means another scheduler already created this
+			// window's run; any other error is a real failure — fail loud, do
+			// not report the window as dispatched.
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+				continue
+			}
+			return dispatched, fmt.Errorf("create dream run %s: %w", runID, err)
 		}
 		if err := s.runner.Enqueue(ctx, JobTypeDream, runID); err != nil {
 			return dispatched, fmt.Errorf("dispatch dream run: %w", err)

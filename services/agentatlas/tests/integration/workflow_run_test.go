@@ -200,12 +200,40 @@ func TestWorkflowRun(t *testing.T) {
 	if paused.Status != workflow.RunWaitingConfirmation {
 		t.Fatalf("run must pause at human.confirm, got %s", paused.Status)
 	}
-	status, err := runtime.Resume(ctx, crunID, true, "看过了")
+	// Approve records the decision and puts the run back to pending; the
+	// worker (re-enqueue) executes the post-gate nodes — the serving plane
+	// never runs nodes itself (its registry is intentionally inert).
+	status, err := runtime.Resume(ctx, crunID, entID, true, "看过了")
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	if status != workflow.RunSucceeded {
-		t.Fatalf("resumed status = %s", status)
+	if status != workflow.RunPending {
+		t.Fatalf("resume status = %s, want pending", status)
 	}
-	t.Logf("run1=%s succeeded with trace %s; run2 paused+resumed to %s", runID, traceID, status)
+	if err := runner.Enqueue(ctx, workflow.JobTypeRun, crunID); err != nil {
+		t.Fatal(err) // MemBus executes synchronously — real claim + ExecuteClaimed
+	}
+	resumed, err := q.GetWorkflowRun(ctx, crunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Status != workflow.RunSucceeded {
+		events, _ := q.ListWorkflowRunEvents(ctx, crunID)
+		t.Fatalf("post-approve run status = %s, events = %+v", resumed.Status, events)
+	}
+	// The post-gate trace.append node genuinely executed on the worker path.
+	cevents, err := q.ListWorkflowRunEvents(ctx, crunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trDone := false
+	for _, ev := range cevents {
+		if ev.NodeID == "tr" && ev.Status == workflow.NodeSucceeded {
+			trDone = true
+		}
+	}
+	if !trDone {
+		t.Fatalf("post-gate node tr never succeeded: %+v", cevents)
+	}
+	t.Logf("run1=%s succeeded with trace %s; run2 paused → approved → worker completed", runID, traceID)
 }
