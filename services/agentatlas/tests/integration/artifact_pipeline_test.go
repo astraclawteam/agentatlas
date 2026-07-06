@@ -11,11 +11,15 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"iter"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+
+	adkmodel "google.golang.org/adk/model"
+	"google.golang.org/genai"
 
 	"github.com/astraclawteam/agentatlas/sdk/go/atlasdocument"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
@@ -25,6 +29,31 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/storage"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/tasks"
 )
+
+// pipelineSummaryLLM: deterministic in-process model for the summarizer —
+// section calls echo a grounded digest, the rollup call returns grounded JSON.
+type pipelineSummaryLLM struct{}
+
+func (pipelineSummaryLLM) Name() string { return "test/pipeline-summary" }
+
+func (pipelineSummaryLLM) GenerateContent(_ context.Context, req *adkmodel.LLMRequest, _ bool) iter.Seq2[*adkmodel.LLMResponse, error] {
+	system := ""
+	if req.Config != nil && req.Config.SystemInstruction != nil {
+		for _, p := range req.Config.SystemInstruction.Parts {
+			system += p.Text
+		}
+	}
+	reply := "节摘要：MES 工单排查步骤与风险点。"
+	if strings.Contains(system, "JSON") {
+		reply = `{"display":"MES 异常工单排查文档：确认工单编号，注意接口限流风险。","retrieval":"MES 异常工单排查：第一步确认工单编号；风险点为接口限流未定。"}`
+	}
+	return func(yield func(*adkmodel.LLMResponse, error) bool) {
+		yield(&adkmodel.LLMResponse{
+			Content:      genai.NewContentFromText(reply, "model"),
+			TurnComplete: true,
+		}, nil)
+	}
+}
 
 func TestArtifactPipeline(t *testing.T) {
 	dsn := os.Getenv("ATLAS_TEST_POSTGRES_DSN")
@@ -77,7 +106,8 @@ func TestArtifactPipeline(t *testing.T) {
 		t.Fatalf("registry: %v", err)
 	}
 	runner := tasks.NewRunner(tasks.NewMemBus())
-	svc := artifacts.NewService(q, objects, parsergateway.NewGateway(registry), runner)
+	svc := artifacts.NewService(q, objects, parsergateway.NewGateway(registry), runner,
+		artifacts.NewSummarizer(pipelineSummaryLLM{}))
 	if err := svc.RegisterJobHandler(); err != nil {
 		t.Fatalf("register handler: %v", err)
 	}

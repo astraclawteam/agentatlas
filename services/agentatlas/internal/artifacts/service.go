@@ -37,14 +37,17 @@ type Objects interface {
 }
 
 type Service struct {
-	store   Store
-	objects Objects
-	gateway *parsergateway.Gateway
-	runner  *tasks.Runner
+	store      Store
+	objects    Objects
+	gateway    *parsergateway.Gateway
+	runner     *tasks.Runner
+	summarizer *Summarizer
 }
 
-func NewService(store Store, objects Objects, gateway *parsergateway.Gateway, runner *tasks.Runner) *Service {
-	return &Service{store: store, objects: objects, gateway: gateway, runner: runner}
+// NewService wires the artifact pipeline. summarizer may be nil (or
+// model-less) — that is the explicit deterministic degraded mode.
+func NewService(store Store, objects Objects, gateway *parsergateway.Gateway, runner *tasks.Runner, summarizer *Summarizer) *Service {
+	return &Service{store: store, objects: objects, gateway: gateway, runner: runner, summarizer: summarizer}
 }
 
 // RegisterJobHandler wires the artifact job type into the task runner.
@@ -153,6 +156,15 @@ func (s *Service) runJob(ctx context.Context, jobID string) error {
 	})
 	s.step(ctx, jobID, "parse", "succeeded", map[string]any{"provider": result.Output.ProviderID})
 
+	summaries, summarySource, err := s.summarizer.Summarize(ctx, result.Output)
+	if err != nil {
+		s.step(ctx, jobID, "summarize", "failed", map[string]any{"error": err.Error()})
+		return fmt.Errorf("summarize: %w", err)
+	}
+	s.step(ctx, jobID, "summarize", "succeeded", map[string]any{
+		"source": summarySource, "summaries": len(summaries),
+	})
+
 	// Assemble the full AtlasDocument and seal it into object storage.
 	docID := newID("doc")
 	pointer, err := s.store.CreateEvidencePointer(ctx, BuildEvidencePointer(
@@ -172,7 +184,7 @@ func (s *Service) runJob(ctx context.Context, jobID string) error {
 		Images:          result.Output.Images,
 		AudioSegments:   result.Output.AudioSegments,
 		VideoSegments:   result.Output.VideoSegments,
-		Summaries:       buildSummaries(result.Output),
+		Summaries:       summaries,
 		EvidencePointers: []atlasdocument.EvidencePointer{{
 			EvidenceID:   pointer.ID,
 			EnterpriseID: pointer.EnterpriseID,

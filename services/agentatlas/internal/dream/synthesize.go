@@ -2,15 +2,14 @@ package dream
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"google.golang.org/adk/model"
-	"google.golang.org/genai"
 
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/llmutil"
 )
 
 // Synthesizer produces LLM-grade dream aggregations. Masking and risk
@@ -60,12 +59,12 @@ func (s *Synthesizer) Aggregate(ctx context.Context, scopeName string, windowSta
 		}
 	}
 
-	raw, err := completeText(ctx, s.llm, synthesisInstruction, prompt.String())
+	raw, err := llmutil.CompleteText(ctx, s.llm, synthesisInstruction, prompt.String())
 	if err != nil {
 		return Aggregation{}, fmt.Errorf("dream synthesis model call: %w", err)
 	}
 	var out synthesisOut
-	if err := parseModelJSON(raw, &out); err != nil {
+	if err := llmutil.ParseJSON(raw, &out); err != nil {
 		return Aggregation{}, fmt.Errorf("dream synthesis output not valid JSON: %w (raw=%s)", err, truncateRunes(raw, 300))
 	}
 	display := truncateRunes(strings.TrimSpace(out.Display), 200)
@@ -98,45 +97,4 @@ func writeDigestSection(b *strings.Builder, title string, items []string) {
 	for _, it := range items {
 		fmt.Fprintf(b, "- %s\n", it)
 	}
-}
-
-// completeText runs one non-streaming completion over the model.LLM contract.
-func completeText(ctx context.Context, llm model.LLM, system, user string) (string, error) {
-	req := &model.LLMRequest{
-		Config: &genai.GenerateContentConfig{
-			SystemInstruction: &genai.Content{Parts: []*genai.Part{genai.NewPartFromText(system)}},
-		},
-		Contents: []*genai.Content{
-			{Role: "user", Parts: []*genai.Part{genai.NewPartFromText(user)}},
-		},
-	}
-	var text strings.Builder
-	for resp, err := range llm.GenerateContent(ctx, req, false) {
-		if err != nil {
-			return "", err
-		}
-		if resp.Content != nil {
-			for _, p := range resp.Content.Parts {
-				if !p.Thought {
-					text.WriteString(p.Text)
-				}
-			}
-		}
-	}
-	if strings.TrimSpace(text.String()) == "" {
-		return "", fmt.Errorf("model returned empty text")
-	}
-	return text.String(), nil
-}
-
-// parseModelJSON extracts the first JSON object from a model reply (tolerating
-// markdown fences or stray prose around it) and unmarshals strictly.
-func parseModelJSON(raw string, into any) error {
-	t := strings.TrimSpace(raw)
-	i := strings.Index(t, "{")
-	j := strings.LastIndex(t, "}")
-	if i < 0 || j <= i {
-		return fmt.Errorf("no JSON object found")
-	}
-	return json.Unmarshal([]byte(t[i:j+1]), into)
 }
