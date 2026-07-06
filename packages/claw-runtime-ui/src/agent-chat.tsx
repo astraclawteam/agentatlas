@@ -80,9 +80,10 @@ export function AgentChatShell({ messages, onSend, busy, placeholder, allowAttac
               padding: "8px 12px",
               fontSize: 14,
               whiteSpace: "pre-wrap",
-              color: m.role === "user" ? "#fff" : "var(--claw-text)",
-              background: m.role === "user" ? "var(--claw-accent)" : "var(--claw-surface-solid)",
-              border: m.role === "user" ? "none" : "1px solid var(--claw-border)",
+              // 用户=陶土 chip 渐变（安静音量），agent=贴地内容卡（DESIGN 消息流制度）
+              color: "var(--claw-text)",
+              background: m.role === "user" ? "var(--claw-chip-bg)" : "var(--claw-surface-solid)",
+              border: m.role === "user" ? "1px solid var(--claw-accent-soft)" : "1px solid var(--claw-border)",
               borderRadius: "var(--claw-radius-md)",
               boxShadow: "var(--claw-shadow-1)",
             }}
@@ -126,6 +127,7 @@ export function AgentChatShell({ messages, onSend, busy, placeholder, allowAttac
         ) : null}
         <textarea
           aria-label="消息输入"
+          className="claw-field"
           value={draft}
           placeholder={placeholder ?? "向 Atlas Agent 描述你要做的事…"}
           onChange={(e) => setDraft(e.target.value)}
@@ -135,13 +137,8 @@ export function AgentChatShell({ messages, onSend, busy, placeholder, allowAttac
             flex: 1,
             resize: "none",
             padding: "8px 12px",
-            fontSize: 14,
-            fontFamily: "var(--claw-font)",
-            color: "var(--claw-text)",
-            background: "var(--claw-surface-solid)",
-            border: "1px solid var(--claw-border-strong)",
-            borderRadius: "var(--claw-radius-sm)",
-            outline: "none",
+            // 输入面 = field 档 squircle（DESIGN §5 输入框制度）
+            borderRadius: "var(--claw-radius-lg)",
           }}
         />
         <ClawButton onClick={send} disabled={busy || (draft.trim() === "" && attachments.length === 0)}>

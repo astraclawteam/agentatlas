@@ -127,12 +127,9 @@ export function WorkflowStudio({ initialWorkflow }: WorkflowStudioProps) {
               key={n.type}
               type="button"
               data-testid={`palette-${n.type}`}
+              className="claw-tap-card"
               onClick={() => setWf((prev) => appendNode(prev, n.type))}
-              style={{
-                textAlign: "left", padding: "8px 10px", cursor: "pointer",
-                background: "var(--claw-surface-solid)", border: "1px solid var(--claw-border)",
-                borderRadius: "var(--claw-radius-sm)",
-              }}
+              style={{ padding: "8px 10px" }}
             >
               <div style={{ fontSize: 13, fontWeight: 600, color: "var(--claw-text)" }}>{n.label}</div>
               <div style={{ fontSize: 11, color: "var(--claw-text-muted)" }}>{n.desc}</div>

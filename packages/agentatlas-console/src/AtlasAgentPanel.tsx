@@ -83,6 +83,7 @@ export function AtlasAgentPanel() {
         borderLeft: "1px solid var(--claw-border)",
         background: "var(--claw-surface)",
         backdropFilter: "blur(var(--claw-surface-blur))",
+        WebkitBackdropFilter: "blur(var(--claw-surface-blur))",
       }}
     >
       <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--claw-border)", fontFamily: "var(--claw-font)" }}>
@@ -98,13 +99,9 @@ export function AtlasAgentPanel() {
             <button
               key={h}
               type="button"
+              className="claw-tap-card"
               onClick={() => void onSend(h, [])}
-              style={{
-                textAlign: "left", padding: "8px 12px", fontSize: 13, cursor: "pointer",
-                fontFamily: "var(--claw-font)", color: "var(--claw-text-secondary)",
-                background: "var(--claw-surface-solid)", border: "1px solid var(--claw-border)",
-                borderRadius: "var(--claw-radius-sm)",
-              }}
+              style={{ padding: "8px 12px", fontSize: 13, color: "var(--claw-text-secondary)" }}
             >
               “{h}”
             </button>

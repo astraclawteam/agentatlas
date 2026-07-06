@@ -1,18 +1,20 @@
 /* AstraClaw runtime design tokens — AgentAtlas mirror of ui-next's
-   "Ethos & Ink" system (ui-next/src/styles.css, exact hex from DESIGN.md):
-   米纸白底 #F9F8F0 · 墨黑 #131314 · 陶土橙 clay #D97757 · 米杏边框 #E6E1D3 ·
-   土系低饱和状态色（危险=深陶、成功=橄榄、警示=陈金，非系统红绿）·
-   chip 12 / card 18 / field 20 squircle 圆角 · 深阴影 + clay 描边强调。
+   "Warm Paper × Glass"（暖纸光感融合）system. Sources of truth:
+   ui-next/src/styles.css + ui-next/DESIGN.md.
+   米纸白底 #F9F8F0 · 墨黑 #131314 · 陶土橙 clay #D97757（唯一主动彩色）·
+   米杏边框 #E6E1D3 · 土系状态色（深陶/橄榄/陈金，非系统红绿）·
+   玻璃面（半透明渐变 + blur 22 + 白高光内描边 + 分层投影）·
+   chip 12 / card 18 / field 20 squircle（按钮 11）· 全局 8px 暖色细滚动条。
    变量名是 console 的稳定契约；对齐真身只改这里的值。 */
 :root {
   /* 真身字体栈 Hanken Grotesk + Noto Sans SC（未随包分发字体时回退系统黑） */
   --claw-font: "Hanken Grotesk Variable", "Hanken Grotesk", "Noto Sans SC",
     ui-sans-serif, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --claw-font-mono: "JetBrains Mono", ui-monospace, monospace;
 
   --claw-bg: #f9f8f0;
   --claw-surface: rgba(249, 248, 240, 0.72);
-  --claw-surface-solid: #fcfbf5; /* 卡片=米底提半档，层次靠边框+阴影（同真身） */
-  --claw-surface-blur: 14px;
+  --claw-surface-solid: #fcfbf5;
   --claw-border: #e6e1d3;
   --claw-border-strong: #d6d0be;
 
@@ -20,8 +22,11 @@
   --claw-text-secondary: #46464a;
   --claw-text-muted: #9d9b90;
 
-  --claw-accent: #d97757; /* clay 陶土橙（默认主题 --clay-rgb: 217 119 87） */
+  --claw-ink: #131314; /* 墨 — 主按钮底色（hover 才转陶土，DESIGN §5） */
+  --claw-accent: #d97757; /* clay 陶土橙（--clay-rgb: 217 119 87） */
   --claw-accent-soft: rgba(217, 119, 87, 0.12);
+  /* 真身 --chip-bg：active/选中态的陶土渐变底 */
+  --claw-chip-bg: linear-gradient(160deg, rgba(217, 119, 87, 0.2), rgba(217, 119, 87, 0.06));
   --claw-danger: #b8593b; /* 深陶，非系统红 */
   --claw-danger-soft: rgba(184, 89, 59, 0.12);
   --claw-success: #6e8765; /* 橄榄绿 */
@@ -29,42 +34,178 @@
   --claw-warning: #c8a000; /* 陈金 */
   --claw-warning-soft: rgba(200, 160, 0, 0.14);
 
-  /* chip / card / field —— 对应真身 --radius-chip/card/field */
+  /* 玻璃面 — 真身 --glass-* */
+  --claw-glass-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.38));
+  --claw-glass-border: rgba(255, 255, 255, 0.82);
+  --claw-glass-hi: rgba(255, 255, 255, 0.95);
+  --claw-glass-blur: 22px;
+  --claw-surface-blur: 22px;
+
+  /* chip / card / field —— 真身 --radius-chip/card/field；按钮 11px */
   --claw-radius-sm: 12px;
   --claw-radius-md: 18px;
   --claw-radius-lg: 20px;
+  --claw-radius-btn: 11px;
 
-  --claw-shadow-1: 0 1px 2px rgba(19, 19, 20, 0.05);
-  --claw-shadow-2: 0 12px 24px -12px rgba(19, 19, 20, 0.18);
-  --claw-shadow-3: 0 36px 60px -26px rgba(19, 19, 20, 0.36),
-    0 0 0 1px rgba(217, 119, 87, 0.28); /* 真身 card-hover：深影 + clay 描边 */
+  /* 阴影预算（DESIGN §5）：静态贴地 rest / 等操作 action / 页面卡 card */
+  --claw-shadow-1: 0 1px 2px rgba(19, 19, 20, 0.06);
+  --claw-shadow-action: 0 14px 28px -18px rgba(19, 19, 20, 0.26), 0 3px 8px -5px rgba(19, 19, 20, 0.12);
+  --claw-shadow-2: 0 26px 46px -24px rgba(19, 19, 20, 0.3), 0 6px 14px -8px rgba(19, 19, 20, 0.16);
+  --claw-shadow-3: 0 36px 60px -26px rgba(19, 19, 20, 0.36), 0 0 0 1px rgba(217, 119, 87, 0.28);
+  --claw-shadow-input: 0 28px 54px -24px rgba(19, 19, 20, 0.28);
 }
 
 [data-theme="dark"] {
-  --claw-bg: #1b1c17;
+  --claw-bg: #15140f;
   --claw-surface: rgba(36, 37, 31, 0.72);
   --claw-surface-solid: #24251f;
   --claw-border: #3a3b35;
   --claw-border-strong: #4a4b43;
-  --claw-text: #f2f1e9;
+  --claw-text: #f3f1e8;
   --claw-text-secondary: #c7c6ca;
   --claw-text-muted: #8a897f;
-  --claw-accent: #e89b7e; /* 暗色 clay 亮档（--clay-rgb: 232 155 126） */
+  --claw-ink: #f3f1e8;
+  --claw-accent: #e89b7e; /* 暗色 clay 亮档（232 155 126） */
   --claw-accent-soft: rgba(232, 155, 126, 0.16);
+  --claw-chip-bg: linear-gradient(160deg, rgba(232, 155, 126, 0.26), rgba(232, 155, 126, 0.1));
   --claw-danger: #d0705a;
   --claw-danger-soft: rgba(208, 112, 90, 0.16);
   --claw-success: #8fa985;
   --claw-success-soft: rgba(143, 169, 133, 0.16);
   --claw-warning: #facc15;
   --claw-warning-soft: rgba(250, 204, 21, 0.14);
-  --claw-shadow-3: 0 40px 70px -28px rgba(0, 0, 0, 0.8),
-    0 0 0 1px rgba(232, 155, 126, 0.4);
+  --claw-glass-bg: linear-gradient(180deg, rgba(78, 79, 68, 0.62), rgba(46, 47, 38, 0.46));
+  --claw-glass-border: rgba(255, 255, 255, 0.16);
+  --claw-glass-hi: rgba(255, 255, 255, 0.18);
+  --claw-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --claw-shadow-action: 0 16px 32px -18px rgba(0, 0, 0, 0.62), 0 3px 10px -6px rgba(0, 0, 0, 0.5);
+  --claw-shadow-2: 0 30px 56px -26px rgba(0, 0, 0, 0.72), 0 6px 16px -10px rgba(0, 0, 0, 0.55);
+  --claw-shadow-3: 0 40px 70px -28px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(232, 155, 126, 0.4);
+  --claw-shadow-input: 0 30px 56px -24px rgba(0, 0, 0, 0.6);
 }
 
+/* 页面兜底：暖纸底 + 墨字（防 body 白边露出系统白底） */
+body {
+  margin: 0;
+  background: var(--claw-bg);
+  color: var(--claw-text);
+  font-family: var(--claw-font);
+}
+
+/* ─── 全局滚动条 — 统一暖色细样式，覆盖系统默认（真身 styles.css 同款） ─── */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--claw-border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--claw-border);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--claw-text-muted);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ─── 玻璃面（真身 @utility glass-surface）：卡片 / 输入区 / 面板 ─── */
 .claw-glass {
-  background: var(--claw-surface);
-  backdrop-filter: blur(var(--claw-surface-blur));
-  border: 1px solid var(--claw-border);
+  background: var(--claw-glass-bg);
+  backdrop-filter: blur(var(--claw-glass-blur)) saturate(1.4);
+  -webkit-backdrop-filter: blur(var(--claw-glass-blur)) saturate(1.4);
+  border: 1px solid var(--claw-glass-border);
   border-radius: var(--claw-radius-md);
-  box-shadow: var(--claw-shadow-2);
+  box-shadow: inset 0 1px 0 var(--claw-glass-hi), var(--claw-shadow-2);
+}
+/* 贴地玻璃（真身 glass-rest）：被阅读而非被操作的内容卡，保持消息流安静 */
+.claw-glass-rest {
+  background: var(--claw-glass-bg);
+  backdrop-filter: blur(var(--claw-glass-blur)) saturate(1.4);
+  -webkit-backdrop-filter: blur(var(--claw-glass-blur)) saturate(1.4);
+  border: 1px solid var(--claw-glass-border);
+  border-radius: var(--claw-radius-md);
+  box-shadow: inset 0 1px 0 var(--claw-glass-hi), var(--claw-shadow-1);
+}
+
+/* ─── 按钮（DESIGN §5：squircle 11px；default=墨底白字 hover→陶土） ─── */
+.claw-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-family: var(--claw-font);
+  font-weight: 500;
+  border: 1px solid transparent;
+  border-radius: var(--claw-radius-btn);
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+  white-space: nowrap;
+}
+.claw-btn:disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+.claw-btn[data-variant="primary"] {
+  background: var(--claw-ink);
+  color: var(--claw-bg);
+}
+.claw-btn[data-variant="primary"]:hover {
+  background: var(--claw-accent);
+  color: #fff;
+}
+.claw-btn[data-variant="ghost"] {
+  background: transparent;
+  color: var(--claw-text);
+  border-color: var(--claw-border-strong);
+}
+.claw-btn[data-variant="ghost"]:hover {
+  color: var(--claw-accent);
+  border-color: var(--claw-accent);
+}
+.claw-btn[data-variant="danger"] {
+  background: var(--claw-danger);
+  color: #fff;
+}
+.claw-btn[data-variant="danger"]:hover {
+  background: var(--claw-accent);
+}
+
+/* ─── 可点卡（节点面板项 / 起手提示等列表卡）：hover 陶土边 + chip 微底 ─── */
+.claw-tap-card {
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--claw-font);
+  background: var(--claw-surface-solid);
+  border: 1px solid var(--claw-border);
+  border-radius: var(--claw-radius-sm);
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+.claw-tap-card:hover {
+  border-color: var(--claw-accent);
+  background: var(--claw-chip-bg);
+  transform: translateY(-1px);
+}
+
+/* ─── 输入（DESIGN §5：field 20px squircle + focus 陶土边） ─── */
+.claw-field {
+  font-family: var(--claw-font);
+  font-size: 14px;
+  color: var(--claw-text);
+  background: var(--claw-surface-solid);
+  border: 1px solid var(--claw-border);
+  border-radius: var(--claw-radius-sm);
+  outline: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.claw-field:focus,
+.claw-field:focus-within {
+  border-color: var(--claw-accent);
+  box-shadow: 0 0 0 1px var(--claw-accent);
 }

@@ -22,7 +22,10 @@ export function ClawDialog({ open, title, children, onClose, footer }: ClawDialo
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "rgba(19, 19, 20, 0.4)",
+        // 暖墨遮罩 + blur（DESIGN §5 弹窗制度）
+        background: "rgba(19, 19, 20, 0.7)",
+        backdropFilter: "blur(6px)",
+        WebkitBackdropFilter: "blur(6px)",
         zIndex: 1000,
         fontFamily: "var(--claw-font)",
       }}

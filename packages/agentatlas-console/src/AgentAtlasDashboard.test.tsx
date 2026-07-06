@@ -58,7 +58,10 @@ describe("AgentAtlasDashboard", () => {
   it("guides the first-time user until a ticket is pasted, then loads real data", async () => {
     stubBackend();
     render(<AgentAtlasDashboard />);
-    expect(screen.getByText(/欢迎使用 AgentAtlas/)).toBeInTheDocument();
+    // 标题里 AgentAtlas 是陶土 <em>，文本被拆成两个节点 — 用函数匹配
+    expect(
+      screen.getByText((_, el) => el?.textContent === "欢迎使用 AgentAtlas" && el.tagName === "DIV"),
+    ).toBeInTheDocument();
     expect(screen.getByText(/粘贴管理员票据/)).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("管理员票据"), { target: { value: "tick_admin" } });
