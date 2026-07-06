@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agentatlas.org/parser/parser-provider.schema.json",
+  "title": "AgentAtlas Parser Provider v1",
+  "type": "object",
+  "required": [
+    "provider_id",
+    "capabilities",
+    "input_types",
+    "output_schema",
+    "max_file_size_mb",
+    "supports_private"
+  ],
+  "properties": {
+    "provider_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "pattern": "^[a-z0-9_.]+$" },
+      "description": "Capability identifiers such as pdf.layout, pdf.table, image.ocr, office.parse, audio.asr, video.scene"
+    },
+    "input_types": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "pattern": "^[a-z]+/[a-z0-9.+-]+$" }
+    },
+    "output_schema": { "const": "atlas_document.v1" },
+    "max_file_size_mb": { "type": "integer", "minimum": 1 },
+    "supports_private": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

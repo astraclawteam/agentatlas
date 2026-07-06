@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package agentatlas.trace.v1;
+
+option go_package = "github.com/astraclawteam/agentatlas/sdk/go/proto/trace/v1;tracev1";
+
+import "google/protobuf/timestamp.proto";
+
+// Internal RPC contract for answer trace persistence and lookup (ConnectRPC).
+
+message AnswerTrace {
+  string trace_id = 1;
+  string enterprise_id = 2;
+  string case_ticket_id = 3;
+  string actor_user_id = 4;
+  string question_hash = 5;
+  string sanitized_question_summary = 6;
+  string workflow_run_id = 7;
+  repeated string space_ids = 8;
+  string retrieval_plan_id = 9;
+  repeated string evidence_pointer_ids = 10;
+  repeated string agentnexus_read_grant_ids = 11;
+  string model_route = 12;
+  string answer_hash = 13;
+  google.protobuf.Timestamp created_at = 14;
+}
+
+message AppendTraceRequest {
+  AnswerTrace trace = 1;
+}
+
+message AppendTraceResponse {
+  string trace_id = 1;
+  // Audit reference returned by AgentNexus append; empty means the append
+  // failed and the caller must treat the answer path as failed (fail closed).
+  string agentnexus_audit_ref_id = 2;
+}
+
+message GetTraceRequest {
+  string enterprise_id = 1;
+  string trace_id = 2;
+}
+
+message GetTraceResponse {
+  AnswerTrace trace = 1;
+}
+
+service TraceService {
+  rpc AppendTrace(AppendTraceRequest) returns (AppendTraceResponse);
+  rpc GetTrace(GetTraceRequest) returns (GetTraceResponse);
+}

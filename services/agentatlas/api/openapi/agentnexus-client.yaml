@@ -1,0 +1,200 @@
+openapi: 3.0.3
+info:
+  title: AgentNexus Client Contract (PROPOSAL)
+  version: 0.1.0
+  description: >
+    PROPOSAL CONTRACT. AgentAtlas defines here the exact surface it needs from
+    AgentNexus: ticket verification, evidence location, authorized evidence
+    reads, audit evidence append, and org graph event subscription. The
+    AgentNexus repository is not yet implemented; once it lands, this document
+    is the alignment baseline and AgentNexus becomes the authority for it.
+    AgentAtlas ships a mock server implementing this contract for local
+    development and integration tests.
+paths:
+  /v1/tickets/verify:
+    post:
+      operationId: verifyTicket
+      summary: Verify an access ticket and resolve its actor context
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ticket_id]
+              properties:
+                ticket_id: { type: string }
+      responses:
+        '200':
+          description: Verification result (valid=false is a 200, not an error)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [valid]
+                properties:
+                  valid: { type: boolean }
+                  enterprise_id: { type: string }
+                  actor_user_id: { type: string }
+                  scopes:
+                    type: array
+                    items: { type: string }
+                  expires_at: { type: string, format: date-time }
+  /v1/evidence/locate:
+    post:
+      operationId: locateEvidence
+      summary: Resolve an evidence pointer or query intent to a readable location
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ticket_id, enterprise_id]
+              properties:
+                ticket_id: { type: string }
+                enterprise_id: { type: string }
+                evidence_pointer_id: { type: string }
+                resource_uri: { type: string }
+                query_intent: { type: string }
+      responses:
+        '200':
+          description: Location resolved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [resource_uri, source_system]
+                properties:
+                  resource_uri: { type: string }
+                  source_system: { type: string }
+                  location_hints: { type: object }
+        '403':
+          description: Ticket lacks scope for this resource
+  /v1/evidence/read:
+    post:
+      operationId: readEvidence
+      summary: Read an authorized, sanitized evidence excerpt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ticket_id, enterprise_id, resource_uri]
+              properties:
+                ticket_id: { type: string }
+                enterprise_id: { type: string }
+                resource_uri: { type: string }
+                evidence_pointer_id: { type: string }
+                max_bytes: { type: integer, default: 65536 }
+      responses:
+        '200':
+          description: Excerpt returned under a step grant
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [grant_id, content_type, sanitized_excerpt, content_hash]
+                properties:
+                  grant_id: { type: string }
+                  content_type: { type: string }
+                  sanitized_excerpt: { type: string }
+                  content_hash: { type: string }
+        '403':
+          description: Read denied; AgentAtlas must fail closed
+  /v1/audit/evidence:
+    post:
+      operationId: appendAuditEvidence
+      summary: Append an AgentAtlas action to the AgentNexus audit chain
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ticket_id, enterprise_id, action]
+              properties:
+                ticket_id: { type: string }
+                enterprise_id: { type: string }
+                action:
+                  type: string
+                  enum:
+                    - workflow_draft_created
+                    - workflow_version_published
+                    - dream_policy_created
+                    - dream_job_run
+                    - retrieval_plan_created
+                    - evidence_located
+                    - evidence_read
+                    - answer_trace_created
+                    - sensitive_artifact_parsed
+                    - visibility_rule_changed
+                trace_id: { type: string }
+                workflow_run_id: { type: string }
+                details: { type: object }
+      responses:
+        '201':
+          description: Audit reference created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [audit_ref_id]
+                properties:
+                  audit_ref_id: { type: string }
+  /v1/org-events:
+    get:
+      operationId: subscribeOrgEvents
+      summary: Subscribe to org graph change events (SSE)
+      description: >
+        Server-Sent Events stream. Each event data payload is an OrgEvent JSON
+        object. Clients resume with since_version. AgentAtlas keeps only the
+        org_snapshot/org_version cache it needs for space sync and audit.
+      parameters:
+        - { name: enterprise_id, in: query, required: true, schema: { type: string } }
+        - { name: since_version, in: query, schema: { type: integer } }
+      responses:
+        '200':
+          description: SSE stream of OrgEvent
+          content:
+            text/event-stream:
+              schema: { type: string }
+components:
+  schemas:
+    OrgEvent:
+      type: object
+      required: [event_id, enterprise_id, org_version, type, scope, occurred_at]
+      properties:
+        event_id: { type: string }
+        enterprise_id: { type: string }
+        org_version: { type: integer }
+        type:
+          type: string
+          enum:
+            - employee_upserted
+            - employee_removed
+            - project_group_upserted
+            - project_group_removed
+            - department_upserted
+            - department_removed
+            - business_unit_upserted
+            - business_unit_removed
+            - company_upserted
+        scope:
+          type: object
+          required: [kind, id, name]
+          properties:
+            kind: { type: string, enum: [employee, project_group, department, business_unit, company] }
+            id: { type: string }
+            name: { type: string }
+            parent_id: { type: string }
+        members:
+          type: array
+          items:
+            type: object
+            required: [user_id]
+            properties:
+              user_id: { type: string }
+              display_name: { type: string }
+        occurred_at: { type: string, format: date-time }

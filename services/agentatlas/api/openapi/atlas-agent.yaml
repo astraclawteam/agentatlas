@@ -1,0 +1,262 @@
+openapi: 3.0.3
+info:
+  title: AgentAtlas Agent Control Plane API
+  version: 1.0.0
+  description: >
+    Agent-first control plane for admins and knowledge owners: Knowledge Agent
+    runs, workflow drafts and publication, dream policies, and artifact
+    processing jobs. Drafts may be created by the agent; publication always
+    requires an explicit human confirmation. Every call authenticates with an
+    AgentNexus-issued ticket.
+security:
+  - NexusTicket: []
+paths:
+  /v1/agent/runs:
+    post:
+      operationId: createAgentRun
+      summary: Start a Knowledge Agent run from a natural-language goal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enterprise_id, message]
+              properties:
+                enterprise_id: { type: string }
+                message: { type: string, minLength: 1 }
+                attachments:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      evidence_pointer_id: { type: string }
+                      artifact_id: { type: string }
+      responses:
+        '201':
+          description: Run started
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRun' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /v1/agent/runs/{id}/messages:
+    post:
+      operationId: postAgentRunMessage
+      summary: Continue a Knowledge Agent run
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Run advanced
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRun' }
+        '404': { $ref: '#/components/responses/NotFound' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string, minLength: 1 }
+  /v1/agent/runs/{id}/confirmations:
+    post:
+      operationId: postAgentRunConfirmation
+      summary: Resolve a pending human confirmation
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirmation_id, decision]
+              properties:
+                confirmation_id: { type: string }
+                decision: { type: string, enum: [approve, reject] }
+                comment: { type: string }
+      responses:
+        '200':
+          description: Confirmation applied
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRun' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/workflows:
+    post:
+      operationId: createWorkflowDraft
+      summary: Create a workflow draft (validated against workflow.schema.json)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enterprise_id, workflow]
+              properties:
+                enterprise_id: { type: string }
+                workflow:
+                  type: object
+                  description: Workflow document conforming to schemas/workflow/workflow.schema.json
+      responses:
+        '201':
+          description: Draft stored
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workflow_id, draft_version]
+                properties:
+                  workflow_id: { type: string }
+                  draft_version: { type: integer }
+        '422':
+          description: Schema validation failed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /v1/workflows/{id}/publish:
+    post:
+      operationId: publishWorkflow
+      summary: Publish an immutable workflow version (human-confirmed)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '201':
+          description: Version published
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workflow_id, version]
+                properties:
+                  workflow_id: { type: string }
+                  version: { type: integer }
+        '409':
+          description: Draft unchanged since last publish or draft invalid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /v1/dream-policies:
+    post:
+      operationId: createDreamPolicy
+      summary: Create a dream policy draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DreamPolicyDraft'
+      responses:
+        '201':
+          description: Policy draft stored
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [dream_policy_id, status]
+                properties:
+                  dream_policy_id: { type: string }
+                  status: { type: string, enum: [draft, published] }
+  /v1/artifacts/jobs:
+    post:
+      operationId: createArtifactJob
+      summary: Create an artifact processing job (upload or evidence pointer)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enterprise_id, source]
+              properties:
+                enterprise_id: { type: string }
+                source:
+                  type: object
+                  description: Exactly one of object_key or evidence_pointer_id
+                  properties:
+                    object_key: { type: string, description: Key of an uploaded object in the artifacts bucket }
+                    evidence_pointer_id: { type: string }
+                content_type: { type: string }
+                parser_hint: { type: string, enum: [docling, mineru, asr, video, auto], default: auto }
+      responses:
+        '201':
+          description: Job created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [job_id, status]
+                properties:
+                  job_id: { type: string }
+                  status: { type: string, enum: [pending, running, succeeded, failed] }
+components:
+  securitySchemes:
+    NexusTicket:
+      type: apiKey
+      in: header
+      name: X-Nexus-Ticket
+  responses:
+    Unauthorized:
+      description: Missing or invalid ticket (fail closed)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found in caller-visible scope
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+    AgentRun:
+      type: object
+      required: [run_id, enterprise_id, status]
+      properties:
+        run_id: { type: string }
+        enterprise_id: { type: string }
+        status: { type: string, enum: [running, waiting_confirmation, completed, failed] }
+        reply: { type: string }
+        pending_confirmation:
+          type: object
+          properties:
+            confirmation_id: { type: string }
+            summary: { type: string }
+            risk_level: { type: string, enum: [low, medium, high] }
+        produced:
+          type: object
+          properties:
+            workflow_id: { type: string }
+            dream_policy_id: { type: string }
+            artifact_job_id: { type: string }
+    DreamPolicyDraft:
+      type: object
+      required: [enterprise_id, org_scope, schedule, input_sources, visibility_level, output_space_id]
+      properties:
+        enterprise_id: { type: string }
+        org_scope: { type: string }
+        schedule: { type: string, description: Cron expression evaluated in the enterprise timezone }
+        input_sources:
+          type: array
+          items: { type: string, enum: [work_briefs, project_records, sop_updates, agent_answers, external_evidence] }
+        visibility_level: { type: string, enum: [members, managers, company_sanitized] }
+        masking_rules:
+          type: array
+          items: { type: string }
+        risk_signal_rules:
+          type: array
+          items: { type: string }
+        evidence_retention: { type: string, enum: [pointer_only, pointer_plus_display_summary] }
+        output_space_id: { type: string }
+        retry_policy:
+          type: object
+          properties:
+            max_attempts: { type: integer, default: 3 }
+            backoff_seconds: { type: integer, default: 300 }
