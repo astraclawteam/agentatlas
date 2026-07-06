@@ -1,0 +1,96 @@
+package nexusclient
+
+import (
+	"context"
+	"fmt"
+	"sync"
+
+	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
+)
+
+// Mock is an in-memory nexus.Client for unit tests. Configure state, run the
+// code under test, then inspect AuditLog / calls.
+type Mock struct {
+	mu sync.Mutex
+
+	Tickets   map[string]nexus.VerifyTicketResponse  // ticket_id -> response
+	Locations map[string]nexus.LocateEvidenceResponse // pointer id or uri -> location
+	Reads     map[string]nexus.ReadEvidenceResponse   // resource_uri -> excerpt
+	DenyReads bool
+	OrgEvents []nexus.OrgEvent
+
+	AuditLog []nexus.AppendAuditEvidenceRequest
+}
+
+var _ nexus.Client = (*Mock)(nil)
+
+func NewMock() *Mock {
+	return &Mock{
+		Tickets:   map[string]nexus.VerifyTicketResponse{},
+		Locations: map[string]nexus.LocateEvidenceResponse{},
+		Reads:     map[string]nexus.ReadEvidenceResponse{},
+	}
+}
+
+func (m *Mock) VerifyTicket(_ context.Context, req nexus.VerifyTicketRequest) (nexus.VerifyTicketResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if resp, ok := m.Tickets[req.TicketID]; ok {
+		return resp, nil
+	}
+	return nexus.VerifyTicketResponse{Valid: false}, nil
+}
+
+func (m *Mock) LocateEvidence(_ context.Context, req nexus.LocateEvidenceRequest) (nexus.LocateEvidenceResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if loc, ok := m.Locations[req.EvidencePointerID]; ok {
+		return loc, nil
+	}
+	if loc, ok := m.Locations[req.ResourceURI]; ok {
+		return loc, nil
+	}
+	return nexus.LocateEvidenceResponse{}, fmt.Errorf("locate %q: %w", req.EvidencePointerID, ErrDenied)
+}
+
+func (m *Mock) ReadEvidence(_ context.Context, req nexus.ReadEvidenceRequest) (nexus.ReadEvidenceResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.DenyReads {
+		return nexus.ReadEvidenceResponse{}, fmt.Errorf("read %q: %w", req.ResourceURI, ErrDenied)
+	}
+	if r, ok := m.Reads[req.ResourceURI]; ok {
+		return r, nil
+	}
+	return nexus.ReadEvidenceResponse{}, fmt.Errorf("read %q: %w", req.ResourceURI, ErrDenied)
+}
+
+func (m *Mock) AppendAuditEvidence(_ context.Context, req nexus.AppendAuditEvidenceRequest) (nexus.AppendAuditEvidenceResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.AuditLog = append(m.AuditLog, req)
+	return nexus.AppendAuditEvidenceResponse{AuditRefID: fmt.Sprintf("audit_%d", len(m.AuditLog))}, nil
+}
+
+// SubscribeOrgEvents replays queued events newer than sinceVersion, then
+// returns nil (stream end). Callers resume with the last processed version.
+func (m *Mock) SubscribeOrgEvents(ctx context.Context, enterpriseID string, sinceVersion int64, handler nexus.OrgEventHandler) error {
+	m.mu.Lock()
+	events := make([]nexus.OrgEvent, 0, len(m.OrgEvents))
+	for _, ev := range m.OrgEvents {
+		if ev.EnterpriseID == enterpriseID && ev.OrgVersion > sinceVersion {
+			events = append(events, ev)
+		}
+	}
+	m.mu.Unlock()
+
+	for _, ev := range events {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := handler(ctx, ev); err != nil {
+			return err
+		}
+	}
+	return nil
+}
