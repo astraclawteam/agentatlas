@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
 )
 
 // Store is the persistence surface (db/generated satisfies it).
@@ -21,19 +22,30 @@ type Store interface {
 }
 
 type Service struct {
-	store Store
+	store   Store
+	metrics *observability.Metrics
 }
 
 func NewService(store Store) *Service {
 	return &Service{store: store}
 }
 
+// SetMetrics wires the optional Prometheus surface (TraceAppendFail).
+func (s *Service) SetMetrics(m *observability.Metrics) { s.metrics = m }
+
 // Create persists the trace with steps, evidence links, and the model event.
-func (s *Service) Create(ctx context.Context, rec Record) (db.AnswerTrace, error) {
+// Persistence failures increment TraceAppendFail — answer/workflow paths treat
+// them as fail-closed.
+func (s *Service) Create(ctx context.Context, rec Record) (row db.AnswerTrace, err error) {
+	defer func() {
+		if err != nil && s.metrics != nil {
+			s.metrics.TraceAppendFail.Inc()
+		}
+	}()
 	if rec.EnterpriseID == "" || rec.CaseTicketID == "" {
 		return db.AnswerTrace{}, fmt.Errorf("trace: enterprise_id and case_ticket_id are required")
 	}
-	row, err := s.store.CreateAnswerTrace(ctx, db.CreateAnswerTraceParams{
+	row, err = s.store.CreateAnswerTrace(ctx, db.CreateAnswerTraceParams{
 		ID:                       newID("tr"),
 		EnterpriseID:             rec.EnterpriseID,
 		CaseTicketID:             rec.CaseTicketID,

@@ -59,8 +59,10 @@ func run() error {
 	}
 	defer func() { _ = shutdownTracing(context.Background()) }()
 
+	gateway := parsergateway.NewGateway(registry)
+	gateway.SetMetrics(metrics)
 	router := app.NewParserRouter(app.ParserRouterDeps{
-		Gateway: parsergateway.NewGateway(registry),
+		Gateway: gateway,
 		Sidecars: map[string]string{
 			"docling": cfg.Parsers.Docling.BaseURL,
 			"mineru":  cfg.Parsers.MinerU.BaseURL,

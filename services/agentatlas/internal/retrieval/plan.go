@@ -7,10 +7,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"go.opentelemetry.io/otel/attribute"
 
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
 )
 
 // PlanStore persists retrieval plans and results (db/generated satisfies it).
@@ -28,6 +31,7 @@ type Service struct {
 	client   SearchClient
 	embedder Embedder // nil => keyword-only deployment (no embedding route configured)
 	reranker Reranker // nil => fusion order stands
+	metrics  *observability.Metrics
 }
 
 func NewService(store PlanStore, client SearchClient, embedder Embedder, reranker Reranker) *Service {
@@ -113,8 +117,19 @@ func (s *Service) CreatePlan(ctx context.Context, q Query) (string, error) {
 	return plan.ID, nil
 }
 
+// SetMetrics wires the optional Prometheus surface (RetrievalLatency).
+func (s *Service) SetMetrics(m *observability.Metrics) { s.metrics = m }
+
 // Execute runs the hybrid pipeline and persists results under the plan.
 func (s *Service) Execute(ctx context.Context, planID string, q Query) ([]Result, error) {
+	ctx, span := observability.Tracer("retrieval").Start(ctx, "retrieval.execute")
+	span.SetAttributes(attribute.String("enterprise_id", q.EnterpriseID), attribute.String("plan_id", planID))
+	defer span.End()
+	if s.metrics != nil {
+		start := time.Now()
+		defer func() { s.metrics.RetrievalLatency.Observe(time.Since(start).Seconds()) }()
+	}
+
 	index := IndexName(q.EnterpriseID)
 
 	keyword, err := s.client.Search(ctx, index, BuildKeywordQuery(q))

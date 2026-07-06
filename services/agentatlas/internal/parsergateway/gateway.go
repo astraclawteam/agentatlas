@@ -9,17 +9,25 @@ import (
 	"mime/multipart"
 	"net/http"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
 )
 
 // Gateway resolves a provider and executes the parse with timing so callers
 // can record parser_provider_runs.
 type Gateway struct {
 	registry *Registry
+	metrics  *observability.Metrics
 }
 
 func NewGateway(registry *Registry) *Gateway {
 	return &Gateway{registry: registry}
 }
+
+// SetMetrics wires the optional Prometheus surface (ParserLatency).
+func (g *Gateway) SetMetrics(m *observability.Metrics) { g.metrics = m }
 
 type GatewayResult struct {
 	Output    ParseOutput
@@ -27,10 +35,16 @@ type GatewayResult struct {
 }
 
 func (g *Gateway) Parse(ctx context.Context, hint string, in ParseInput) (GatewayResult, error) {
+	ctx, span := observability.Tracer("parser").Start(ctx, "parser.parse")
+	span.SetAttributes(attribute.String("enterprise_id", in.EnterpriseID), attribute.String("content_type", in.ContentType))
+	defer span.End()
+
 	provider, err := g.registry.Resolve(hint, in.ContentType)
 	if err != nil {
+		span.RecordError(err)
 		return GatewayResult{}, err
 	}
+	span.SetAttributes(attribute.String("provider", provider.Descriptor().ProviderID))
 	max := int64(provider.Descriptor().MaxFileSizeMB) * 1024 * 1024
 	if max > 0 && int64(len(in.Data)) > max {
 		return GatewayResult{}, fmt.Errorf("artifact %s exceeds provider %s limit (%d MB)",
@@ -38,7 +52,11 @@ func (g *Gateway) Parse(ctx context.Context, hint string, in ParseInput) (Gatewa
 	}
 	start := time.Now()
 	out, err := provider.Parse(ctx, in)
+	if g.metrics != nil {
+		g.metrics.ParserLatency.Observe(time.Since(start).Seconds())
+	}
 	if err != nil {
+		span.RecordError(err)
 		return GatewayResult{}, fmt.Errorf("provider %s: %w", provider.Descriptor().ProviderID, err)
 	}
 	out.ProviderID = provider.Descriptor().ProviderID

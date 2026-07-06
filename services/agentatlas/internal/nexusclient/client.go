@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
 )
 
 // HTTPClient implements nexus.Client against api/openapi/agentnexus-client.yaml.
@@ -32,6 +33,16 @@ func New(baseURL string, timeout time.Duration) *HTTPClient {
 }
 
 func (c *HTTPClient) post(ctx context.Context, path string, in, out any) error {
+	ctx, span := observability.Tracer("nexusclient").Start(ctx, "nexus"+strings.ReplaceAll(path, "/", "."))
+	defer span.End()
+	err := c.doPost(ctx, path, in, out)
+	if err != nil {
+		span.RecordError(err)
+	}
+	return err
+}
+
+func (c *HTTPClient) doPost(ctx context.Context, path string, in, out any) error {
 	body, err := json.Marshal(in)
 	if err != nil {
 		return fmt.Errorf("nexus %s: encode: %w", path, err)

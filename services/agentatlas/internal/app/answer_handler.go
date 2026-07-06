@@ -12,8 +12,11 @@ import (
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/retrieval"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/trace"
 )
@@ -100,6 +103,11 @@ func (d *answerDeps) handleAnswer(w http.ResponseWriter, r *http.Request) {
 	if actor == "" {
 		actor = identity.ActorUserID
 	}
+
+	// span covers plan/retrieve/read/generate/trace/audit (Goal B6)
+	ctx, span := observability.Tracer("answer").Start(ctx, "answer.handle")
+	span.SetAttributes(attribute.String("enterprise_id", req.EnterpriseID), attribute.String("actor_user_id", actor))
+	defer span.End()
 
 	steps := []trace.Step{{Kind: "verify_ticket", Detail: map[string]any{"actor_user_id": actor}}}
 
