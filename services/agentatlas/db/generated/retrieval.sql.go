@@ -11,6 +11,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimIndexJob = `-- name: ClaimIndexJob :execrows
+UPDATE index_jobs SET status = 'running' WHERE id = $1 AND status = 'pending'
+`
+
+func (q *Queries) ClaimIndexJob(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.Exec(ctx, claimIndexJob, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createIndexJob = `-- name: CreateIndexJob :one
 INSERT INTO index_jobs (id, enterprise_id, source_type, source_id, status)
 VALUES ($1, $2, $3, $4, $5)
@@ -83,6 +95,26 @@ func (q *Queries) CreateRetrievalPlan(ctx context.Context, arg CreateRetrievalPl
 		&i.OrgScopes,
 		&i.Filters,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getIndexJob = `-- name: GetIndexJob :one
+SELECT id, enterprise_id, source_type, source_id, status, error, created_at, finished_at FROM index_jobs WHERE id = $1
+`
+
+func (q *Queries) GetIndexJob(ctx context.Context, id string) (IndexJob, error) {
+	row := q.db.QueryRow(ctx, getIndexJob, id)
+	var i IndexJob
+	err := row.Scan(
+		&i.ID,
+		&i.EnterpriseID,
+		&i.SourceType,
+		&i.SourceID,
+		&i.Status,
+		&i.Error,
+		&i.CreatedAt,
+		&i.FinishedAt,
 	)
 	return i, err
 }

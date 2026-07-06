@@ -40,6 +40,9 @@ INSERT INTO dream_summaries (id, run_id, enterprise_id, space_id, layer, summary
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING *;
 
+-- name: GetDreamSummary :one
+SELECT * FROM dream_summaries WHERE id = $1;
+
 -- name: ListDreamSummariesBySpace :many
 SELECT * FROM dream_summaries
 WHERE space_id = $1 AND layer = $2

@@ -1,0 +1,33 @@
+{
+  "settings": {
+    "index": {
+      "knn": true,
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    }
+  },
+  "mappings": {
+    "properties": {
+      "enterprise_id": { "type": "keyword" },
+      "space_id": { "type": "keyword" },
+      "org_scope": { "type": "keyword" },
+      "org_version": { "type": "long" },
+      "source_type": { "type": "keyword" },
+      "summary_text": { "type": "text", "analyzer": "smartcn" },
+      "sanitized_snippet": { "type": "text", "analyzer": "smartcn" },
+      "tags": { "type": "keyword" },
+      "node_time": { "type": "date" },
+      "evidence_pointer_id": { "type": "keyword" },
+      "risk_level": { "type": "keyword" },
+      "embedding": {
+        "type": "knn_vector",
+        "dimension": 1024,
+        "method": {
+          "name": "hnsw",
+          "space_type": "cosinesimil",
+          "engine": "lucene"
+        }
+      }
+    }
+  }
+}
