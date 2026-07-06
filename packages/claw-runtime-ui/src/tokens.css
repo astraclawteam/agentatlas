@@ -1,0 +1,55 @@
+/* AstraClaw runtime design tokens (AgentAtlas mirror).
+   Three-tier shadows/radii and status colors follow the runtime design
+   system; glass surfaces carry translucency + blur. */
+:root {
+  --claw-font: "Inter", "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+
+  --claw-bg: #f5f6f8;
+  --claw-surface: rgba(255, 255, 255, 0.72);
+  --claw-surface-solid: #ffffff;
+  --claw-surface-blur: 14px;
+  --claw-border: rgba(17, 24, 39, 0.08);
+  --claw-border-strong: rgba(17, 24, 39, 0.16);
+
+  --claw-text: #111827;
+  --claw-text-secondary: #4b5563;
+  --claw-text-muted: #9ca3af;
+
+  --claw-accent: #4f46e5;
+  --claw-accent-soft: rgba(79, 70, 229, 0.1);
+  --claw-danger: #dc2626;
+  --claw-danger-soft: rgba(220, 38, 38, 0.1);
+  --claw-success: #16a34a;
+  --claw-success-soft: rgba(22, 163, 74, 0.12);
+  --claw-warning: #d97706;
+  --claw-warning-soft: rgba(217, 119, 6, 0.12);
+
+  --claw-radius-sm: 8px;
+  --claw-radius-md: 12px;
+  --claw-radius-lg: 20px;
+
+  --claw-shadow-1: 0 1px 2px rgba(17, 24, 39, 0.06);
+  --claw-shadow-2: 0 4px 12px rgba(17, 24, 39, 0.08);
+  --claw-shadow-3: 0 12px 32px rgba(17, 24, 39, 0.14);
+}
+
+[data-theme="dark"] {
+  --claw-bg: #0f1115;
+  --claw-surface: rgba(24, 27, 33, 0.72);
+  --claw-surface-solid: #181b21;
+  --claw-border: rgba(255, 255, 255, 0.08);
+  --claw-border-strong: rgba(255, 255, 255, 0.16);
+  --claw-text: #f3f4f6;
+  --claw-text-secondary: #b7bcc5;
+  --claw-text-muted: #6b7280;
+  --claw-accent: #818cf8;
+  --claw-accent-soft: rgba(129, 140, 248, 0.14);
+}
+
+.claw-glass {
+  background: var(--claw-surface);
+  backdrop-filter: blur(var(--claw-surface-blur));
+  border: 1px solid var(--claw-border);
+  border-radius: var(--claw-radius-lg);
+  box-shadow: var(--claw-shadow-2);
+}
