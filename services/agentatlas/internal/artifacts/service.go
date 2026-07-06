@@ -24,6 +24,8 @@ type Store interface {
 	InsertArtifactStep(ctx context.Context, arg db.InsertArtifactStepParams) error
 	InsertParserProviderRun(ctx context.Context, arg db.InsertParserProviderRunParams) error
 	CreateAtlasDocument(ctx context.Context, arg db.CreateAtlasDocumentParams) (db.AtlasDocument, error)
+	GetAtlasDocument(ctx context.Context, id string) (db.AtlasDocument, error)
+	GetAtlasDocumentByArtifact(ctx context.Context, artifactID string) (db.AtlasDocument, error)
 	InsertDocumentBlock(ctx context.Context, arg db.InsertDocumentBlockParams) error
 	InsertDocumentSummary(ctx context.Context, arg db.InsertDocumentSummaryParams) (db.DocumentSummary, error)
 	CreateEvidencePointer(ctx context.Context, arg db.CreateEvidencePointerParams) (db.EvidencePointer, error)

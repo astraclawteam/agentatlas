@@ -26,6 +26,7 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/storage"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/tasks"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/workflow"
 )
 
@@ -79,10 +80,22 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// Runtime for confirmation resumes; the real executor registry replaces
-	// NewRegistry() with Goal B5.
+	// Runtime here serves CreatePending (run starts) and confirmation resumes;
+	// full node execution happens on atlas-worker, which owns the real
+	// executor registry. Resume re-executes remaining nodes in-process, so it
+	// gets the built-in registry only for input/confirm nodes — runs with
+	// heavier nodes after a confirm re-enqueue below.
 	workflowRuntime := workflow.NewRuntime(queries, workflowSvc, workflow.NewRegistry())
 	dreamPolicies := dream.NewPolicyService(queries)
+
+	// Producer-only task runner: the control plane enqueues workflow runs;
+	// atlas-worker consumes them.
+	bus, err := tasks.NewNATSBus(ctx, cfg.NATS.URL)
+	if err != nil {
+		return fmt.Errorf("nats (production-standard dependency): %w", err)
+	}
+	taskRunner := tasks.NewRunner(bus)
+	taskRunner.AllowEnqueue(workflow.JobTypeRun)
 
 	metrics := observability.NewMetrics()
 	shutdownTracing, err := observability.InitTracing(ctx, "atlas-agent")
@@ -96,7 +109,8 @@ func run() error {
 
 	router := app.NewAgentRouter(app.AgentRouterDeps{
 		Nexus: nexusClient, Agent: agentRunner, Workflows: workflowSvc,
-		Runtime: workflowRuntime, Dreams: dreamPolicies, Store: queries, Metrics: metrics,
+		Runtime: workflowRuntime, Dreams: dreamPolicies, Store: queries,
+		Runner: taskRunner, Metrics: metrics,
 	})
 
 	addr := os.Getenv("ATLAS_AGENT_ADDR")
