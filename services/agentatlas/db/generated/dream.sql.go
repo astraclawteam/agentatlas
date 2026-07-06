@@ -11,6 +11,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimDreamRun = `-- name: ClaimDreamRun :execrows
+UPDATE dream_runs SET status = 'running' WHERE id = $1 AND status = 'pending'
+`
+
+func (q *Queries) ClaimDreamRun(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.Exec(ctx, claimDreamRun, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createDreamPolicy = `-- name: CreateDreamPolicy :one
 INSERT INTO dream_policies (id, enterprise_id, org_scope, status, draft)
 VALUES ($1, $2, $3, $4, $5)
@@ -153,6 +165,28 @@ func (q *Queries) GetDreamPolicy(ctx context.Context, id string) (DreamPolicy, e
 	return i, err
 }
 
+const getDreamRun = `-- name: GetDreamRun :one
+SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at FROM dream_runs WHERE id = $1
+`
+
+func (q *Queries) GetDreamRun(ctx context.Context, id string) (DreamRun, error) {
+	row := q.db.QueryRow(ctx, getDreamRun, id)
+	var i DreamRun
+	err := row.Scan(
+		&i.ID,
+		&i.PolicyID,
+		&i.Version,
+		&i.EnterpriseID,
+		&i.Status,
+		&i.WindowStart,
+		&i.WindowEnd,
+		&i.Error,
+		&i.CreatedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
 const getDreamSummary = `-- name: GetDreamSummary :one
 SELECT id, run_id, enterprise_id, space_id, layer, summary_text, sealed_object_key, evidence_pointer_id, risk_signals, created_at FROM dream_summaries WHERE id = $1
 `
@@ -187,6 +221,28 @@ func (q *Queries) GetLatestDreamPolicyVersion(ctx context.Context, policyID stri
 		&i.Version,
 		&i.Definition,
 		&i.PublishedAt,
+	)
+	return i, err
+}
+
+const getLatestDreamRunForPolicy = `-- name: GetLatestDreamRunForPolicy :one
+SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at FROM dream_runs WHERE policy_id = $1 ORDER BY window_end DESC LIMIT 1
+`
+
+func (q *Queries) GetLatestDreamRunForPolicy(ctx context.Context, policyID string) (DreamRun, error) {
+	row := q.db.QueryRow(ctx, getLatestDreamRunForPolicy, policyID)
+	var i DreamRun
+	err := row.Scan(
+		&i.ID,
+		&i.PolicyID,
+		&i.Version,
+		&i.EnterpriseID,
+		&i.Status,
+		&i.WindowStart,
+		&i.WindowEnd,
+		&i.Error,
+		&i.CreatedAt,
+		&i.FinishedAt,
 	)
 	return i, err
 }
