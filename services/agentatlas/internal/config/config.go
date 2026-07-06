@@ -40,6 +40,7 @@ type LLMRouter struct {
 	BaseURL      string `yaml:"base_url"`
 	APIKey       string `yaml:"api_key"`
 	DefaultModel string `yaml:"default_model"`
+	RerankModel  string `yaml:"rerank_model"`
 }
 
 type AgentNexus struct {
@@ -129,6 +130,7 @@ func (c *Config) applyEnv() {
 	set(&c.LLMRouter.BaseURL, "ATLAS_LLMROUTER_BASE_URL")
 	set(&c.LLMRouter.APIKey, "ATLAS_LLMROUTER_API_KEY")
 	set(&c.LLMRouter.DefaultModel, "ATLAS_LLMROUTER_MODEL")
+	set(&c.LLMRouter.RerankModel, "ATLAS_LLMROUTER_RERANK_MODEL")
 	set(&c.AgentNexus.BaseURL, "ATLAS_NEXUS_BASE_URL")
 	set(&c.Parsers.Docling.BaseURL, "ATLAS_DOCLING_URL")
 	set(&c.Parsers.MinerU.BaseURL, "ATLAS_MINERU_URL")
