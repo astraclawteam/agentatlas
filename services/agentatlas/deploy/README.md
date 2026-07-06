@@ -65,3 +65,22 @@ endpoints (`values.yaml -> config`). Production private-deployment control
 
 Boundary and demo docs: `docs/specs/open-core-boundary.md`,
 `docs/mvp-demo.md`.
+
+## Real parser sidecars in tests (Goal C1)
+
+`ATLAS_PARSER_SIDECARS=1` switches the parser legs of the test suite from
+in-process stand-ins to the REAL sidecars:
+
+```powershell
+cd deploy/compose
+docker compose up -d docling-sidecar mineru-sidecar asr-sidecar video-sidecar
+
+cd ../..
+$env:ATLAS_PARSER_SIDECARS = "1"
+go test ./tests/integration -run TestParserSidecars -v   # per-sidecar legs (unreachable sidecars skip loudly)
+go test ./tests/e2e -run TestAgentAtlasMVP -v            # MVP parse step now runs through real docling
+```
+
+Override endpoints with `ATLAS_TEST_DOCLING_URL` / `ATLAS_TEST_MINERU_URL` /
+`ATLAS_TEST_ASR_URL` / `ATLAS_TEST_VIDEO_URL` (defaults match compose ports
+5001/5002/5003/5004). First ASR run downloads whisper models — allow minutes.
