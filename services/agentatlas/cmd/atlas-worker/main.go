@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -167,10 +168,23 @@ func run() error {
 	}
 	runner := tasks.NewRunner(bus)
 
+	// Worker-side observability: dream/workflow/retrieval/parser/trace metrics
+	// fire here; exposed on ATLAS_WORKER_METRICS_ADDR.
+	metrics := observability.NewMetrics()
+	shutdownTracing, err := observability.InitTracing(ctx, "atlas-worker")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = shutdownTracing(context.Background()) }()
+
 	artifactSvc := artifacts.NewService(queries, objects, parserGW, runner, summarizer)
 	dreamRunner := dream.NewRunner(queries, objects, dream.NewPolicyService(queries), runner, synthesizer)
+	dreamRunner.SetMetrics(metrics)
 	indexer := retrieval.NewIndexer(queries, search, embedder)
 	retrievalSvc := retrieval.NewService(queries, search, embedder, reranker)
+	retrievalSvc.SetMetrics(metrics)
+	traceSvc := trace.NewService(queries)
+	traceSvc.SetMetrics(metrics)
 	nexusClient := nexusclient.New(cfg.AgentNexus.BaseURL, 30*time.Second)
 
 	// Workflow runs execute HERE: real executors behind every node type.
@@ -187,10 +201,21 @@ func run() error {
 		Nexus:     nexusClient,
 		Dream:     synthesizer.AggregateTexts,
 		Answer:    answerGen,
-		Traces:    trace.NewService(queries),
+		Traces:    traceSvc,
 	})
 	workflowRuntime := workflow.NewRuntime(queries, workflowSvc, registry)
+	workflowRuntime.SetMetrics(metrics)
 	runJobs := workflow.NewRunJobHandler(workflowRuntime, queries, runner)
+
+	metricsAddr := os.Getenv("ATLAS_WORKER_METRICS_ADDR")
+	if metricsAddr == "" {
+		metricsAddr = ":9091"
+	}
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", metrics.Handler())
+	metricsSrv := &http.Server{Addr: metricsAddr, Handler: metricsMux, ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = metricsSrv.ListenAndServe() }()
+	defer func() { _ = metricsSrv.Close() }()
 
 	w := worker.New(runner, worker.Deps{
 		Artifacts: artifactSvc,

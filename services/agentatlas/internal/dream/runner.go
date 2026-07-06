@@ -6,8 +6,10 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"go.opentelemetry.io/otel/attribute"
 
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/tasks"
 )
 
@@ -40,6 +42,7 @@ type Runner struct {
 	policy  *PolicyService
 	tasks   *tasks.Runner
 	synth   *Synthesizer
+	metrics *observability.Metrics
 }
 
 // NewRunner wires a dream runner. synth may be nil (or model-less) — that is
@@ -47,6 +50,9 @@ type Runner struct {
 func NewRunner(store RunnerStore, objects Objects, policy *PolicyService, taskRunner *tasks.Runner, synth *Synthesizer) *Runner {
 	return &Runner{store: store, objects: objects, policy: policy, tasks: taskRunner, synth: synth}
 }
+
+// SetMetrics wires the optional Prometheus surface (DreamRuns by status).
+func (r *Runner) SetMetrics(m *observability.Metrics) { r.metrics = m }
 
 func (r *Runner) RegisterJobHandler() error {
 	return r.tasks.Register(JobTypeDream, tasks.Handler{
@@ -60,6 +66,9 @@ func (r *Runner) RegisterJobHandler() error {
 			if execErr != nil {
 				status, msg = "failed", truncateRunes(execErr.Error(), 1000)
 			}
+			if r.metrics != nil {
+				r.metrics.DreamRuns.WithLabelValues(status).Inc()
+			}
 			_, err := r.store.UpdateDreamRunStatus(ctx, db.UpdateDreamRunStatusParams{
 				ID: runID, Status: status, Error: msg,
 			})
@@ -69,8 +78,13 @@ func (r *Runner) RegisterJobHandler() error {
 }
 
 func (r *Runner) execute(ctx context.Context, runID string) error {
+	ctx, span := observability.Tracer("dream").Start(ctx, "dream.run")
+	span.SetAttributes(attribute.String("run_id", runID))
+	defer span.End()
+
 	run, err := r.store.GetDreamRun(ctx, runID)
 	if err != nil {
+		span.RecordError(err)
 		return fmt.Errorf("load run: %w", err)
 	}
 	policy, _, err := r.policy.LoadPublished(ctx, run.PolicyID)

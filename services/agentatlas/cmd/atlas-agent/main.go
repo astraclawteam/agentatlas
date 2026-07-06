@@ -98,6 +98,7 @@ func run() error {
 	taskRunner.AllowEnqueue(workflow.JobTypeRun)
 
 	metrics := observability.NewMetrics()
+	workflowRuntime.SetMetrics(metrics) // confirm-resume terminal statuses count here
 	shutdownTracing, err := observability.InitTracing(ctx, "atlas-agent")
 	if err != nil {
 		return err

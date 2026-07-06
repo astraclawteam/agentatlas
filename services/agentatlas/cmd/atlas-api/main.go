@@ -112,7 +112,9 @@ func run() error {
 	// audit appends are counted and fail closed on the answer path
 	nexusClient := auditrefs.New(nexusclient.New(cfg.AgentNexus.BaseURL, 30*time.Second), metrics)
 	retrievalSvc := retrieval.NewService(queries, search, embedder, reranker)
+	retrievalSvc.SetMetrics(metrics)
 	traceSvc := trace.NewService(queries)
+	traceSvc.SetMetrics(metrics)
 
 	// Artifact ingestion (upload + job rows + enqueue); processing runs on
 	// atlas-worker, so no parser gateway or summarizer here.

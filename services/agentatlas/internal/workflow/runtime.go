@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	sdkworkflow "github.com/astraclawteam/agentatlas/sdk/go/workflow"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
 )
 
 // Runtime executes published workflow versions as a persisted state machine.
@@ -16,11 +19,16 @@ type Runtime struct {
 	store    Store
 	service  *Service
 	registry Registry
+	metrics  *observability.Metrics
 }
 
 func NewRuntime(store Store, service *Service, registry Registry) *Runtime {
 	return &Runtime{store: store, service: service, registry: registry}
 }
+
+// SetMetrics wires the optional Prometheus surface (WorkflowRuns by terminal
+// status).
+func (r *Runtime) SetMetrics(m *observability.Metrics) { r.metrics = m }
 
 // runState is persisted in workflow_runs.output while a run is in flight.
 type runState struct {
@@ -108,6 +116,10 @@ func (r *Runtime) Resume(ctx context.Context, runID string, approve bool, commen
 }
 
 func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def Definition, order []sdkworkflow.Node, state runState) (string, error) {
+	ctx, span := observability.Tracer("workflow").Start(ctx, "workflow.run")
+	span.SetAttributes(attribute.String("run_id", runID), attribute.String("enterprise_id", enterpriseID), attribute.String("workflow_id", def.WorkflowID))
+	defer span.End()
+
 	runCtx := &RunContext{RunID: runID, EnterpriseID: enterpriseID, Input: state.Input, Outputs: state.Outputs}
 
 	for state.NextIndex < len(order) {
@@ -155,6 +167,12 @@ func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def D
 }
 
 func (r *Runtime) setRunStatus(ctx context.Context, runID, status string, state *runState) error {
+	if r.metrics != nil {
+		switch status {
+		case RunSucceeded, RunFailed, RunCancelled:
+			r.metrics.WorkflowRuns.WithLabelValues(status).Inc()
+		}
+	}
 	var raw []byte
 	if state != nil {
 		var err error
