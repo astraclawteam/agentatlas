@@ -25,6 +25,15 @@ INSERT INTO dream_runs (id, policy_id, version, enterprise_id, status, window_st
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING *;
 
+-- name: GetDreamRun :one
+SELECT * FROM dream_runs WHERE id = $1;
+
+-- name: ClaimDreamRun :execrows
+UPDATE dream_runs SET status = 'running' WHERE id = $1 AND status = 'pending';
+
+-- name: GetLatestDreamRunForPolicy :one
+SELECT * FROM dream_runs WHERE policy_id = $1 ORDER BY window_end DESC LIMIT 1;
+
 -- name: UpdateDreamRunStatus :execrows
 UPDATE dream_runs
 SET status = $2, error = $3,
