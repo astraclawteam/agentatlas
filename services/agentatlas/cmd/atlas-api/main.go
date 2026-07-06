@@ -60,13 +60,21 @@ func run() error {
 		return err
 	}
 
+	// Retrieval mode is explicit: a configured model route gets real bge-m3
+	// embeddings AND rerank; no API key is the keyword-only degraded mode.
 	var embedder retrieval.Embedder
 	var reranker retrieval.Reranker
+	retrievalMode := "keyword_only"
 	if cfg.LLMRouter.APIKey != "" {
 		embedder, err = retrieval.NewLLMRouterEmbedder(cfg.LLMRouter.BaseURL, cfg.LLMRouter.APIKey, "bge-m3")
 		if err != nil {
 			return err
 		}
+		reranker, err = retrieval.NewLLMRouterReranker(cfg.LLMRouter.BaseURL, cfg.LLMRouter.APIKey, cfg.LLMRouter.RerankModel)
+		if err != nil {
+			return err
+		}
+		retrievalMode = "vector+rerank"
 	} else {
 		logger.Warn("llmrouter api key not configured: retrieval runs KEYWORD-ONLY (no vectors, no rerank)")
 	}
@@ -122,7 +130,7 @@ func run() error {
 		zap.String("addr", addr),
 		zap.String("version", app.Version),
 		zap.String("agentnexus", cfg.AgentNexus.BaseURL),
-		zap.Bool("vector_retrieval", embedder != nil),
+		zap.String("retrieval_mode", retrievalMode),
 	)
 	server := &http.Server{Addr: addr, Handler: router, ReadHeaderTimeout: 10 * time.Second}
 	return server.ListenAndServe()
