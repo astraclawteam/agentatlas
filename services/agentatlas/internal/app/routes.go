@@ -14,6 +14,7 @@ import (
 
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/artifacts"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/retrieval"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/tasks"
@@ -36,6 +37,8 @@ type RouterDeps struct {
 	LLM       model.LLM
 	Store     *db.Queries
 	Runner    *tasks.Runner
+	Artifacts *artifacts.Service     // optional; enables POST /v1/artifacts/jobs
+	PlanSteps PlanStepLister         // optional; defaults to Store
 	Metrics   *observability.Metrics // optional; enables /metrics + latency histograms
 }
 
@@ -43,6 +46,12 @@ type RouterDeps struct {
 func NewRouter(deps RouterDeps) *chi.Mux {
 	answer := &answerDeps{nexus: deps.Nexus, retrieval: deps.Retrieval, traces: deps.Traces, llm: deps.LLM}
 	briefs := &briefDeps{nexus: deps.Nexus, store: deps.Store, runner: deps.Runner}
+	artifactsH := &artifactHandler{nexus: deps.Nexus, artifacts: deps.Artifacts}
+	planSteps := deps.PlanSteps
+	if planSteps == nil && deps.Store != nil {
+		planSteps = deps.Store
+	}
+	retrievalH := &retrievalHandler{nexus: deps.Nexus, retrieval: deps.Retrieval, store: planSteps}
 
 	r := chi.NewRouter()
 	if deps.Metrics != nil {
@@ -57,6 +66,8 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	r.Route("/v1", func(r chi.Router) {
 		r.Post("/answer", answer.handleAnswer)
 		r.Post("/work-briefs", briefs.handleIngest)
+		r.Post("/artifacts/jobs", artifactsH.createJob)
+		r.Post("/retrieval/plans", retrievalH.createPlan)
 
 		r.Get("/spaces/{id}", func(w http.ResponseWriter, req *http.Request) {
 			if _, _, err := verifyTicket(req.Context(), deps.Nexus, req); err != nil {

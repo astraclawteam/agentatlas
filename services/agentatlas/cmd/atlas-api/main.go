@@ -114,9 +114,20 @@ func run() error {
 	retrievalSvc := retrieval.NewService(queries, search, embedder, reranker)
 	traceSvc := trace.NewService(queries)
 
+	// Artifact ingestion (upload + job rows + enqueue); processing runs on
+	// atlas-worker, so no parser gateway or summarizer here.
+	objects, err := storage.NewObjectStore(cfg.ObjectStorage)
+	if err != nil {
+		return err
+	}
+	if err := objects.EnsureBucket(ctx); err != nil {
+		return err
+	}
+	artifactSvc := artifacts.NewService(queries, objects, nil, runner, nil)
+
 	router := app.NewRouter(app.RouterDeps{
 		Nexus: nexusClient, Retrieval: retrievalSvc, Traces: traceSvc,
-		LLM: llm, Store: queries, Runner: runner, Metrics: metrics,
+		LLM: llm, Store: queries, Runner: runner, Artifacts: artifactSvc, Metrics: metrics,
 	})
 
 	addr := os.Getenv("ATLAS_API_ADDR")
