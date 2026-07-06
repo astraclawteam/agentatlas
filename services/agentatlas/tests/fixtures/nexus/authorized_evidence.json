@@ -1,0 +1,17 @@
+{
+  "fs://briefs/u_zhang/2026-07-05.md": {
+    "grant_id": "grant_zhang_0705",
+    "content_type": "text/markdown",
+    "sanitized_excerpt": "7 月 5 日：完成 MES 分拣规则联调，遗留接口限流风险，等待平台组方案。"
+  },
+  "fs://briefs/u_zhang/2026-07-06.md": {
+    "grant_id": "grant_zhang_0706",
+    "content_type": "text/markdown",
+    "sanitized_excerpt": "7 月 6 日：复核分拣规则版本差异并输出对照表，准备与平台组对齐限流方案。"
+  },
+  "fs://briefs/u_li/2026-07-06.md": {
+    "grant_id": "grant_li_0706",
+    "content_type": "text/markdown",
+    "sanitized_excerpt": "7 月 6 日：整理 MES 工单模板与设备告警字段映射。"
+  }
+}
