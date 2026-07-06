@@ -363,7 +363,7 @@ func TestAgentAtlasMVP(t *testing.T) {
 	if _, err := policySvc.Publish(ctx, policyID); err != nil {
 		t.Fatal(err)
 	}
-	dreamRunner := dream.NewRunner(q, objects, policySvc, runner)
+	dreamRunner := dream.NewRunner(q, objects, policySvc, runner, nil)
 	if err := dreamRunner.RegisterJobHandler(); err != nil {
 		t.Fatal(err)
 	}
