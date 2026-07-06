@@ -6,11 +6,13 @@ import { DreamTimeline } from "./DreamTimeline";
 import { AtlasWorkflowCanvas } from "./AtlasWorkflowCanvas";
 import { AnswerTraceGraph } from "./AnswerTraceGraph";
 import { AtlasAgentLauncher } from "./AtlasAgentLauncher";
+import { DreamPolicyPanel } from "./DreamPolicyPanel";
 import type { AnswerTraceView, AtlasWorkflow, KnowledgeSpace, TimelineNode } from "./types";
 
 const SURFACES = [
   { key: "map", label: "组织知识地图" },
   { key: "timeline", label: "梦境时间线" },
+  { key: "policies", label: "梦境策略" },
   { key: "workflow", label: "知识工作流" },
   { key: "trace", label: "证据追溯" },
 ] as const;
@@ -68,6 +70,7 @@ export function AgentAtlasDashboard({ spaces, spaceLinks, timeline, workflow, tr
             <DreamTimeline nodes={timeline} />
           </div>
         ) : null}
+        {surface === "policies" ? <DreamPolicyPanel /> : null}
         {surface === "workflow" ? (
           workflow ? (
             <AtlasWorkflowCanvas workflow={workflow} />

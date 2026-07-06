@@ -160,6 +160,78 @@ paths:
                 properties:
                   dream_policy_id: { type: string }
                   status: { type: string, enum: [draft, published] }
+    get:
+      operationId: listDreamPolicies
+      summary: List the enterprise's published dream policies (console policy panel)
+      responses:
+        '200':
+          description: Published policies with decoded definitions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [dream_policies]
+                properties:
+                  dream_policies:
+                    type: array
+                    items:
+                      type: object
+                      required: [dream_policy_id, org_scope, status]
+                      properties:
+                        dream_policy_id: { type: string }
+                        org_scope: { type: string }
+                        status: { type: string }
+                        policy: { type: object }
+  /v1/method-outlines:
+    post:
+      operationId: createMethodOutline
+      summary: Import a method outline (方法大纲 — flexible method structure, indexed for retrieval)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, outline]
+              properties:
+                title: { type: string }
+                outline: { type: object, description: Sections/steps of arbitrary nesting }
+                org_scope: { type: string }
+      responses:
+        '201':
+          description: Outline stored and queued for indexing
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [method_outline_id, title]
+                properties:
+                  method_outline_id: { type: string }
+                  title: { type: string }
+                  org_scope: { type: string }
+    get:
+      operationId: listMethodOutlines
+      summary: List the enterprise's method outlines
+      responses:
+        '200':
+          description: Outlines newest-first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [method_outlines]
+                properties:
+                  method_outlines:
+                    type: array
+                    items:
+                      type: object
+                      required: [method_outline_id, title]
+                      properties:
+                        method_outline_id: { type: string }
+                        title: { type: string }
+                        org_scope: { type: string }
+                        outline: { type: object }
+                        created_at: { type: string, format: date-time }
   /v1/workflows/{id}/runs:
     post:
       operationId: startWorkflowRun

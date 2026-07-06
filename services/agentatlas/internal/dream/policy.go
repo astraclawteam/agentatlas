@@ -158,3 +158,29 @@ func (s *PolicyService) LoadPublished(ctx context.Context, policyID string) (Pol
 	}
 	return p, version.Version, nil
 }
+
+// ListPublished returns the enterprise's published policies with their
+// decoded definitions (admin panel listing).
+func (s *PolicyService) ListPublished(ctx context.Context, enterpriseID string) ([]PublishedPolicy, error) {
+	rows, err := s.store.ListPublishedDreamPolicies(ctx, enterpriseID)
+	if err != nil {
+		return nil, fmt.Errorf("list policies: %w", err)
+	}
+	out := make([]PublishedPolicy, 0, len(rows))
+	for _, row := range rows {
+		var p Policy
+		if err := json.Unmarshal(row.Draft, &p); err != nil {
+			return nil, fmt.Errorf("decode policy %s: %w", row.ID, err)
+		}
+		out = append(out, PublishedPolicy{ID: row.ID, OrgScope: row.OrgScope, Status: row.Status, Policy: p})
+	}
+	return out, nil
+}
+
+// PublishedPolicy pairs a policy row with its decoded definition.
+type PublishedPolicy struct {
+	ID       string `json:"dream_policy_id"`
+	OrgScope string `json:"org_scope"`
+	Status   string `json:"status"`
+	Policy   Policy `json:"policy"`
+}

@@ -8,9 +8,24 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
 )
 
-// dreamPolicyHandler serves Dream Policy creation + publish (versioned).
+// dreamPolicyHandler serves Dream Policy creation + publish (versioned) and
+// the published-policy listing consumed by the console policy panel.
 type dreamPolicyHandler struct {
 	deps AgentRouterDeps
+}
+
+func (h *dreamPolicyHandler) list(w http.ResponseWriter, r *http.Request) {
+	actor, ok := actorFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "no verified actor")
+		return
+	}
+	policies, err := h.deps.Dreams.ListPublished(r.Context(), actor.Ticket.EnterpriseID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"dream_policies": policies})
 }
 
 type createDreamPolicyRequest struct {

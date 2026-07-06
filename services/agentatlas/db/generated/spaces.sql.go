@@ -154,6 +154,30 @@ func (q *Queries) InsertKnowledgeSpaceVersion(ctx context.Context, arg InsertKno
 	return err
 }
 
+const listEnterprises = `-- name: ListEnterprises :many
+SELECT id, name, created_at FROM enterprises ORDER BY created_at
+`
+
+func (q *Queries) ListEnterprises(ctx context.Context) ([]Enterprise, error) {
+	rows, err := q.db.Query(ctx, listEnterprises)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Enterprise
+	for rows.Next() {
+		var i Enterprise
+		if err := rows.Scan(&i.ID, &i.Name, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listKnowledgeSpacesByEnterprise = `-- name: ListKnowledgeSpacesByEnterprise :many
 SELECT id, enterprise_id, kind, name, org_scope, org_version, created_at, updated_at FROM knowledge_spaces WHERE enterprise_id = $1 ORDER BY kind, name
 `

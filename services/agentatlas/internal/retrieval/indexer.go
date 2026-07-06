@@ -2,7 +2,9 @@ package retrieval
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -24,6 +26,7 @@ type IndexStore interface {
 	ListDocumentSummaries(ctx context.Context, atlasDocumentID string) ([]db.DocumentSummary, error)
 	GetTimelineNode(ctx context.Context, id string) (db.TimelineNode, error)
 	GetDreamSummary(ctx context.Context, id string) (db.DreamSummary, error)
+	GetMethodOutline(ctx context.Context, id string) (db.MethodOutline, error)
 }
 
 // Indexer turns index_jobs into per-enterprise OpenSearch documents.
@@ -181,9 +184,61 @@ func (ix *Indexer) collect(ctx context.Context, job db.IndexJob) ([]indexable, e
 			},
 		}}, nil
 
+	case "method_outline":
+		outline, err := ix.store.GetMethodOutline(ctx, job.SourceID)
+		if err != nil {
+			return nil, fmt.Errorf("method outline %s: %w", job.SourceID, err)
+		}
+		summary := truncateRunes(outline.Title+"："+flattenOutline(outline.Outline), 1000)
+		return []indexable{{
+			id: outline.ID,
+			doc: IndexDocument{
+				EnterpriseID: outline.EnterpriseID, OrgScope: outline.OrgScope,
+				SourceType: "method_outline", SummaryText: summary,
+				SanitizedSnippet: summary,
+				NodeTime:         timePtr(outline.CreatedAt.Time),
+			},
+		}}, nil
+
 	default:
 		return nil, fmt.Errorf("unknown index source type %q", job.SourceType)
 	}
+}
+
+// flattenOutline renders the jsonb outline (sections/steps of arbitrary
+// nesting) into searchable text.
+func flattenOutline(raw []byte) string {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return string(raw)
+	}
+	var parts []string
+	var walk func(any)
+	walk = func(node any) {
+		switch t := node.(type) {
+		case string:
+			if s := strings.TrimSpace(t); s != "" {
+				parts = append(parts, s)
+			}
+		case []any:
+			for _, item := range t {
+				walk(item)
+			}
+		case map[string]any:
+			for _, key := range []string{"title", "name", "text", "summary"} {
+				if s, ok := t[key].(string); ok && strings.TrimSpace(s) != "" {
+					parts = append(parts, strings.TrimSpace(s))
+				}
+			}
+			for _, key := range []string{"sections", "steps", "items", "children"} {
+				if child, ok := t[key]; ok {
+					walk(child)
+				}
+			}
+		}
+	}
+	walk(v)
+	return strings.Join(parts, "；")
 }
 
 func timePtr(t time.Time) *time.Time {
