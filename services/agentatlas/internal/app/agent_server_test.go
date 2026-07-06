@@ -52,8 +52,9 @@ func TestAgentServerHealthAndTicketGuard(t *testing.T) {
 	if got := call("tick_invalid"); got != http.StatusUnauthorized {
 		t.Fatalf("invalid ticket = %d, want 401", got)
 	}
-	// valid ticket passes the guard (handler itself lands with Goal B4)
-	if got := call("tick_admin"); got != http.StatusNotImplemented {
-		t.Fatalf("authed = %d, want 501 until B4", got)
+	// valid ticket passes the guard; with no Agent runner configured the real
+	// handler (Goal B4) answers 503 — the point here is it is NOT 401.
+	if got := call("tick_admin"); got != http.StatusServiceUnavailable {
+		t.Fatalf("authed = %d, want 503 (guard passed, agent unconfigured)", got)
 	}
 }

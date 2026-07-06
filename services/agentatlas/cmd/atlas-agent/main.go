@@ -79,6 +79,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// Runtime for confirmation resumes; the real executor registry replaces
+	// NewRegistry() with Goal B5.
+	workflowRuntime := workflow.NewRuntime(queries, workflowSvc, workflow.NewRegistry())
 	dreamPolicies := dream.NewPolicyService(queries)
 
 	metrics := observability.NewMetrics()
@@ -93,7 +96,7 @@ func run() error {
 
 	router := app.NewAgentRouter(app.AgentRouterDeps{
 		Nexus: nexusClient, Agent: agentRunner, Workflows: workflowSvc,
-		Dreams: dreamPolicies, Store: queries, Metrics: metrics,
+		Runtime: workflowRuntime, Dreams: dreamPolicies, Store: queries, Metrics: metrics,
 	})
 
 	addr := os.Getenv("ATLAS_AGENT_ADDR")
