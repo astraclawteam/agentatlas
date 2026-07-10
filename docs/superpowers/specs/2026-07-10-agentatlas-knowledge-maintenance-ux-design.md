@@ -78,11 +78,46 @@ AgentAtlas 有两种进入方式，但共享同一权限和版本体系。
 | 界面名称 | 技术对象 | 默认能力 |
 |---|---|---|
 | 企业知识 | Knowledge Space、SOP、资料 | 浏览、搜索、新建、修改、导入、审核 |
-| 工作记忆 | Memory Timeline、Dream Summary | 查看组织工作变化、摘要和风险信号 |
+| 企业梦境 | Dream Policy、Dream Run、Dream Summary | 逐级查看组织运行记录如何被蒸馏为企业记忆 |
 | 做事流程 | Knowledge Workflow | 查看和维护 SOP 步骤；高级模式进入 FlowGram |
 | 回答依据 | Answer Trace、Evidence Pointer | 查看回答用了哪些知识和证据 |
 
 基础模式不显示解析 Provider、索引、内部 ID、节点类型和诊断信息。高级维护模式只对具备权限的服务商或指定高级维护人员显示。
+
+### 4.1 企业梦境不是普通摘要
+
+Dream 是 AgentAtlas 的组织记忆蒸馏机制。它按企业设计好的工作流，持续把员工、项目组、部门、事业部和公司各层级的运行记录，逐级整理成可检索、可追溯、可治理的企业记忆。
+
+```text
+员工运行记录与工作记忆
+  → 项目组 Dream Summary
+  → 部门 Dream Summary
+  → 事业部 Dream Summary
+  → 公司 Dream Summary
+```
+
+默认上卷规则是“下一级已脱敏 Dream Summary 优先”：上级 Dream 消费下级已经完成范围收敛、脱敏和可见性判断的摘要，而不是默认汇集所有员工原始记录。只有异常调查、风险追溯或具有明确授权的审计任务，才能通过 AgentNexus 获取短期 Step Grant，沿证据指针下钻到原始材料。
+
+每次 Dream 运行至少完成：
+
+1. 固定时间窗口、组织范围和输入快照。
+2. 合并本层运行记录和已发布的下级 Dream Summary。
+3. 在模型调用前执行字段级脱敏和可见性收敛。
+4. 提取事实、主题、趋势、风险、待办和缺失输入。
+5. 生成展示摘要、检索摘要和密封详情指针三层输出。
+6. 保存输入血缘、策略版本、工作流版本、模型版本、证据指针和上级可消费关系。
+7. 根据策略自动发布、等待确认或进入复核队列。
+
+Dream 产物是某一时间窗口和策略版本的不可变运行结果。用户不能直接改写历史摘要；可以确认、驳回、添加批注、标记错误、修改后续策略、重新运行，或在有权限时追溯证据。这样历史判断和审计链不会被事后覆盖。
+
+### 4.2 企业梦境的四个视图
+
+- **梦境全景**：按员工、项目组、部门、事业部和公司展示层级关系，以及最近运行、覆盖率、新鲜度、缺失输入和风险数量。
+- **梦境时间线**：按组织层级和时间窗口展示摘要、趋势、风险、待办及其状态；历史结果只读。
+- **梦境工作流**：基础模式用人话向导配置范围、频率、输入、输出和是否需要确认；高级维护模式使用 FlowGram 编辑完整 Dream Workflow。
+- **运行与追溯**：展示本次输入组织、下级摘要、策略和工作流版本、输出层、失败步骤、证据链与审计记录；敏感证据下钻必须再次授权。
+
+“工作记忆”保留为员工或低层组织的输入/输出对象名称，不再作为整个 Dream 机制的顶层产品名称。
 
 ## 5. 常态首页
 
@@ -275,8 +310,8 @@ AgentAtlas 通过自己的适配层向共享聊天 UI 传入 `messages`、`onSen
 |---|---|
 | `AgentAtlasDashboard` | 新的统一产品壳：四个工作面、组织范围、权限感知导航、顶部 Agent 按钮和用户会话 |
 | `KnowledgeMap` | “企业知识”中的只读组织知识图视图，不作为低电脑能力用户的默认首页 |
-| `DreamTimeline` | 重构为“工作记忆”，使用业务语言展示时间线、组织摘要和风险信号 |
-| `DreamPolicyPanel` | 重构为基础汇总策略向导；cron、原始规则和运行诊断只在高级维护模式显示 |
+| `DreamTimeline` | 拆分为“梦境全景”和“梦境时间线”，展示逐级蒸馏关系、摘要、趋势、风险、待办、覆盖率和新鲜度 |
+| `DreamPolicyPanel` | 重构为“梦境工作流”基础向导；cron、原始规则、FlowGram 和运行诊断只在高级维护模式显示 |
 | `WorkflowStudio` | 拆分为工作流列表、结构化 SOP 基础编辑器和 FlowGram 高级编辑器 |
 | `AtlasWorkflowCanvas` | 保留为 FlowGram 封装边界，重做节点、工具栏、状态和空页面的家族视觉 |
 | `AnswerTraceGraph` | 重构为“回答依据”：先显示人话摘要和来源清单，需要时展开 React Flow 只读证据图 |
@@ -291,7 +326,34 @@ AgentAtlas 通过自己的适配层向共享聊天 UI 传入 `messages`、`onSen
 - 空状态、加载、保存失败、无权限和发布结果必须采用同一套家族反馈组件。
 - 旧页面只有在对应新页面通过功能与视觉验收后才能删除；迁移期通过路由或 feature flag 切换，不在同一页面混用两种设计系统。
 
-### 11.6 现有工作流迁移与双编辑器策略
+### 11.6 Dream 运行时与 Console 迁移
+
+现有 Dream 代码已经具备策略版本、定时运行、幂等运行号、运行输入、三层摘要、对象存储和时间线基础，但当前 Runner 只读取输出组织的直属成员 `work_brief`，并由硬编码聚合器直接生成摘要。现有 `dream.aggregate` 工作流节点尚未成为定时运行的权威执行路径，策略创建接口也把“创建草稿”和“发布”合并成了一次操作。
+
+迁移后必须形成单一权威 Dream 执行模型：
+
+```text
+Published DreamPolicyVersion
+  → pinned DreamWorkflowVersion
+  → immutable DreamRun(input snapshot + visibility snapshot)
+  → DreamSummary(display + retrieval + sealed pointer)
+  → parent organization input or governed evidence drill-down
+```
+
+后端需要补齐：
+
+- 按组织树深度调度，只有下级窗口完成或明确标记缺失后，上级窗口才可运行。
+- `work_brief`、项目记录、SOP 变更、Agent 回答、外部证据、已完成任务、风险事件和下级 Dream Summary 的输入解析器。
+- 策略草稿、检查、发布、停用、手工重跑和回填生命周期；发布与高风险变更进入统一治理流程。
+- 绑定并执行固定版本 Dream Workflow，移除 Scheduler 到硬编码聚合器的旁路。
+- 结构化保存 trends、todos、coverage、missing inputs、parent/child run lineage、visibility snapshot、previous state 和失败步骤。
+- 企业时区、最大重试次数、并发窗口、幂等重跑和部分输入失败语义。
+- Dream 专用公共 API Schema；Console 和 Enterprise 集成不得依赖 Go `internal/dream.Policy`。
+- 每次运行及证据下钻写入 Answer Trace 和审计；AgentNexus 不可用或审计失败时敏感读取失败闭合。
+
+前端不再把 Dream 做成平铺摘要列表或原始 cron/正则表单。基础模式优先解释“正在整理哪个组织、用了哪些下级记忆、当前结果是否完整、接下来谁需要处理”；高级维护模式才展示节点、原始规则、调度表达式和诊断数据。
+
+### 11.7 现有工作流迁移与双编辑器策略
 
 现有 `WorkflowStudio` 和 `AtlasWorkflowCanvas` 保留其公共 Workflow Schema 与 FlowGram 封装价值，但不能原样作为最终普通用户编辑体验。
 
@@ -421,7 +483,8 @@ AgentAtlas 通过自己的适配层向共享聊天 UI 传入 `messages`、`onSen
 
 - `@xiaozhiclaw/runtime-ui` 在小智和 AgentAtlas 中运行同一套组件测试和视觉回归。
 - AgentAtlas Console 不再导入 `@agentatlas/claw-runtime-ui`，仓库中不存在复制的 tokens 或聊天组件源码。
-- 首页、工作记忆、基础策略、基础 SOP、FlowGram 高级画布和回答依据全部通过家族设计视觉回归。
+- 首页、梦境全景、梦境时间线、梦境工作流、基础 SOP、FlowGram 高级画布和回答依据全部通过家族设计视觉回归。
+- Dream 自底向上运行顺序、下级脱敏摘要优先、缺失输入、授权证据下钻、不可变运行结果和重跑血缘均有集成测试。
 - `AtlasWorkflow ↔ WorkflowJSON` 双向 round-trip 覆盖全部节点类型、条件、配置和 Schema 字段。
 - 登录整页跳转、回调、原页面恢复和退出 E2E。
 - 权限矩阵、风险判定、组织向上审批和无复核人回退测试。
@@ -435,7 +498,7 @@ AgentAtlas 通过自己的适配层向共享聊天 UI 传入 `messages`、`onSen
 
 1. `xiaozhiclaw-runtime`：建立 `@xiaozhiclaw/runtime-ui` 并让小智自身消费。
 2. AgentNexus：新增 Browser Session、OIDC/PKCE、组织范围权限和向上审批公共契约。
-3. AgentAtlas 后端：建议、草稿、风险判定、版本、复核和幂等发布能力。
-4. AgentAtlas Console：重构现有产品壳和全部工作面，交付首页、知识编辑、工作记忆、基础策略、双工作流编辑器、回答依据、检查发布、Atlas 助手和高级维护模式。
+3. AgentAtlas 后端：Dream 分层蒸馏运行时，以及建议、草稿、风险判定、版本、复核和幂等发布能力。
+4. AgentAtlas Console：重构现有产品壳和全部工作面，交付首页、知识编辑、梦境全景、梦境时间线、梦境工作流、运行与追溯、双工作流编辑器、回答依据、检查发布、Atlas 助手和高级维护模式。
 
 四个工作流不得通过跨仓深层源码引用连接，只能依赖已发布包和公共 API 契约。
