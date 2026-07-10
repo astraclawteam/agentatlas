@@ -267,6 +267,68 @@ AgentAtlas 通过自己的适配层向共享聊天 UI 传入 `messages`、`onSen
 - 图标统一使用 Lucide React，保持一致尺寸、stroke、round cap/join。
 - 禁止 Emoji 充当产品功能图标，禁止硬编码系统蓝绿红，禁止复制一套近似 tokens。
 
+### 11.5 现有 Console 全量重构
+
+本设计不是在现有 Console 旁边增加一套新页面。现有前端全部工作面必须迁入已确认的信息架构、共享组件和 Warm Paper × Glass 家族设计；迁移完成后不得长期保留新旧两套壳、tokens、聊天组件或视觉实现。
+
+| 现有组件 | 重构后的定位 |
+|---|---|
+| `AgentAtlasDashboard` | 新的统一产品壳：四个工作面、组织范围、权限感知导航、顶部 Agent 按钮和用户会话 |
+| `KnowledgeMap` | “企业知识”中的只读组织知识图视图，不作为低电脑能力用户的默认首页 |
+| `DreamTimeline` | 重构为“工作记忆”，使用业务语言展示时间线、组织摘要和风险信号 |
+| `DreamPolicyPanel` | 重构为基础汇总策略向导；cron、原始规则和运行诊断只在高级维护模式显示 |
+| `WorkflowStudio` | 拆分为工作流列表、结构化 SOP 基础编辑器和 FlowGram 高级编辑器 |
+| `AtlasWorkflowCanvas` | 保留为 FlowGram 封装边界，重做节点、工具栏、状态和空页面的家族视觉 |
+| `AnswerTraceGraph` | 重构为“回答依据”：先显示人话摘要和来源清单，需要时展开 React Flow 只读证据图 |
+| `AtlasAgentPanel` | 删除独立实现，改为顶部 Agent 按钮 + `@xiaozhiclaw/runtime-ui` 的 DockedPanel、消息流和 PromptInput |
+| `packages/claw-runtime-ui` | 完成共享包迁移后删除，改用 `@xiaozhiclaw/runtime-ui` |
+
+重构要求：
+
+- 所有页面使用共享 tokens、字体、按钮、输入、菜单、Dialog、消息流和图标规范。
+- 页面不再要求用户粘贴管理员票据；身份来自 AgentNexus Browser Session。
+- 基础模式不出现内部 ID、英文节点类型、cron、原始 JSON、索引名和 Provider 配置。
+- 空状态、加载、保存失败、无权限和发布结果必须采用同一套家族反馈组件。
+- 旧页面只有在对应新页面通过功能与视觉验收后才能删除；迁移期通过路由或 feature flag 切换，不在同一页面混用两种设计系统。
+
+### 11.6 现有工作流迁移与双编辑器策略
+
+现有 `WorkflowStudio` 和 `AtlasWorkflowCanvas` 保留其公共 Workflow Schema 与 FlowGram 封装价值，但不能原样作为最终普通用户编辑体验。
+
+当前实现的迁移基线：
+
+- `WorkflowStudio` 主要通过节点目录、线性 `appendNode/removeNode` 和步骤标签修改 React 状态。
+- `AtlasWorkflowCanvas` 已有 `onExport` 能力，但当前 `WorkflowStudio` 未接入，画布内拖动和连线修改没有进入保存状态。
+- 当前保存调用会创建新工作流，缺少加载现有草稿、更新草稿、并发版本和差异接口。
+- 当前发布按钮直接调用发布 API，尚未进入本设计的风险检查和向上审批流程。
+
+最终提供两个编辑器，但只使用一个权威 `AtlasWorkflow` 文档：
+
+```text
+普通维护者
+  → SOPStructuredEditor
+  → 人话步骤、顺序、证据、确认点
+  → 编译为 AtlasWorkflow Schema
+
+服务商或高级维护者
+  → AdvancedWorkflowStudio
+  → FlowGram 节点、边、条件和配置
+  → 导出为同一个 AtlasWorkflow Schema
+```
+
+兼容与防丢失规则：
+
+- 线性 SOP 可以在结构化基础编辑器中完整修改。
+- 存在分支、条件或基础编辑器不支持节点的工作流，在基础模式只显示结构化摘要和只读步骤。
+- 基础编辑器不得把高级工作流静默压平为线性流程。
+- 进入 FlowGram 前必须具备 `workflow_advanced` 权限。
+- 实现 `AtlasWorkflow → WorkflowJSON` 与 `WorkflowJSON → AtlasWorkflow` 双向转换。
+- round-trip 测试必须证明 `config`、edge condition、确认点、风险级别、变量和输入输出 Schema 不丢失。
+- 编辑已发布版本时创建新草稿版本，不修改历史版本。
+- 工作流发布统一进入“检查并发布/提交复核”页面，移除基础模式中的直接发布动作。
+
+后端需要补充工作流列表、详情读取、基于版本创建草稿、更新草稿、乐观并发、草稿差异、风险检查、审批和幂等发布契约。现有已发布工作流不进行破坏性重写；首次编辑时从指定已发布版本创建新草稿。
+
 ## 12. 端到端数据流
 
 ### 12.1 直接维护
@@ -358,6 +420,9 @@ AgentAtlas 通过自己的适配层向共享聊天 UI 传入 `messages`、`onSen
 ### 15.2 工程验证
 
 - `@xiaozhiclaw/runtime-ui` 在小智和 AgentAtlas 中运行同一套组件测试和视觉回归。
+- AgentAtlas Console 不再导入 `@agentatlas/claw-runtime-ui`，仓库中不存在复制的 tokens 或聊天组件源码。
+- 首页、工作记忆、基础策略、基础 SOP、FlowGram 高级画布和回答依据全部通过家族设计视觉回归。
+- `AtlasWorkflow ↔ WorkflowJSON` 双向 round-trip 覆盖全部节点类型、条件、配置和 Schema 字段。
 - 登录整页跳转、回调、原页面恢复和退出 E2E。
 - 权限矩阵、风险判定、组织向上审批和无复核人回退测试。
 - 草稿自动保存、并发冲突、幂等发布和审计失败闭合测试。
@@ -371,6 +436,6 @@ AgentAtlas 通过自己的适配层向共享聊天 UI 传入 `messages`、`onSen
 1. `xiaozhiclaw-runtime`：建立 `@xiaozhiclaw/runtime-ui` 并让小智自身消费。
 2. AgentNexus：新增 Browser Session、OIDC/PKCE、组织范围权限和向上审批公共契约。
 3. AgentAtlas 后端：建议、草稿、风险判定、版本、复核和幂等发布能力。
-4. AgentAtlas Console：首页、知识编辑、检查发布、Atlas 助手和高级维护模式。
+4. AgentAtlas Console：重构现有产品壳和全部工作面，交付首页、知识编辑、工作记忆、基础策略、双工作流编辑器、回答依据、检查发布、Atlas 助手和高级维护模式。
 
 四个工作流不得通过跨仓深层源码引用连接，只能依赖已发布包和公共 API 契约。
