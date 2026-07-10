@@ -327,3 +327,216 @@ components:
           properties:
             max_attempts: { type: integer, default: 3 }
             backoff_seconds: { type: integer, default: 300 }
+    WorkflowRef:
+      type: object
+      required: [id, version]
+      properties:
+        id: { type: string }
+        version: { type: integer, minimum: 1 }
+    DreamPolicy:
+      type: object
+      required:
+        - org_unit_id
+        - timezone
+        - schedule
+        - input_sources
+        - workflow
+        - output_space_id
+        - visibility_level
+        - masking_rules
+        - risk_signal_rules
+        - evidence_retention
+        - confirmation_mode
+        - max_attempts
+      properties:
+        org_unit_id: { type: string }
+        timezone: { type: string }
+        schedule: { type: string, description: Cron expression evaluated in the named timezone }
+        input_sources:
+          type: array
+          items:
+            type: string
+            enum:
+              - work_brief
+              - child_dream_summary
+              - project_record
+              - sop_update
+              - agent_answer
+              - external_evidence
+              - completed_task
+              - risk_event
+            x-enum-varnames:
+              - DreamSourceWorkBrief
+              - DreamSourceChildDreamSummary
+              - DreamSourceProjectRecord
+              - DreamSourceSOPUpdate
+              - DreamSourceAgentAnswer
+              - DreamSourceExternalEvidence
+              - DreamSourceCompletedTask
+              - DreamSourceRiskEvent
+        workflow: { $ref: '#/components/schemas/WorkflowRef' }
+        output_space_id: { type: string }
+        visibility_level:
+          type: string
+          enum: [members, managers, company_sanitized]
+          x-enum-varnames: [DreamVisibilityMembers, DreamVisibilityManagers, DreamVisibilityCompanySanitized]
+        masking_rules:
+          type: array
+          items: { type: string }
+        risk_signal_rules:
+          type: array
+          items: { type: string }
+        evidence_retention:
+          type: string
+          enum: [pointer_only, pointer_plus_display_summary]
+          x-enum-varnames: [DreamEvidencePointerOnly, DreamEvidencePointerPlusDisplaySummary]
+        confirmation_mode:
+          type: string
+          enum: [always, high_risk_only, never]
+          x-enum-varnames: [DreamConfirmationAlways, DreamConfirmationHighRiskOnly, DreamConfirmationNever]
+        max_attempts: { type: integer, minimum: 1 }
+    DreamSummary:
+      type: object
+      required:
+        - display_summary
+        - retrieval_summary
+        - sealed_detail_pointer
+        - facts
+        - themes
+        - trends
+        - risks
+        - todos
+        - coverage
+        - missing_inputs
+        - evidence_pointer_id
+      properties:
+        display_summary: { type: string }
+        retrieval_summary: { type: string }
+        sealed_detail_pointer: { type: string }
+        facts:
+          type: array
+          items: { type: object, additionalProperties: true }
+        themes:
+          type: array
+          items: { type: object, additionalProperties: true }
+        trends:
+          type: array
+          items: { type: object, additionalProperties: true }
+        risks:
+          type: array
+          items: { type: object, additionalProperties: true }
+        todos:
+          type: array
+          items: { type: object, additionalProperties: true }
+        coverage: { type: object, additionalProperties: true }
+        missing_inputs:
+          type: array
+          items: { type: object, additionalProperties: true }
+        evidence_pointer_id: { type: string }
+    DreamRun:
+      type: object
+      required:
+        - run_id
+        - status
+        - org_unit_id
+        - window_start
+        - window_end
+        - policy_version
+        - workflow_id
+        - workflow_version
+        - input_snapshot
+        - visibility_snapshot
+        - parent_run_ids
+        - model_route
+        - model_version
+        - attempt
+        - coverage
+        - missing_inputs
+        - summaries
+        - idempotency_key
+      properties:
+        run_id: { type: string }
+        status:
+          type: string
+          enum: [pending, running, succeeded, failed]
+          x-enum-varnames: [DreamRunPending, DreamRunRunning, DreamRunSucceeded, DreamRunFailed]
+        org_unit_id: { type: string }
+        window_start: { type: string, format: date-time }
+        window_end: { type: string, format: date-time }
+        policy_version: { type: integer, minimum: 1 }
+        workflow_id: { type: string }
+        workflow_version: { type: integer, minimum: 1 }
+        input_snapshot: { type: object, additionalProperties: true }
+        visibility_snapshot: { type: object, additionalProperties: true }
+        parent_run_ids:
+          type: array
+          items: { type: string }
+        model_route: { type: string }
+        model_version: { type: string }
+        attempt: { type: integer, minimum: 1 }
+        coverage: { type: object, additionalProperties: true }
+        missing_inputs:
+          type: array
+          items: { type: object, additionalProperties: true }
+        summaries:
+          type: array
+          items: { $ref: '#/components/schemas/DreamSummary' }
+        rerun_of_run_id: { type: string }
+        idempotency_key: { type: string }
+    ChangeDraft:
+      type: object
+      required:
+        - enterprise_id
+        - org_unit_id
+        - resource_type
+        - resource_id
+        - action
+        - requester_user_id
+        - revision
+        - state
+        - base_version
+        - proposed_content
+        - created_at
+        - updated_at
+      properties:
+        enterprise_id: { type: string }
+        org_unit_id: { type: string }
+        resource_type: { type: string }
+        resource_id: { type: string }
+        action: { type: string }
+        requester_user_id: { type: string }
+        revision: { type: integer, minimum: 1 }
+        state: { type: string }
+        base_version: { type: integer, minimum: 0 }
+        proposed_content: { type: object, additionalProperties: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    PublishDecision:
+      type: object
+      required:
+        - risk_level
+        - risk_reasons
+        - mode
+        - requester_user_id
+        - org_path
+        - state
+        - idempotency_key
+      properties:
+        risk_level:
+          type: string
+          enum: [low, medium, high]
+          x-enum-varnames: [PublishRiskLow, PublishRiskMedium, PublishRiskHigh]
+        risk_reasons:
+          type: array
+          items: { type: string }
+        mode:
+          type: string
+          enum: [single_confirmation, upward_review, enterprise_knowledge_admin_queue]
+          x-enum-varnames: [PublishModeSingleConfirmation, PublishModeUpwardReview, PublishModeEnterpriseKnowledgeAdminQueue]
+        requester_user_id: { type: string }
+        reviewer_user_id: { type: string }
+        org_path:
+          type: array
+          items: { type: string }
+        state: { type: string }
+        idempotency_key: { type: string }

@@ -3,3 +3,5 @@ package: agentapi
 output: api/openapi/gen/agent/types.gen.go
 generate:
   models: true
+output-options:
+  skip-prune: true

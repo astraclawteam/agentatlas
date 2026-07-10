@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -16,6 +17,321 @@ import (
 	runtimeapi "github.com/astraclawteam/agentatlas/services/agentatlas/api/openapi/gen/runtime"
 )
 
+func TestAgentContractIncludesDreamAndGovernanceSchemas(t *testing.T) {
+	openAPI, err := os.ReadFile(filepath.Join("..", "..", "api", "openapi", "atlas-agent.yaml"))
+	if err != nil {
+		t.Fatalf("read atlas agent OpenAPI: %v", err)
+	}
+
+	var document map[string]any
+	if err := yaml.Unmarshal(openAPI, &document); err != nil {
+		t.Fatalf("parse atlas agent OpenAPI: %v", err)
+	}
+	schemas := nestedMap(t, document, "components", "schemas")
+
+	t.Run("WorkflowRef", func(t *testing.T) {
+		schema := namedSchema(t, schemas, "WorkflowRef")
+		assertObjectProperties(t, schema, []string{"id", "version"}, nil)
+		assertPropertyType(t, schema, "id", "string")
+		assertPositiveInteger(t, schema, "version")
+	})
+
+	t.Run("DreamPolicy", func(t *testing.T) {
+		schema := namedSchema(t, schemas, "DreamPolicy")
+		assertObjectProperties(t, schema, []string{
+			"org_unit_id", "timezone", "schedule", "input_sources", "workflow",
+			"output_space_id", "visibility_level", "masking_rules", "risk_signal_rules",
+			"evidence_retention", "confirmation_mode", "max_attempts",
+		}, nil)
+		assertPropertyType(t, schema, "org_unit_id", "string")
+		assertPropertyType(t, schema, "timezone", "string")
+		assertPropertyType(t, schema, "schedule", "string")
+		assertArrayItemEnum(t, schema, "input_sources", []any{
+			"work_brief", "child_dream_summary", "project_record", "sop_update",
+			"agent_answer", "external_evidence", "completed_task", "risk_event",
+		})
+		assertRef(t, property(t, schema, "workflow"), "#/components/schemas/WorkflowRef")
+		assertPropertyType(t, schema, "output_space_id", "string")
+		assertEnum(t, property(t, schema, "visibility_level"), []any{"members", "managers", "company_sanitized"})
+		assertStringArray(t, schema, "masking_rules")
+		assertStringArray(t, schema, "risk_signal_rules")
+		assertEnum(t, property(t, schema, "evidence_retention"), []any{"pointer_only", "pointer_plus_display_summary"})
+		assertEnum(t, property(t, schema, "confirmation_mode"), []any{"always", "high_risk_only", "never"})
+		assertPositiveInteger(t, schema, "max_attempts")
+	})
+
+	t.Run("DreamSummary", func(t *testing.T) {
+		schema := namedSchema(t, schemas, "DreamSummary")
+		assertObjectProperties(t, schema, []string{
+			"display_summary", "retrieval_summary", "sealed_detail_pointer", "facts",
+			"themes", "trends", "risks", "todos", "coverage", "missing_inputs",
+			"evidence_pointer_id",
+		}, nil)
+		assertPropertyType(t, schema, "display_summary", "string")
+		assertPropertyType(t, schema, "retrieval_summary", "string")
+		assertPropertyType(t, schema, "sealed_detail_pointer", "string")
+		for _, name := range []string{"facts", "themes", "trends", "risks", "todos", "missing_inputs"} {
+			assertObjectArray(t, schema, name)
+		}
+		assertOpenObject(t, property(t, schema, "coverage"))
+		assertPropertyType(t, schema, "evidence_pointer_id", "string")
+	})
+
+	t.Run("DreamRun", func(t *testing.T) {
+		schema := namedSchema(t, schemas, "DreamRun")
+		assertObjectProperties(t, schema, []string{
+			"run_id", "status", "org_unit_id", "window_start", "window_end", "policy_version",
+			"workflow_id", "workflow_version", "input_snapshot", "visibility_snapshot",
+			"parent_run_ids", "model_route", "model_version", "attempt", "coverage",
+			"missing_inputs", "summaries", "idempotency_key",
+		}, []string{"rerun_of_run_id"})
+		assertPropertyType(t, schema, "run_id", "string")
+		assertEnum(t, property(t, schema, "status"), []any{"pending", "running", "succeeded", "failed"})
+		assertPropertyType(t, schema, "org_unit_id", "string")
+		assertDateTime(t, schema, "window_start")
+		assertDateTime(t, schema, "window_end")
+		assertPositiveInteger(t, schema, "policy_version")
+		assertPropertyType(t, schema, "workflow_id", "string")
+		assertPositiveInteger(t, schema, "workflow_version")
+		assertOpenObject(t, property(t, schema, "input_snapshot"))
+		assertOpenObject(t, property(t, schema, "visibility_snapshot"))
+		assertStringArray(t, schema, "parent_run_ids")
+		assertPropertyType(t, schema, "model_route", "string")
+		assertPropertyType(t, schema, "model_version", "string")
+		assertPositiveInteger(t, schema, "attempt")
+		assertOpenObject(t, property(t, schema, "coverage"))
+		assertObjectArray(t, schema, "missing_inputs")
+		assertRefArray(t, schema, "summaries", "#/components/schemas/DreamSummary")
+		assertPropertyType(t, schema, "rerun_of_run_id", "string")
+		assertPropertyType(t, schema, "idempotency_key", "string")
+	})
+
+	t.Run("ChangeDraft", func(t *testing.T) {
+		schema := namedSchema(t, schemas, "ChangeDraft")
+		assertObjectProperties(t, schema, []string{
+			"enterprise_id", "org_unit_id", "resource_type", "resource_id", "action",
+			"requester_user_id", "revision", "state", "base_version", "proposed_content",
+			"created_at", "updated_at",
+		}, nil)
+		for _, name := range []string{
+			"enterprise_id", "org_unit_id", "resource_type", "resource_id", "action",
+			"requester_user_id", "state",
+		} {
+			assertPropertyType(t, schema, name, "string")
+		}
+		assertPositiveInteger(t, schema, "revision")
+		assertNonNegativeInteger(t, schema, "base_version")
+		assertOpenObject(t, property(t, schema, "proposed_content"))
+		assertDateTime(t, schema, "created_at")
+		assertDateTime(t, schema, "updated_at")
+	})
+
+	t.Run("PublishDecision", func(t *testing.T) {
+		schema := namedSchema(t, schemas, "PublishDecision")
+		assertObjectProperties(t, schema, []string{
+			"risk_level", "risk_reasons", "mode", "requester_user_id", "org_path", "state",
+			"idempotency_key",
+		}, []string{"reviewer_user_id"})
+		assertEnum(t, property(t, schema, "risk_level"), []any{"low", "medium", "high"})
+		assertStringArray(t, schema, "risk_reasons")
+		assertEnum(t, property(t, schema, "mode"), []any{
+			"single_confirmation", "upward_review", "enterprise_knowledge_admin_queue",
+		})
+		assertPropertyType(t, schema, "requester_user_id", "string")
+		assertPropertyType(t, schema, "reviewer_user_id", "string")
+		assertStringArray(t, schema, "org_path")
+		assertPropertyType(t, schema, "state", "string")
+		assertPropertyType(t, schema, "idempotency_key", "string")
+	})
+}
+
+func nestedMap(t *testing.T, root map[string]any, path ...string) map[string]any {
+	t.Helper()
+	current := root
+	for _, key := range path {
+		value, ok := current[key]
+		if !ok {
+			t.Fatalf("OpenAPI missing %s", key)
+		}
+		current, ok = value.(map[string]any)
+		if !ok {
+			t.Fatalf("OpenAPI %s is %T, want object", key, value)
+		}
+	}
+	return current
+}
+
+func namedSchema(t *testing.T, schemas map[string]any, name string) map[string]any {
+	t.Helper()
+	value, ok := schemas[name]
+	if !ok {
+		t.Fatalf("contract missing schema %s", name)
+	}
+	schema, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("schema %s is %T, want object", name, value)
+	}
+	assertType(t, schema, "object")
+	return schema
+}
+
+func assertObjectProperties(t *testing.T, schema map[string]any, required, optional []string) {
+	t.Helper()
+	properties := nestedMap(t, schema, "properties")
+	wantProperties := append(append([]string(nil), required...), optional...)
+	sort.Strings(wantProperties)
+	gotProperties := make([]string, 0, len(properties))
+	for name := range properties {
+		gotProperties = append(gotProperties, name)
+	}
+	sort.Strings(gotProperties)
+	if !reflect.DeepEqual(gotProperties, wantProperties) {
+		t.Fatalf("properties = %v, want %v", gotProperties, wantProperties)
+	}
+
+	gotRequired, ok := schema["required"].([]any)
+	if !ok {
+		t.Fatalf("required is %T, want array", schema["required"])
+	}
+	gotRequiredNames := make([]string, 0, len(gotRequired))
+	for _, value := range gotRequired {
+		name, ok := value.(string)
+		if !ok {
+			t.Fatalf("required value is %T, want string", value)
+		}
+		gotRequiredNames = append(gotRequiredNames, name)
+	}
+	sort.Strings(gotRequiredNames)
+	wantRequired := append([]string(nil), required...)
+	sort.Strings(wantRequired)
+	if !reflect.DeepEqual(gotRequiredNames, wantRequired) {
+		t.Fatalf("required = %v, want %v", gotRequiredNames, wantRequired)
+	}
+}
+
+func property(t *testing.T, schema map[string]any, name string) map[string]any {
+	t.Helper()
+	properties := nestedMap(t, schema, "properties")
+	value, ok := properties[name]
+	if !ok {
+		t.Fatalf("property missing %s", name)
+	}
+	propertySchema, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("property %s is %T, want object", name, value)
+	}
+	return propertySchema
+}
+
+func assertPropertyType(t *testing.T, schema map[string]any, name, want string) {
+	t.Helper()
+	assertType(t, property(t, schema, name), want)
+}
+
+func assertType(t *testing.T, schema map[string]any, want string) {
+	t.Helper()
+	if got := schema["type"]; got != want {
+		t.Fatalf("type = %v, want %s", got, want)
+	}
+}
+
+func assertStringArray(t *testing.T, schema map[string]any, name string) {
+	t.Helper()
+	array := property(t, schema, name)
+	assertType(t, array, "array")
+	items, ok := array["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("property %s items is %T, want object", name, array["items"])
+	}
+	assertType(t, items, "string")
+}
+
+func assertObjectArray(t *testing.T, schema map[string]any, name string) {
+	t.Helper()
+	array := property(t, schema, name)
+	assertType(t, array, "array")
+	items, ok := array["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("property %s items is %T, want object", name, array["items"])
+	}
+	assertType(t, items, "object")
+}
+
+func assertRefArray(t *testing.T, schema map[string]any, name, want string) {
+	t.Helper()
+	array := property(t, schema, name)
+	assertType(t, array, "array")
+	items, ok := array["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("property %s items is %T, want object", name, array["items"])
+	}
+	assertRef(t, items, want)
+}
+
+func assertOpenObject(t *testing.T, schema map[string]any) {
+	t.Helper()
+	assertType(t, schema, "object")
+	if got := schema["additionalProperties"]; got != true {
+		t.Fatalf("additionalProperties = %v, want true", got)
+	}
+}
+
+func assertDateTime(t *testing.T, schema map[string]any, name string) {
+	t.Helper()
+	dateTime := property(t, schema, name)
+	assertType(t, dateTime, "string")
+	if got := dateTime["format"]; got != "date-time" {
+		t.Fatalf("property %s format = %v, want date-time", name, got)
+	}
+}
+
+func assertPositiveInteger(t *testing.T, schema map[string]any, name string) {
+	t.Helper()
+	integer := property(t, schema, name)
+	assertType(t, integer, "integer")
+	if got := integer["minimum"]; got != 1 {
+		t.Fatalf("property %s minimum = %v, want 1", name, got)
+	}
+}
+
+func assertNonNegativeInteger(t *testing.T, schema map[string]any, name string) {
+	t.Helper()
+	integer := property(t, schema, name)
+	assertType(t, integer, "integer")
+	if got := integer["minimum"]; got != 0 {
+		t.Fatalf("property %s minimum = %v, want 0", name, got)
+	}
+}
+
+func assertArrayItemEnum(t *testing.T, schema map[string]any, name string, want []any) {
+	t.Helper()
+	array := property(t, schema, name)
+	assertType(t, array, "array")
+	items, ok := array["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("property %s items is %T, want object", name, array["items"])
+	}
+	assertEnum(t, items, want)
+}
+
+func assertRef(t *testing.T, schema map[string]any, want string) {
+	t.Helper()
+	if got := schema["$ref"]; got != want {
+		t.Fatalf("$ref = %v, want %s", got, want)
+	}
+}
+
+func assertEnum(t *testing.T, schema map[string]any, want []any) {
+	t.Helper()
+	got, ok := schema["enum"].([]any)
+	if !ok {
+		t.Fatalf("enum is %T, want array", schema["enum"])
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("enum = %v, want %v", got, want)
+	}
+}
+
 // Generated types are part of the public contract surface — referencing them
 // here makes the committed gen packages a compile-time dependency of the
 // suite, so "spec regenerated but not committed" breaks the build.
@@ -26,6 +342,29 @@ var (
 	_ = agentapi.DreamPolicyDraft{}
 	_ = agentapi.CreateWorkflowDraftJSONBody{}
 	_ = agentapi.StartWorkflowRunJSONBody{}
+	_ = agentapi.WorkflowRef{}
+	_ = agentapi.DreamPolicy{}
+	_ = agentapi.DreamRun{}
+	_ = agentapi.DreamSummary{}
+	_ = agentapi.ChangeDraft{}
+	_ = agentapi.PublishDecision{}
+	_ = agentapi.High
+	_ = agentapi.Low
+	_ = agentapi.Medium
+	_ = agentapi.Completed
+	_ = agentapi.Failed
+	_ = agentapi.Running
+	_ = agentapi.WaitingConfirmation
+	_ = agentapi.PointerOnly
+	_ = agentapi.PointerPlusDisplaySummary
+	_ = agentapi.AgentAnswers
+	_ = agentapi.ExternalEvidence
+	_ = agentapi.ProjectRecords
+	_ = agentapi.SopUpdates
+	_ = agentapi.WorkBriefs
+	_ = agentapi.CompanySanitized
+	_ = agentapi.Managers
+	_ = agentapi.Members
 )
 
 func specPaths(t *testing.T, file string) map[string]bool {
