@@ -62,7 +62,14 @@ func TestGeneratedAgentTypesMatchFreshOAPICodegen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(first, committed) {
+	// Git may check text files out with CRLF on Windows while oapi-codegen
+	// consistently emits LF. Compare generated source content independent of
+	// checkout line-ending policy, while retaining byte-for-byte drift checks
+	// for every other difference.
+	normalizeLineEndings := func(src []byte) []byte {
+		return bytes.ReplaceAll(src, []byte("\r\n"), []byte("\n"))
+	}
+	if !bytes.Equal(normalizeLineEndings(first), normalizeLineEndings(committed)) {
 		t.Fatal("committed agent types differ from a fresh oapi-codegen v2.7.1 run")
 	}
 }
