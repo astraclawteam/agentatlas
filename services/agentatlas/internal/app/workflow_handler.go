@@ -105,7 +105,7 @@ func (h *workflowHandler) publish(w http.ResponseWriter, r *http.Request) {
 	// must reconcile the audit chain, not silently proceed).
 	if _, err := h.deps.Nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{
 		TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID,
-		Action: nexus.AuditWorkflowVersionPublished,
+		Action: nexus.AuditWorkflowVersionPublished, ResourceType: "workflow", ResourceID: workflowID,
 		Details: map[string]any{"workflow_id": workflowID, "version": version},
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "audit_failed", err.Error())

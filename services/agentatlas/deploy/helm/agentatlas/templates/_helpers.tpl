@@ -28,6 +28,10 @@
   value: {{ .Values.config.llmrouterApiKey | quote }}
 - name: ATLAS_NEXUS_BASE_URL
   value: {{ .Values.config.nexusBaseUrl | quote }}
+- name: ATLAS_NEXUS_CLIENT_ID
+  value: {{ .Values.config.nexusClientId | quote }}
+- name: ATLAS_NEXUS_SERVICE_SECRET_FILE
+  value: /var/run/secrets/agentnexus/client-secret
 - name: ATLAS_DOCLING_URL
   value: {{ .Values.config.doclingUrl | quote }}
 - name: ATLAS_MINERU_URL
@@ -36,4 +40,20 @@
   value: {{ .Values.config.asrUrl | quote }}
 - name: ATLAS_VIDEO_URL
   value: {{ .Values.config.videoUrl | quote }}
+{{- end -}}
+
+{{- define "agentatlas.nexusSecretVolumeMount" -}}
+- name: agentnexus-service-secret
+  mountPath: /var/run/secrets/agentnexus
+  readOnly: true
+{{- end -}}
+
+{{- define "agentatlas.nexusSecretVolume" -}}
+- name: agentnexus-service-secret
+  secret:
+    secretName: {{ .Values.config.nexusServiceSecretName | quote }}
+    items:
+      - key: {{ .Values.config.nexusServiceSecretKey | quote }}
+        path: client-secret
+        mode: 0400
 {{- end -}}

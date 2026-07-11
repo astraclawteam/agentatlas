@@ -1,15 +1,14 @@
 openapi: 3.0.3
 info:
-  title: AgentNexus Client Contract (PROPOSAL)
+  title: AgentNexus Client Contract
   version: 0.1.0
   description: >
-    PROPOSAL CONTRACT. AgentAtlas defines here the exact surface it needs from
-    AgentNexus: ticket verification, evidence location, authorized evidence
-    reads, audit evidence append, and org graph event subscription. The
-    AgentNexus repository is not yet implemented; once it lands, this document
-    is the alignment baseline and AgentNexus becomes the authority for it.
-    AgentAtlas ships a mock server implementing this contract for local
-    development and integration tests.
+    AgentAtlas defines here the exact AgentNexus surface it consumes: ticket
+    verification, evidence location, authorized evidence reads, audit evidence
+    append, and org graph event subscription. AgentNexus remains the authority;
+    the audit append subset is parity-tested against a frozen published
+    AgentNexus contract snapshot. AgentAtlas ships a mock server implementing
+    this client contract for local development and integration tests.
 paths:
   /v1/tickets/verify:
     post:
@@ -106,43 +105,22 @@ paths:
   /v1/audit/evidence:
     post:
       operationId: appendAuditEvidence
-      summary: Append an AgentAtlas action to the AgentNexus audit chain
+      summary: Record a trusted AgentAtlas service request in the audit chain.
+      security: [{agentAtlasServiceSecret: []}]
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [ticket_id, enterprise_id, action]
-              properties:
-                ticket_id: { type: string }
-                enterprise_id: { type: string }
-                action:
-                  type: string
-                  enum:
-                    - workflow_draft_created
-                    - workflow_version_published
-                    - dream_policy_created
-                    - dream_job_run
-                    - retrieval_plan_created
-                    - evidence_located
-                    - evidence_read
-                    - answer_trace_created
-                    - sensitive_artifact_parsed
-                    - visibility_rule_changed
-                trace_id: { type: string }
-                workflow_run_id: { type: string }
-                details: { type: object }
+            schema: {$ref: '#/components/schemas/AuditEvidenceRequest'}
       responses:
         '201':
-          description: Audit reference created
+          description: Audit reference created.
           content:
             application/json:
-              schema:
-                type: object
-                required: [audit_ref_id]
-                properties:
-                  audit_ref_id: { type: string }
+              schema: {$ref: '#/components/schemas/AuditEvidenceResponse'}
+        '400': {description: Invalid action, resource binding, or bounded details.}
+        '401': {description: Invalid service credentials or Case Ticket.}
+        '503': {description: Ticket or audit persistence unavailable.}
   /v1/org-events:
     get:
       operationId: subscribeOrgEvents
@@ -161,7 +139,52 @@ paths:
             text/event-stream:
               schema: { type: string }
 components:
+  securitySchemes:
+    agentAtlasServiceSecret:
+      type: http
+      scheme: basic
+      description: AgentAtlas service credentials using client_id=agentatlas and its confidential client secret.
   schemas:
+    AuditEvidenceAction:
+      type: string
+      enum:
+        - workflow_draft_created
+        - workflow_version_published
+        - dream_policy_created
+        - dream_policy_create_requested
+        - dream_job_run
+        - retrieval_plan_created
+        - evidence_located
+        - evidence_read
+        - answer_trace_created
+        - sensitive_artifact_parsed
+        - visibility_rule_changed
+    AuditEvidenceRequest:
+      type: object
+      additionalProperties: false
+      required: [ticket_id, enterprise_id, action, resource_type, resource_id]
+      properties:
+        ticket_id: {type: string, minLength: 1, maxLength: 4096}
+        enterprise_id: {type: string, minLength: 1, maxLength: 128}
+        action: {$ref: '#/components/schemas/AuditEvidenceAction'}
+        resource_type: {type: string, minLength: 1, maxLength: 64}
+        resource_id: {type: string, minLength: 1, maxLength: 128, description: Preallocated resource identifier bound into the audit lineage.}
+        trace_id: {type: string, maxLength: 128}
+        details: {type: object, maxProperties: 100, additionalProperties: true, description: Keys are at most 128 Unicode code points; string values at most 1024; arrays/maps at most 100 entries; nesting depth at most 4.}
+      oneOf:
+        - properties:
+            action: {type: string, enum: [dream_policy_create_requested]}
+            resource_type: {type: string, enum: [dream_policy]}
+        - properties:
+            action:
+              type: string
+              enum: [workflow_draft_created, workflow_version_published, dream_policy_created, dream_job_run, retrieval_plan_created, evidence_located, evidence_read, answer_trace_created, sensitive_artifact_parsed, visibility_rule_changed]
+    AuditEvidenceResponse:
+      type: object
+      additionalProperties: false
+      required: [audit_ref_id]
+      properties:
+        audit_ref_id: {type: string, minLength: 1}
     OrgEvent:
       type: object
       required: [event_id, enterprise_id, org_version, type, scope, occurred_at]

@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentatlas.dev/schemas/dream/dream.schema.json",
+  "title": "AgentAtlas public Dream contracts",
+  "$defs": {
+    "WorkflowRef": {
+      "type": "object", "additionalProperties": false, "required": ["id", "version"],
+      "properties": {"id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"}, "version": {"type": "integer", "minimum": 1}}
+    },
+    "DreamSource": {"type": "string", "enum": ["work_brief", "child_dream_summary", "project_record", "sop_update", "agent_answer", "external_evidence", "completed_task", "risk_event"]},
+    "StructuredSignal": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "title", "detail", "severity", "evidence_pointer_id"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "title": {"type": "string", "minLength": 1, "maxLength": 200},
+        "detail": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "severity": {"type": "string", "enum": ["info", "warning", "critical"]},
+        "evidence_pointer_id": {"type": "string", "minLength": 1, "maxLength": 256}
+      }
+    },
+    "Coverage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["expected_children", "completed_children", "input_count"],
+      "properties": {
+        "expected_children": {"type": "integer", "minimum": 0},
+        "completed_children": {"type": "integer", "minimum": 0},
+        "input_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "MissingInput": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_type", "source_id", "reason"],
+      "properties": {
+        "source_type": {"$ref": "#/$defs/DreamSource"},
+        "source_id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "reason": {"type": "string", "enum": ["not_found", "not_completed", "not_authorized", "failed", "masked"]}
+      }
+    },
+    "InputSnapshotSummary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_counts", "sanitized_input_ids"],
+      "properties": {
+        "source_counts": {"type": "array", "maxItems": 8, "items": {"type": "object", "additionalProperties": false, "required": ["source_type", "count"], "properties": {"source_type": {"$ref": "#/$defs/DreamSource"}, "count": {"type": "integer", "minimum": 0}}}},
+        "sanitized_input_ids": {"type": "array", "maxItems": 1000, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256}}
+      }
+    },
+    "VisibilitySnapshotSummary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["visibility_level", "org_unit_ids", "masked_field_count"],
+      "properties": {
+        "visibility_level": {"type": "string", "enum": ["members", "managers", "company_sanitized"]},
+        "org_unit_ids": {"type": "array", "maxItems": 1000, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}},
+        "masked_field_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "DreamPolicyDefinition": {
+      "type": "object", "additionalProperties": false,
+      "required": ["org_unit_id", "timezone", "schedule", "input_sources", "workflow", "output_space_id", "visibility_level", "confirmation_mode"],
+      "properties": {
+        "org_unit_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "timezone": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^(UTC|[A-Za-z_]+(?:/[A-Za-z0-9_+.-]+)+)$"},
+        "schedule": {"type": "string", "minLength": 9, "maxLength": 100, "pattern": "^\\S+(?:\\s+\\S+){4}$"},
+        "input_sources": {"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": {"$ref": "#/$defs/DreamSource"}},
+        "workflow": {"$ref": "#/$defs/WorkflowRef"},
+        "output_space_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "visibility_level": {"type": "string", "enum": ["members", "managers", "company_sanitized"]},
+        "masking_rules": {"type": "array", "default": [], "maxItems": 100, "items": {"type": "string", "minLength": 1, "maxLength": 256}},
+        "risk_signal_rules": {"type": "array", "default": [], "maxItems": 100, "items": {"type": "string", "minLength": 1, "maxLength": 256}},
+        "evidence_retention": {"type": "string", "enum": ["pointer_only", "pointer_plus_display_summary"], "default": "pointer_only"},
+        "confirmation_mode": {"type": "string", "enum": ["always", "high_risk_only", "never"]},
+        "max_attempts": {"type": "integer", "minimum": 1, "maximum": 20, "default": 3}
+      }
+    },
+    "DreamSummaryView": {
+      "type": "object", "additionalProperties": false,
+      "required": ["display_summary", "retrieval_summary", "sealed_detail_pointer", "facts", "themes", "trends", "risks", "todos", "coverage", "missing_inputs", "evidence_pointer_id"],
+      "properties": {
+        "display_summary": {"type": "string", "minLength": 1, "maxLength": 10000},
+        "retrieval_summary": {"type": "string", "minLength": 1, "maxLength": 20000},
+        "sealed_detail_pointer": {"type": "string", "minLength": 1, "maxLength": 512},
+        "facts": {"type": "array", "maxItems": 500, "items": {"$ref": "#/$defs/StructuredSignal"}},
+        "themes": {"type": "array", "maxItems": 500, "items": {"$ref": "#/$defs/StructuredSignal"}},
+        "trends": {"type": "array", "maxItems": 500, "items": {"$ref": "#/$defs/StructuredSignal"}},
+        "risks": {"type": "array", "maxItems": 500, "items": {"$ref": "#/$defs/StructuredSignal"}},
+        "todos": {"type": "array", "maxItems": 500, "items": {"$ref": "#/$defs/StructuredSignal"}},
+        "coverage": {"$ref": "#/$defs/Coverage"},
+        "missing_inputs": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/MissingInput"}},
+        "evidence_pointer_id": {"type": "string", "minLength": 1, "maxLength": 256}
+      }
+    },
+    "DreamRunView": {
+      "type": "object", "additionalProperties": false,
+      "required": ["run_id", "status", "org_unit_id", "window_start", "window_end", "policy_version", "workflow", "parent_run_ids", "input_count", "coverage", "missing_inputs", "facts", "themes", "trends", "risks", "todos", "display_summary", "evidence_pointer_id", "input_snapshot", "visibility_snapshot", "model_route", "model_version", "attempt", "idempotency_key"],
+      "properties": {
+        "run_id": {"type": "string", "minLength": 1, "maxLength": 128}, "status": {"type": "string", "enum": ["pending", "running", "waiting_confirmation", "succeeded", "failed"]},
+        "org_unit_id": {"type": "string", "minLength": 1, "maxLength": 128}, "window_start": {"type": "string", "format": "date-time"}, "window_end": {"type": "string", "format": "date-time"},
+        "policy_version": {"type": "integer", "minimum": 1}, "workflow": {"$ref": "#/$defs/WorkflowRef"},
+        "parent_run_ids": {"type": "array", "maxItems": 1000, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}}, "input_count": {"type": "integer", "minimum": 0},
+        "coverage": {"$ref": "#/$defs/Coverage"}, "missing_inputs": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/MissingInput"}},
+        "facts": {"type": "array", "maxItems": 500, "items": {"$ref": "#/$defs/StructuredSignal"}}, "themes": {"type": "array", "maxItems": 500, "items": {"$ref": "#/$defs/StructuredSignal"}}, "trends": {"type": "array", "maxItems": 500, "items": {"$ref": "#/$defs/StructuredSignal"}}, "risks": {"type": "array", "maxItems": 500, "items": {"$ref": "#/$defs/StructuredSignal"}}, "todos": {"type": "array", "maxItems": 500, "items": {"$ref": "#/$defs/StructuredSignal"}},
+        "display_summary": {"type": "string", "minLength": 1, "maxLength": 10000}, "evidence_pointer_id": {"type": "string", "minLength": 1, "maxLength": 256}, "rerun_of_run_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "input_snapshot": {"$ref": "#/$defs/InputSnapshotSummary"}, "visibility_snapshot": {"$ref": "#/$defs/VisibilitySnapshotSummary"}, "model_route": {"type": "string", "minLength": 1, "maxLength": 128}, "model_version": {"type": "string", "minLength": 1, "maxLength": 128}, "attempt": {"type": "integer", "minimum": 1, "maximum": 20}, "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 256}
+      }
+    }
+  },
+  "oneOf": [{"$ref": "#/$defs/DreamPolicyDefinition"}, {"$ref": "#/$defs/DreamSummaryView"}, {"$ref": "#/$defs/DreamRunView"}]
+}

@@ -406,6 +406,11 @@ func decodeBody(t *testing.T, resp *http.Response) map[string]any {
 }
 
 func newAgentTestServer(t *testing.T, nexusClient nexus.Client) (*httptest.Server, *fakeOutlineStore) {
+	srv, outlines, _ := newAgentTestServerWithPolicyStore(t, nexusClient)
+	return srv, outlines
+}
+
+func newAgentTestServerWithPolicyStore(t *testing.T, nexusClient nexus.Client) (*httptest.Server, *fakeOutlineStore, *fakePolicyStore) {
 	t.Helper()
 	wfSvc, err := workflow.NewService(newFakeWorkflowStore())
 	if err != nil {
@@ -416,16 +421,17 @@ func newAgentTestServer(t *testing.T, nexusClient nexus.Client) (*httptest.Serve
 		t.Fatal(err)
 	}
 	outlines := &fakeOutlineStore{outlines: map[string]db.MethodOutline{}}
+	policies := newFakePolicyStore()
 	producer := tasks.NewRunner(tasks.NewMemBus())
 	producer.AllowEnqueue(retrieval.JobTypeIndex)
 	router := NewAgentRouter(AgentRouterDeps{
 		Nexus: nexusClient, Agent: agentRunner, Workflows: wfSvc,
-		Dreams: dream.NewPolicyService(newFakePolicyStore()),
+		Dreams:   dream.NewPolicyService(policies),
 		Outlines: outlines, Runner: producer,
 	})
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
-	return srv, outlines
+	return srv, outlines, policies
 }
 
 func TestAdminRoutesFailClosedWithoutTicket(t *testing.T) {
@@ -495,6 +501,9 @@ func TestWorkflowCreatePublishRoute(t *testing.T) {
 	var audited bool
 	for _, e := range mock.AuditLog {
 		if e.Action == nexus.AuditWorkflowVersionPublished {
+			if e.ResourceType != "workflow" || e.ResourceID != wfID {
+				t.Fatalf("workflow audit binding=%+v", e)
+			}
 			audited = true
 		}
 	}
@@ -520,12 +529,13 @@ func TestWorkflowPublishFailsClosedWhenAuditDown(t *testing.T) {
 	}
 }
 
-func TestDreamPolicyRoute(t *testing.T) {
+func TestDreamPolicyRouteCreatesCanonicalDraftWithoutPublishing(t *testing.T) {
 	mock := adminMock()
-	srv, _ := newAgentTestServer(t, mock)
+	srv, _, store := newAgentTestServerWithPolicyStore(t, mock)
 	resp := postJSONReq(t, srv.URL+"/v1/dream-policies", "tick_admin", map[string]any{
-		"org_scope": "project_group:pg_mes", "schedule": "0 22 * * *",
-		"input_sources": []string{"work_briefs"}, "visibility_level": "members",
+		"org_unit_id": "pg_mes", "timezone": "Asia/Shanghai", "schedule": "0 22 * * *",
+		"input_sources": []string{"work_brief"}, "workflow": map[string]any{"id": "wf-dream", "version": 3},
+		"visibility_level": "members", "confirmation_mode": "high_risk_only",
 		"masking_rules": []string{`1[3-9]\d{9}`}, "risk_signal_rules": []string{`风险[:：]\S+`},
 		"evidence_retention": "pointer_plus_display_summary", "output_space_id": "spc_1",
 	})
@@ -536,14 +546,91 @@ func TestDreamPolicyRoute(t *testing.T) {
 	if out["dream_policy_id"] == "" {
 		t.Fatalf("response: %v", out)
 	}
+	if out["status"] != "draft" {
+		t.Fatalf("create status = %v, want draft", out["status"])
+	}
+	if _, exists := out["version"]; exists {
+		t.Fatalf("draft create returned a published version: %v", out)
+	}
+	if len(store.versions) != 0 {
+		t.Fatalf("create invoked Publish: %+v", store.versions)
+	}
+	policyID := out["dream_policy_id"].(string)
+	stored := store.policies[policyID]
+	if stored.Status != "draft" || stored.OrgScope != "pg_mes" {
+		t.Fatalf("stored policy = %+v", stored)
+	}
+	var definition map[string]any
+	if err := json.Unmarshal(stored.Draft, &definition); err != nil {
+		t.Fatal(err)
+	}
+	if definition["org_unit_id"] != "pg_mes" || definition["timezone"] != "Asia/Shanghai" {
+		t.Fatalf("stored non-canonical draft: %v", definition)
+	}
+	if _, legacy := definition["org_scope"]; legacy {
+		t.Fatalf("stored draft retained legacy org_scope: %v", definition)
+	}
 	var audited bool
 	for _, e := range mock.AuditLog {
-		if e.Action == nexus.AuditDreamPolicyCreated {
+		if e.Action == nexus.AuditDreamPolicyCreateRequested {
+			if e.ResourceType != "dream_policy" || e.ResourceID != policyID {
+				t.Fatalf("dream policy audit binding=%+v", e)
+			}
 			audited = true
 		}
 	}
 	if !audited {
 		t.Fatal("dream policy creation must append audit evidence")
+	}
+	auditID := mock.AuditLog[len(mock.AuditLog)-1].Details["dream_policy_id"]
+	if auditID != policyID {
+		t.Fatalf("audit id %v != response id %s", auditID, policyID)
+	}
+	if phase := mock.AuditLog[len(mock.AuditLog)-1].Details["phase"]; phase != "create_requested" {
+		t.Fatalf("audit phase = %v", phase)
+	}
+}
+
+func TestDreamPolicyCreateAuditFailureLeavesNoDraftOrVersion(t *testing.T) {
+	srv, _, store := newAgentTestServerWithPolicyStore(t, &failingAuditNexus{Mock: adminMock()})
+	resp := postJSONReq(t, srv.URL+"/v1/dream-policies", "tick_admin", map[string]any{
+		"org_unit_id": "pg_mes", "timezone": "Asia/Shanghai", "schedule": "0 22 * * *",
+		"input_sources": []string{"work_brief"}, "workflow": map[string]any{"id": "wf-dream", "version": 3},
+		"visibility_level": "members", "confirmation_mode": "high_risk_only", "output_space_id": "spc_1",
+	})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("audit failure status = %d, want 500", resp.StatusCode)
+	}
+	if len(store.policies) != 0 || len(store.versions) != 0 {
+		t.Fatalf("audit failure persisted state: policies=%v versions=%v", store.policies, store.versions)
+	}
+}
+
+func TestDreamPolicyListMigratesLegacyPublishedDraftJSON(t *testing.T) {
+	srv, _, store := newAgentTestServerWithPolicyStore(t, adminMock())
+	store.policies["legacy"] = db.DreamPolicy{
+		ID: "legacy", EnterpriseID: "ent_1", OrgScope: "department:legacy", Status: "published",
+		Draft: []byte(`{"org_scope":"department:legacy","schedule":"0 22 * * *","input_sources":["work_briefs"],"visibility_level":"members","evidence_retention":"pointer_only","output_space_id":"space-old"}`),
+	}
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/dream-policies", nil)
+	req.Header.Set("X-Nexus-Ticket", "tick_admin")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := decodeBody(t, resp)
+	policies := out["dream_policies"].([]any)
+	if len(policies) != 1 {
+		t.Fatalf("legacy list = %v", out)
+	}
+	listed := policies[0].(map[string]any)
+	definition := listed["policy"].(map[string]any)
+	if listed["status"] != "published" || definition["org_unit_id"] != "department:legacy" {
+		t.Fatalf("legacy policy was not migrated: %v", listed)
+	}
+	if sources := definition["input_sources"].([]any); len(sources) != 1 || sources[0] != "work_brief" {
+		t.Fatalf("legacy sources were not normalized: %v", definition)
 	}
 }
 
@@ -699,10 +786,11 @@ func TestMethodOutlineAndDreamListRoutes(t *testing.T) {
 		t.Fatalf("outline list: %v", listed)
 	}
 
-	// dream policy create (published) -> GET list surfaces it
+	// Dream policy creation remains a draft and does not enter the published list.
 	resp = postJSONReq(t, srv.URL+"/v1/dream-policies", "tick_admin", map[string]any{
-		"org_scope": "project_group:pg_mes", "schedule": "0 22 * * *",
-		"input_sources": []string{"work_briefs"}, "visibility_level": "members",
+		"org_unit_id": "pg_mes", "timezone": "Asia/Shanghai", "schedule": "0 22 * * *",
+		"input_sources": []string{"work_brief"}, "workflow": map[string]any{"id": "wf-dream", "version": 3},
+		"visibility_level": "members", "confirmation_mode": "high_risk_only",
 		"masking_rules": []string{`1[3-9]\d{9}`}, "risk_signal_rules": []string{`风险[:：]\S+`},
 		"evidence_retention": "pointer_plus_display_summary", "output_space_id": "spc_1",
 	})
@@ -718,11 +806,7 @@ func TestMethodOutlineAndDreamListRoutes(t *testing.T) {
 	}
 	dreamList := decodeBody(t, dlResp)
 	policies, _ := dreamList["dream_policies"].([]any)
-	if len(policies) != 1 {
-		t.Fatalf("dream policy list: %v", dreamList)
-	}
-	first := policies[0].(map[string]any)
-	if first["org_scope"] != "project_group:pg_mes" || first["status"] != "published" {
-		t.Fatalf("policy entry: %v", first)
+	if len(policies) != 0 {
+		t.Fatalf("draft leaked into published list: %v", dreamList)
 	}
 }

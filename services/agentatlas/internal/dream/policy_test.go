@@ -3,17 +3,19 @@ package dream
 import (
 	"testing"
 	"time"
+
+	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
 )
 
 func validPolicy() Policy {
-	return Policy{
-		OrgScope: "department:研发一部", Schedule: "0 22 * * *",
-		InputSources: []string{"work_briefs"}, VisibilityLevel: "members",
-		MaskingRules:      []string{`1[3-9]\d{9}`},
-		RiskSignalRules:   []string{`风险[:：]?\S+`},
-		EvidenceRetention: "pointer_plus_display_summary",
-		OutputSpaceID:     "spc_dept",
-	}
+	return Policy(sdkdream.DreamPolicyDefinition{
+		OrgUnitID: "department:rd-1", Timezone: "Asia/Shanghai", Schedule: "0 22 * * *",
+		InputSources: []sdkdream.Source{sdkdream.SourceWorkBrief},
+		Workflow:     sdkdream.WorkflowRef{ID: "wf-dream", Version: 3}, VisibilityLevel: sdkdream.VisibilityMembers,
+		MaskingRules: []string{`1[3-9]\d{9}`}, RiskSignalRules: []string{`risk:\S+`},
+		EvidenceRetention: sdkdream.EvidencePointerPlusDisplaySummary, OutputSpaceID: "spc_dept",
+		ConfirmationMode: sdkdream.ConfirmationHighRiskOnly,
+	})
 }
 
 func TestPolicyValidate(t *testing.T) {
@@ -36,17 +38,32 @@ func TestPolicyValidate(t *testing.T) {
 		t.Fatal("bad masking regex must fail")
 	}
 	bad = validPolicy()
-	bad.InputSources = []string{"telepathy"}
+	bad.InputSources = []sdkdream.Source{"telepathy"}
 	if bad.Validate() == nil {
 		t.Fatal("unknown input source must fail")
 	}
 }
 
-func TestDueComputesWindow(t *testing.T) {
-	p := validPolicy() // 22:00 daily
-	now := time.Date(2026, 7, 6, 23, 0, 0, 0, time.UTC)
+func TestDecodePolicySupportsCanonicalAndLegacyDrafts(t *testing.T) {
+	canonical, err := decodePolicy([]byte(`{"org_unit_id":"dept-rd","timezone":"Asia/Shanghai","schedule":"0 22 * * *","input_sources":["work_brief"],"workflow":{"id":"wf-dream","version":3},"output_space_id":"space-rd","visibility_level":"managers","confirmation_mode":"high_risk_only"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonical.OrgUnitID != "dept-rd" || canonical.Workflow.ID != "wf-dream" {
+		t.Fatalf("canonical decode = %+v", canonical)
+	}
+	legacy, err := decodePolicy([]byte(`{"org_scope":"department:legacy","schedule":"0 22 * * *","input_sources":["work_briefs"],"visibility_level":"members","evidence_retention":"pointer_only","output_space_id":"space-old"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.OrgUnitID != "department:legacy" || len(legacy.InputSources) != 1 || legacy.InputSources[0] != sdkdream.SourceWorkBrief {
+		t.Fatalf("legacy migration = %+v", legacy)
+	}
+}
 
-	// first run ever: window ends at today's 22:00
+func TestDueComputesWindow(t *testing.T) {
+	p := validPolicy()
+	now := time.Date(2026, 7, 6, 23, 0, 0, 0, time.UTC)
 	start, end, due, err := Due(p, time.Time{}, now)
 	if err != nil || !due {
 		t.Fatalf("due: %v %v", due, err)
@@ -57,14 +74,10 @@ func TestDueComputesWindow(t *testing.T) {
 	if start != end.Add(-24*time.Hour) {
 		t.Fatalf("first window start = %v", start)
 	}
-
-	// already ran for today's firing: not due
 	_, _, due, err = Due(p, end, now)
 	if err != nil || due {
 		t.Fatalf("must not be due again: %v %v", due, err)
 	}
-
-	// next evening: due with window [yesterday 22:00, today 22:00]
 	nextNow := now.Add(24 * time.Hour)
 	start2, end2, due2, _ := Due(p, end, nextNow)
 	if !due2 || start2 != end || end2 != end.Add(24*time.Hour) {

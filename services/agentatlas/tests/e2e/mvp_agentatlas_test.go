@@ -31,6 +31,7 @@ import (
 	adkmodel "google.golang.org/adk/model"
 	"google.golang.org/genai"
 
+	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	sdkworkflow "github.com/astraclawteam/agentatlas/sdk/go/workflow"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
@@ -371,14 +372,17 @@ func TestAgentAtlasMVP(t *testing.T) {
 		t.Fatal("project group space missing")
 	}
 	policySvc := dream.NewPolicyService(q)
-	policyID, err := policySvc.CreateDraft(ctx, enterpriseID, dream.Policy{
-		OrgScope: "project_group:pg_mes", Schedule: "0 22 * * *",
-		InputSources: []string{"work_briefs"}, VisibilityLevel: "members",
+	policyID, err := policySvc.CreateDraft(ctx, enterpriseID, dream.Policy(sdkdream.DreamPolicyDefinition{
+		OrgUnitID: "project_group:pg_mes", Timezone: "UTC", Schedule: "0 22 * * *",
+		InputSources:      []sdkdream.Source{sdkdream.SourceWorkBrief},
+		Workflow:          sdkdream.WorkflowRef{ID: "legacy-direct-dream", Version: 1},
+		VisibilityLevel:   sdkdream.VisibilityMembers,
 		MaskingRules:      []string{`1[3-9]\d{9}`},
 		RiskSignalRules:   []string{`风险[:：]\S+`},
-		EvidenceRetention: "pointer_plus_display_summary",
+		EvidenceRetention: sdkdream.EvidencePointerPlusDisplaySummary,
+		ConfirmationMode:  sdkdream.ConfirmationHighRiskOnly,
 		OutputSpaceID:     pgSpace.ID,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

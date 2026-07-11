@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -16,6 +17,193 @@ import (
 	runtimeapi "github.com/astraclawteam/agentatlas/services/agentatlas/api/openapi/gen/runtime"
 )
 
+func nestedMap(t *testing.T, root map[string]any, path ...string) map[string]any {
+	t.Helper()
+	current := root
+	for _, key := range path {
+		value, ok := current[key]
+		if !ok {
+			t.Fatalf("OpenAPI missing %s", key)
+		}
+		current, ok = value.(map[string]any)
+		if !ok {
+			t.Fatalf("OpenAPI %s is %T, want object", key, value)
+		}
+	}
+	return current
+}
+
+func namedSchema(t *testing.T, schemas map[string]any, name string) map[string]any {
+	t.Helper()
+	value, ok := schemas[name]
+	if !ok {
+		t.Fatalf("contract missing schema %s", name)
+	}
+	schema, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("schema %s is %T, want object", name, value)
+	}
+	assertType(t, schema, "object")
+	return schema
+}
+
+func assertObjectProperties(t *testing.T, schema map[string]any, required, optional []string) {
+	t.Helper()
+	properties := nestedMap(t, schema, "properties")
+	wantProperties := append(append([]string(nil), required...), optional...)
+	sort.Strings(wantProperties)
+	gotProperties := make([]string, 0, len(properties))
+	for name := range properties {
+		gotProperties = append(gotProperties, name)
+	}
+	sort.Strings(gotProperties)
+	if !reflect.DeepEqual(gotProperties, wantProperties) {
+		t.Fatalf("properties = %v, want %v", gotProperties, wantProperties)
+	}
+
+	gotRequired, ok := schema["required"].([]any)
+	if !ok {
+		t.Fatalf("required is %T, want array", schema["required"])
+	}
+	gotRequiredNames := make([]string, 0, len(gotRequired))
+	for _, value := range gotRequired {
+		name, ok := value.(string)
+		if !ok {
+			t.Fatalf("required value is %T, want string", value)
+		}
+		gotRequiredNames = append(gotRequiredNames, name)
+	}
+	sort.Strings(gotRequiredNames)
+	wantRequired := append([]string(nil), required...)
+	sort.Strings(wantRequired)
+	if !reflect.DeepEqual(gotRequiredNames, wantRequired) {
+		t.Fatalf("required = %v, want %v", gotRequiredNames, wantRequired)
+	}
+}
+
+func property(t *testing.T, schema map[string]any, name string) map[string]any {
+	t.Helper()
+	properties := nestedMap(t, schema, "properties")
+	value, ok := properties[name]
+	if !ok {
+		t.Fatalf("property missing %s", name)
+	}
+	propertySchema, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("property %s is %T, want object", name, value)
+	}
+	return propertySchema
+}
+
+func assertPropertyType(t *testing.T, schema map[string]any, name, want string) {
+	t.Helper()
+	assertType(t, property(t, schema, name), want)
+}
+
+func assertType(t *testing.T, schema map[string]any, want string) {
+	t.Helper()
+	if got := schema["type"]; got != want {
+		t.Fatalf("type = %v, want %s", got, want)
+	}
+}
+
+func assertStringArray(t *testing.T, schema map[string]any, name string) {
+	t.Helper()
+	array := property(t, schema, name)
+	assertType(t, array, "array")
+	items, ok := array["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("property %s items is %T, want object", name, array["items"])
+	}
+	assertType(t, items, "string")
+}
+
+func assertObjectArray(t *testing.T, schema map[string]any, name string) {
+	t.Helper()
+	array := property(t, schema, name)
+	assertType(t, array, "array")
+	items, ok := array["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("property %s items is %T, want object", name, array["items"])
+	}
+	assertType(t, items, "object")
+}
+
+func assertRefArray(t *testing.T, schema map[string]any, name, want string) {
+	t.Helper()
+	array := property(t, schema, name)
+	assertType(t, array, "array")
+	items, ok := array["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("property %s items is %T, want object", name, array["items"])
+	}
+	assertRef(t, items, want)
+}
+
+func assertOpenObject(t *testing.T, schema map[string]any) {
+	t.Helper()
+	assertType(t, schema, "object")
+	if got := schema["additionalProperties"]; got != true {
+		t.Fatalf("additionalProperties = %v, want true", got)
+	}
+}
+
+func assertDateTime(t *testing.T, schema map[string]any, name string) {
+	t.Helper()
+	dateTime := property(t, schema, name)
+	assertType(t, dateTime, "string")
+	if got := dateTime["format"]; got != "date-time" {
+		t.Fatalf("property %s format = %v, want date-time", name, got)
+	}
+}
+
+func assertPositiveInteger(t *testing.T, schema map[string]any, name string) {
+	t.Helper()
+	integer := property(t, schema, name)
+	assertType(t, integer, "integer")
+	if got := integer["minimum"]; got != 1 {
+		t.Fatalf("property %s minimum = %v, want 1", name, got)
+	}
+}
+
+func assertNonNegativeInteger(t *testing.T, schema map[string]any, name string) {
+	t.Helper()
+	integer := property(t, schema, name)
+	assertType(t, integer, "integer")
+	if got := integer["minimum"]; got != 0 {
+		t.Fatalf("property %s minimum = %v, want 0", name, got)
+	}
+}
+
+func assertArrayItemEnum(t *testing.T, schema map[string]any, name string, want []any) {
+	t.Helper()
+	array := property(t, schema, name)
+	assertType(t, array, "array")
+	items, ok := array["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("property %s items is %T, want object", name, array["items"])
+	}
+	assertEnum(t, items, want)
+}
+
+func assertRef(t *testing.T, schema map[string]any, want string) {
+	t.Helper()
+	if got := schema["$ref"]; got != want {
+		t.Fatalf("$ref = %v, want %s", got, want)
+	}
+}
+
+func assertEnum(t *testing.T, schema map[string]any, want []any) {
+	t.Helper()
+	got, ok := schema["enum"].([]any)
+	if !ok {
+		t.Fatalf("enum is %T, want array", schema["enum"])
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("enum = %v, want %v", got, want)
+	}
+}
+
 // Generated types are part of the public contract surface — referencing them
 // here makes the committed gen packages a compile-time dependency of the
 // suite, so "spec regenerated but not committed" breaks the build.
@@ -23,9 +211,18 @@ var (
 	_ = runtimeapi.AnswerTrace{}
 	_ = runtimeapi.WorkBriefIngest{}
 	_ = runtimeapi.RetrievalPlanRequest{}
-	_ = agentapi.DreamPolicyDraft{}
 	_ = agentapi.CreateWorkflowDraftJSONBody{}
 	_ = agentapi.StartWorkflowRunJSONBody{}
+	_ = agentapi.WorkflowRef{}
+	_ = agentapi.DreamPolicyDefinition{}
+	_ = agentapi.DreamRunView{}
+	_ = agentapi.DreamSummaryView{}
+	_ = agentapi.StructuredSignal{}
+	_ = agentapi.Coverage{}
+	_ = agentapi.MissingInput{}
+	_ = agentapi.ChangeDraft{}
+	_ = agentapi.RiskAssessment{}
+	_ = agentapi.ReviewRoute{}
 )
 
 func specPaths(t *testing.T, file string) map[string]bool {

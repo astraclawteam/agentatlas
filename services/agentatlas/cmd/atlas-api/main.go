@@ -17,8 +17,8 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/app"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/artifacts"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/auditrefs"
-	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/config"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/llmroutermodel"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
@@ -38,6 +38,10 @@ func main() {
 func run() error {
 	ctx := context.Background()
 	cfg, err := config.Load(os.Getenv("ATLAS_CONFIG"))
+	if err != nil {
+		return err
+	}
+	rawNexusClient, err := nexusclient.New(cfg.AgentNexus.BaseURL, 30*time.Second, cfg.AgentNexus.ClientID, cfg.AgentNexus.SecretFile)
 	if err != nil {
 		return err
 	}
@@ -110,7 +114,7 @@ func run() error {
 	defer func() { _ = shutdownTracing(context.Background()) }()
 
 	// audit appends are counted and fail closed on the answer path
-	nexusClient := auditrefs.New(nexusclient.New(cfg.AgentNexus.BaseURL, 30*time.Second), metrics)
+	nexusClient := auditrefs.New(rawNexusClient, metrics)
 	retrievalSvc := retrieval.NewService(queries, search, embedder, reranker)
 	retrievalSvc.SetMetrics(metrics)
 	traceSvc := trace.NewService(queries)

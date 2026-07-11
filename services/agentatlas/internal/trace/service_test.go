@@ -109,4 +109,11 @@ func TestAppendAuditFailsClosed(t *testing.T) {
 	if len(store.auditRefs) != 1 || store.auditRefs[0].AuditRefID != ref {
 		t.Fatalf("audit ref rows: %+v", store.auditRefs)
 	}
+	if len(good.Mock.AuditLog) != 1 {
+		t.Fatalf("audit log=%+v", good.Mock.AuditLog)
+	}
+	audit := good.Mock.AuditLog[0]
+	if audit.Action != nexus.AuditAnswerTraceCreated || audit.ResourceType != "answer_trace" || audit.ResourceID != row.ID || audit.TraceID != row.ID {
+		t.Fatalf("answer trace audit binding=%+v", audit)
+	}
 }

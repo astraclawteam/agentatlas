@@ -33,6 +33,9 @@ config:
   llmrouterBaseUrl: http://llmrouter:8000/v1
   llmrouterApiKey: ""
   nexusBaseUrl: http://agentnexus:8100
+  nexusClientId: agentatlas
+  nexusServiceSecretName: agentatlas-agentnexus-service
+  nexusServiceSecretKey: client-secret
   doclingUrl: http://docling-sidecar:5001
   mineruUrl: http://mineru-sidecar:8000
   asrUrl: http://asr-sidecar:5003

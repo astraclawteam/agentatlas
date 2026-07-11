@@ -15,6 +15,8 @@ x-atlas-env: &atlas-env
   ATLAS_LLMROUTER_BASE_URL: ${LLMROUTER_BASE_URL:-http://host.docker.internal:8000/v1}
   ATLAS_LLMROUTER_API_KEY: ${LLMROUTER_API_KEY:-}
   ATLAS_NEXUS_BASE_URL: ${NEXUS_BASE_URL:-http://host.docker.internal:8100}
+  ATLAS_NEXUS_CLIENT_ID: agentatlas
+  ATLAS_NEXUS_SERVICE_SECRET_FILE: /run/secrets/agentatlas_agentnexus_service_secret
   ATLAS_DOCLING_URL: http://docling-sidecar:5001
   ATLAS_MINERU_URL: http://mineru-sidecar:8000
   ATLAS_ASR_URL: http://asr-sidecar:5003
@@ -114,6 +116,8 @@ services:
         GOPROXY: ${GOPROXY_BUILD:-https://proxy.golang.org,direct}
     environment:
       <<: *atlas-env
+    secrets:
+      - agentatlas_agentnexus_service_secret
     ports:
       - "8080:8080"
     healthcheck:
@@ -140,6 +144,8 @@ services:
         GOPROXY: ${GOPROXY_BUILD:-https://proxy.golang.org,direct}
     environment:
       <<: *atlas-env
+    secrets:
+      - agentatlas_agentnexus_service_secret
     ports:
       - "8081:8081"
     healthcheck:
@@ -165,6 +171,8 @@ services:
       # comma-separated enterprises whose AgentNexus org-event streams the
       # worker subscribes (space sync); empty disables the subscription.
       ATLAS_ORG_SYNC_ENTERPRISES: ${ATLAS_ORG_SYNC_ENTERPRISES:-}
+    secrets:
+      - agentatlas_agentnexus_service_secret
     ports:
       - "9091:9091" # metrics/liveness listener
     healthcheck:
@@ -261,6 +269,10 @@ services:
       interval: 15s
       timeout: 5s
       retries: 20
+
+secrets:
+  agentatlas_agentnexus_service_secret:
+    file: ${ATLAS_NEXUS_SERVICE_SECRET_FILE_SOURCE:?set an absolute host path to the AgentNexus service secret file}
 
 volumes:
   pgdata:

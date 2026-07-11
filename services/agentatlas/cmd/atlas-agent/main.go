@@ -46,6 +46,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	rawNexusClient, err := nexusclient.New(cfg.AgentNexus.BaseURL, 30*time.Second, cfg.AgentNexus.ClientID, cfg.AgentNexus.SecretFile)
+	if err != nil {
+		return err
+	}
 	logger, err := observability.NewLogger("atlas-agent")
 	if err != nil {
 		return err
@@ -107,7 +111,7 @@ func run() error {
 	defer func() { _ = shutdownTracing(context.Background()) }()
 
 	// audit appends are counted; write paths fail closed on append failure
-	nexusClient := auditrefs.New(nexusclient.New(cfg.AgentNexus.BaseURL, 30*time.Second), metrics)
+	nexusClient := auditrefs.New(rawNexusClient, metrics)
 
 	router := app.NewAgentRouter(app.AgentRouterDeps{
 		Nexus: nexusClient, Agent: agentRunner, Workflows: workflowSvc,

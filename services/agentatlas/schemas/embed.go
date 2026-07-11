@@ -12,3 +12,9 @@ var ParserProviderSchemaJSON []byte
 
 //go:embed atlasdocument/atlas-document.schema.json
 var AtlasDocumentSchemaJSON []byte
+
+//go:embed dream/dream.schema.json
+var DreamSchemaJSON []byte
+
+//go:embed governance/governance.schema.json
+var GovernanceSchemaJSON []byte

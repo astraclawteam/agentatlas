@@ -8,14 +8,15 @@ import "github.com/astraclawteam/agentatlas/sdk/go/nexus"
 // MustAuditActions enumerates actions that are invalid without an audit
 // append; callers fail closed when appending fails.
 var MustAuditActions = map[nexus.AuditAction]bool{
-	nexus.AuditWorkflowDraftCreated:     true,
-	nexus.AuditWorkflowVersionPublished: true,
-	nexus.AuditDreamPolicyCreated:       true,
-	nexus.AuditDreamJobRun:              true,
-	nexus.AuditRetrievalPlanCreated:     true,
-	nexus.AuditEvidenceLocated:          true,
-	nexus.AuditEvidenceRead:             true,
-	nexus.AuditAnswerTraceCreated:       true,
-	nexus.AuditSensitiveArtifactParsed:  true,
-	nexus.AuditVisibilityRuleChanged:    true,
+	nexus.AuditWorkflowDraftCreated:       true,
+	nexus.AuditWorkflowVersionPublished:   true,
+	nexus.AuditDreamPolicyCreated:         true,
+	nexus.AuditDreamPolicyCreateRequested: true,
+	nexus.AuditDreamJobRun:                true,
+	nexus.AuditRetrievalPlanCreated:       true,
+	nexus.AuditEvidenceLocated:            true,
+	nexus.AuditEvidenceRead:               true,
+	nexus.AuditAnswerTraceCreated:         true,
+	nexus.AuditSensitiveArtifactParsed:    true,
+	nexus.AuditVisibilityRuleChanged:      true,
 }

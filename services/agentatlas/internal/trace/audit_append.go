@@ -16,6 +16,8 @@ func (s *Service) AppendAudit(ctx context.Context, client nexus.Client, ticketID
 		TicketID:     ticketID,
 		EnterpriseID: traceRow.EnterpriseID,
 		Action:       nexus.AuditAnswerTraceCreated,
+		ResourceType: "answer_trace",
+		ResourceID:   traceRow.ID,
 		TraceID:      traceRow.ID,
 		Details: map[string]any{
 			"question_hash": traceRow.QuestionHash,

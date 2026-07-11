@@ -59,6 +59,7 @@ func TestAppenderCountsFailures(t *testing.T) {
 func TestMustAuditCoversAnswerPath(t *testing.T) {
 	for _, action := range []nexus.AuditAction{
 		nexus.AuditAnswerTraceCreated, nexus.AuditEvidenceRead, nexus.AuditWorkflowVersionPublished,
+		nexus.AuditDreamPolicyCreated, nexus.AuditDreamPolicyCreateRequested,
 	} {
 		if !MustAuditActions[action] {
 			t.Fatalf("%s must be in the must-audit set", action)
