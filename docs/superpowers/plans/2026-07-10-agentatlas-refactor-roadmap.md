@@ -4,7 +4,7 @@
 
 **Goal:** Deliver the approved AgentAtlas knowledge-maintenance experience, hierarchical Dream distillation, browser SSO, governed publishing, and Xiaozhi family UI without cross-repository source coupling.
 
-**Architecture:** Five deliverables across four repositories ship behind public boundaries: `xiaozhiclaw-runtime` publishes UI, AgentNexus publishes identity/authorization contracts, AgentAtlas publishes knowledge/Dream APIs, AgentAtlas Console consumes those boundaries, and `agentatlas-enterprise` consumes only released public schemas/images to supply policy packs and private deployment. Cutover is contract-first and feature-flagged; no page mixes the old and new design systems.
+**Architecture:** Four public deliverables ship behind published boundaries: `xiaozhiclaw-runtime` publishes UI, AgentNexus publishes identity/authorization contracts, AgentAtlas publishes knowledge/Dream APIs, and AgentAtlas Console consumes those boundaries. An enterprise-owned external Wave E may consume only released public schemas and images; its private implementation roadmap is intentionally outside this open-core repository. Cutover is contract-first and feature-flagged; no page mixes the old and new design systems.
 
 **Tech Stack:** React, TypeScript, Vite, Vitest, Playwright, pnpm, Go, chi/net/http, PostgreSQL/sqlc, AgentNexus, FlowGram, OpenSearch, object storage
 
@@ -33,7 +33,8 @@
 | `2026-07-10-agentnexus-browser-session-and-approval.md` | `../agentnexus` | Browser session, scoped permissions, Step Grants, and upward reviewer resolution |
 | `2026-07-10-agentatlas-dream-and-governance-runtime.md` | `.` | Hierarchical Dream runtime plus governed drafts, review, and publish contracts |
 | `2026-07-10-agentatlas-console-refactor.md` | `.` | Complete Console shell and work-surface refactor |
-| `2026-07-10-agentatlas-enterprise-pack-migration.md` | `../agentatlas-enterprise` | Migrate policy packs and private deployment to released public contracts |
+
+Wave E is owned outside open-core. This roadmap records only its compatibility gate: released Dream/governance schemas and immutable image versions must exist before any external consumer enables them.
 
 The approved source of truth is `docs/superpowers/specs/2026-07-10-agentatlas-knowledge-maintenance-ux-design.md`.
 
@@ -51,7 +52,7 @@ The approved source of truth is `docs/superpowers/specs/2026-07-10-agentatlas-kn
 | Existing workflow migration, dual editors, lossless FlowGram round-trip | Backend Tasks 1 and 8; Console Task 5 |
 | Hierarchical Dream, child-summary-first, immutable outputs, trace-down grant | Backend Tasks 1–7; Console Task 4 |
 | Answer evidence summary before graph and authorized detail | AgentNexus Task 5; Console Task 7 |
-| Enterprise public-contract-only packs/private deployment | Enterprise Tasks 1–4 |
+| External enterprise compatibility | Released public schema/image digests; implementation is enterprise-owned |
 | Accessibility, novice usability, visual regression, real integrations | Roadmap Task 3; Console Task 8 |
 
 ### Task 1: Freeze Public Contracts Before UI Work
@@ -63,14 +64,14 @@ The approved source of truth is `docs/superpowers/specs/2026-07-10-agentatlas-kn
 
 **Interfaces:**
 - Consumes: Approved product specification and existing `X-Nexus-Ticket` verification semantics.
-- Produces: Versioned schemas for `BrowserSession`, `PermissionDecision`, `ApprovalRoute`, `DreamPolicy`, `DreamRun`, `DreamSummary`, `ChangeDraft`, and `PublishDecision` in the existing public OpenAPI documents.
+- Produces: Versioned schemas for `BrowserSession`, `PermissionDecision`, `ApprovalRoute`, `DreamPolicyDefinition`, `DreamRunView`, `DreamSummaryView`, `ChangeDraft`, `RiskAssessment`, and `ReviewRoute` in the existing public OpenAPI documents.
 
 - [ ] **Step 1: Write contract drift assertions**
 
 ```go
 for _, token := range []string{
-    "BrowserSession", "ApprovalRoute", "DreamRun", "DreamSummary",
-    "visibility_snapshot", "workflow_version", "idempotency_key",
+    "BrowserSession", "ApprovalRoute", "DreamRunView", "DreamSummaryView",
+    "visibility_snapshot", "WorkflowRef", "idempotency_key",
 } {
     if !bytes.Contains(openAPI, []byte(token)) { t.Fatalf("contract missing %s", token) }
 }
@@ -84,7 +85,7 @@ Expected: FAIL because the new schema names are absent.
 
 - [ ] **Step 3: Add the exact public schemas defined by the four focused plans**
 
-The OpenAPI documents must use `org_unit_id`, `resource_type`, `resource_id`, `action`, `risk_level`, `requester_user_id`, `reviewer_user_id`, `policy_version`, `workflow_id`, `workflow_version`, `window_start`, `window_end`, `input_snapshot`, `visibility_snapshot`, `parent_run_ids`, and `idempotency_key` consistently. Do not expose Go `internal/dream.Policy` as a public contract.
+The AgentAtlas OpenAPI document uses the canonical DTOs from `2026-07-10-agentatlas-dream-and-governance-runtime.md`: a nested `workflow: WorkflowRef` in public views, plus `org_unit_id`, `resource_type`, `resource_id`, `action`, `risk_level`, `requester_user_id`, `reviewer_user_id`, `policy_version`, `window_start`, `window_end`, typed `input_snapshot`/`visibility_snapshot`, `parent_run_ids`, and `idempotency_key`. Do not expose Go `internal/dream.Policy` or legacy parallel Dream DTOs as public contracts.
 
 - [ ] **Step 4: Generate clients and rerun drift tests**
 
@@ -133,9 +134,9 @@ Run every task in `2026-07-10-agentatlas-dream-and-governance-runtime.md`. It co
 
 Run every task in `2026-07-10-agentatlas-console-refactor.md` after the UI package and backend contracts are published.
 
-- [ ] **Step 5: Execute Wave E — enterprise packs and private deployment**
+- [ ] **Step 5: Publish the external Wave E compatibility gate**
 
-Run every task in `2026-07-10-agentatlas-enterprise-pack-migration.md` only after the public Dream/governance schema and released image versions are fixed. This wave must not import open-core `internal/*` packages.
+Record released Dream/governance schema digests and image versions for the enterprise-owned external Wave E. Open-core does not contain or execute its private implementation plan; external consumers must not import open-core `internal/*` packages.
 
 - [ ] **Step 6: Commit the release checklist**
 
@@ -189,14 +190,13 @@ Push-Location ../xiaozhiclaw-runtime; pnpm --filter @xiaozhiclaw/runtime-ui test
 Push-Location ../agentnexus/services/agentnexus; go test ./...; Pop-Location
 Push-Location services/agentatlas; go test ./...; Pop-Location
 Push-Location .; pnpm --filter @agentatlas/console test; pnpm --filter @agentatlas/console build; Pop-Location
-Push-Location ../agentatlas-enterprise; npm test; npm run validate:packs; Pop-Location
 ```
 
 - [ ] **Step 4: Run full acceptance**
 
 Run: `powershell -ExecutionPolicy Bypass -File scripts/acceptance/agentatlas-refactor.ps1`
 
-Expected: all four repository suites exit 0; Playwright proves login return, organization scope, low/high-risk paths, Dream hierarchy, evidence authorization, agent drawer reflow, 1280×720, and 200% zoom; enterprise packs validate against pinned public schemas.
+Expected: all public repository suites exit 0; Playwright proves login return, organization scope, low/high-risk paths, Dream hierarchy, evidence authorization, agent drawer reflow, 1280×720, and 200% zoom. External Wave E compatibility is established by published schema/image digests, not private tests in this repository.
 
 - [ ] **Step 5: Enable cutover flags in order**
 

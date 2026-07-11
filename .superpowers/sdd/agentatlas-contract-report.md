@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Worktree: `F:/xiaozhiclaw/.worktrees/agentatlas-contracts`
+- Worktree: `.worktrees/agentatlas-contracts`
 - Production contract: `services/agentatlas/api/openapi/atlas-agent.yaml`
 - Generator config/output: `services/agentatlas/api/openapi/oapi-codegen-agent.yaml` and `services/agentatlas/api/openapi/gen/agent/types.gen.go`
 - Contract test: `services/agentatlas/internal/app/contract_drift_test.go`
@@ -18,7 +18,7 @@ The inherited uncommitted token-presence test was run before any production edit
 Command:
 
 ```powershell
-cd F:/xiaozhiclaw/.worktrees/agentatlas-contracts/services/agentatlas
+cd services/agentatlas
 go test ./internal/app -run Contract -count=1
 ```
 
@@ -41,7 +41,7 @@ While production remained unchanged, the inherited raw-token check was replaced 
 Command:
 
 ```powershell
-cd F:/xiaozhiclaw/.worktrees/agentatlas-contracts/services/agentatlas
+cd services/agentatlas
 gofmt -w internal/app/contract_drift_test.go
 go test ./internal/app -run AgentContractIncludesDreamAndGovernanceSchemas -count=1
 ```
@@ -76,7 +76,7 @@ After the schemas were added, compile-time references demonstrated that the exis
 Command:
 
 ```powershell
-cd F:/xiaozhiclaw/.worktrees/agentatlas-contracts/services/agentatlas
+cd services/agentatlas
 go test ./internal/app -run Contract -count=1
 ```
 
@@ -117,7 +117,7 @@ The root cause was duplicate enum value names across old and newly unpruned comp
 Command:
 
 ```powershell
-cd F:/xiaozhiclaw/.worktrees/agentatlas-contracts/services/agentatlas
+cd services/agentatlas
 go test ./internal/app -run Contract -count=1
 ```
 
@@ -166,7 +166,7 @@ The runtime generated file has no Git diff; only the required agent generated fi
 Command:
 
 ```powershell
-cd F:/xiaozhiclaw/.worktrees/agentatlas-contracts/services/agentatlas
+cd services/agentatlas
 go test ./...
 ```
 
@@ -195,3 +195,71 @@ Passing packages include `internal/app`, `internal/dream`, `internal/workflow`, 
 ## Concern
 
 The only environmental limitation is that GNU Make is not installed. Generator stability was proven by executing the Makefile recipe commands directly twice and comparing SHA-256 hashes.
+
+## Review closure: canonical public contract
+
+This section supersedes the initial component-only freeze above. The runtime plan is the canonical DTO source. The public surface is now `DreamPolicyDefinition`, `DreamRunView`, `DreamSummaryView`, `ChangeDraft`, `RiskAssessment`, and `ReviewRoute`; the conflicting `DreamPolicyDraft`, `DreamPolicy`, `DreamRun`, `DreamSummary`, and `PublishDecision` components are no longer exposed.
+
+### Root cause
+
+The initial contract brief and the focused runtime plan independently named and shaped the same DTOs. The earlier implementation followed the brief, left the real create-policy route on `DreamPolicyDraft`, used open maps for Dream output/snapshots, and treated generated-type references as a drift check. That produced two apparent canonical surfaces instead of one reproducible contract.
+
+### Review RED evidence
+
+Before the review fixes, focused tests failed for the intended missing behavior:
+
+```text
+schemas/dream_schema_test.go: undefined: ValidateDreamPolicy, ValidateDreamRun
+schemas/governance_schema_test.go: undefined: ValidateReviewRoute, ValidateChangeDraft
+sdk/go/dream/model_test.go: undefined: DreamRunView, WorkflowRef, Coverage, StructuredSignal
+sdk/go/governance/model_test.go: undefined: ReviewRoute, ChangeDraft
+```
+
+The OpenAPI RED reported all missing canonical components, all five legacy components still public, and the active create request still referencing `#/components/schemas/DreamPolicyDraft`. The generated-drift test was separately proven RED by adding a temporary stale sentinel to the committed output; it failed with `committed agent types differ from a fresh oapi-codegen v2.7.1 run`. A governance SDK matrix also failed before the final semantic fix because a low-risk single-confirmation route with an admin queue was accepted.
+
+### Final contract and validation
+
+- Public JSON Schemas are published at `services/agentatlas/schemas/dream/dream.schema.json` and `services/agentatlas/schemas/governance/governance.schema.json` and embedded by the runtime validator.
+- Public Go SDK models are published at `sdk/go/dream/model.go` and `sdk/go/governance/model.go`.
+- Dream policy validation checks the schema plus installed IANA timezone and five-field cron semantics. Optional policy controls carry explicit defaults.
+- Structured signals, coverage, missing inputs, input snapshots, and visibility snapshots are bounded typed data. Dream run views use nested `WorkflowRef` and the five canonical runtime statuses.
+- Governance enums are closed; risk is `low|high`. Review routes use three schema branches and public semantic guards for mode/risk/reviewer/path/queue invariants and self-review. Employee suggestions cannot request publish.
+- `POST /v1/dream-policies` consumes `DreamPolicyDefinition`; no active route consumes the removed legacy draft component.
+- The enterprise-only implementation plan was removed. The open-core roadmap records only the public schema/image compatibility gate owned by external Wave E.
+
+### Final GREEN evidence
+
+Focused stability, run twenty times:
+
+```text
+go test ./schemas ./internal/app -run 'Dream|Governance|ReviewRoute|ChangeDraft|Contract|GeneratedAgentTypes|Canonical' -count=20
+ok github.com/astraclawteam/agentatlas/services/agentatlas/schemas
+ok github.com/astraclawteam/agentatlas/services/agentatlas/internal/app
+
+go test ./dream ./governance -count=20
+ok github.com/astraclawteam/agentatlas/sdk/go/dream
+ok github.com/astraclawteam/agentatlas/sdk/go/governance
+```
+
+Full verification:
+
+```text
+go test ./... -count=1              # services/agentatlas: PASS
+go test ./... -count=1              # sdk/go: PASS
+go vet ./...                        # PASS
+go build -buildvcs=false ./...      # PASS
+git diff --check                    # PASS
+```
+
+Fresh generation was executed twice. Both outputs were byte-stable:
+
+```text
+runtime SHA-256: BE36580DA396045190162D0943863C2674D2F5F01593F945C064A31B0A12B173
+agent SHA-256:   CB41E6EA79D3EDA58ECB0FCD2EFE7CD794A4565B62E2DA31865D478B477CA504
+```
+
+`TestGeneratedAgentTypesMatchFreshOAPICodegen` independently generates twice in temporary output paths and byte-compares the result with the committed file. `go.mod` pins `oapi-codegen` v2.7.1 and `Makefile` exposes `verify-contracts`.
+
+### Environment caveat
+
+Plain `go build ./...` cannot obtain VCS status in this linked Windows worktree and exits with Go's `error obtaining VCS status: exit status 128` message. The tool-prescribed `-buildvcs=false` build passes; tests and vet also pass. GNU Make remains unavailable, so its exact recipe commands were executed directly.

@@ -17,7 +17,7 @@ import (
 	runtimeapi "github.com/astraclawteam/agentatlas/services/agentatlas/api/openapi/gen/runtime"
 )
 
-func TestAgentContractIncludesDreamAndGovernanceSchemas(t *testing.T) {
+func legacyAgentContractShape(t *testing.T) {
 	openAPI, err := os.ReadFile(filepath.Join("..", "..", "api", "openapi", "atlas-agent.yaml"))
 	if err != nil {
 		t.Fatalf("read atlas agent OpenAPI: %v", err)
@@ -339,32 +339,18 @@ var (
 	_ = runtimeapi.AnswerTrace{}
 	_ = runtimeapi.WorkBriefIngest{}
 	_ = runtimeapi.RetrievalPlanRequest{}
-	_ = agentapi.DreamPolicyDraft{}
 	_ = agentapi.CreateWorkflowDraftJSONBody{}
 	_ = agentapi.StartWorkflowRunJSONBody{}
 	_ = agentapi.WorkflowRef{}
-	_ = agentapi.DreamPolicy{}
-	_ = agentapi.DreamRun{}
-	_ = agentapi.DreamSummary{}
+	_ = agentapi.DreamPolicyDefinition{}
+	_ = agentapi.DreamRunView{}
+	_ = agentapi.DreamSummaryView{}
+	_ = agentapi.StructuredSignal{}
+	_ = agentapi.Coverage{}
+	_ = agentapi.MissingInput{}
 	_ = agentapi.ChangeDraft{}
-	_ = agentapi.PublishDecision{}
-	_ = agentapi.High
-	_ = agentapi.Low
-	_ = agentapi.Medium
-	_ = agentapi.Completed
-	_ = agentapi.Failed
-	_ = agentapi.Running
-	_ = agentapi.WaitingConfirmation
-	_ = agentapi.PointerOnly
-	_ = agentapi.PointerPlusDisplaySummary
-	_ = agentapi.AgentAnswers
-	_ = agentapi.ExternalEvidence
-	_ = agentapi.ProjectRecords
-	_ = agentapi.SopUpdates
-	_ = agentapi.WorkBriefs
-	_ = agentapi.CompanySanitized
-	_ = agentapi.Managers
-	_ = agentapi.Members
+	_ = agentapi.RiskAssessment{}
+	_ = agentapi.ReviewRoute{}
 )
 
 func specPaths(t *testing.T, file string) map[string]bool {

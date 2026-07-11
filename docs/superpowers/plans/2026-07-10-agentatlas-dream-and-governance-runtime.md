@@ -68,6 +68,8 @@ type StructuredSignal struct { ID, Title, Detail, Severity, EvidencePointerID st
 
 `DreamRunView` contains `run_id`, `status`, `org_unit_id`, `window_start`, `window_end`, `policy_version`, `workflow`, `parent_run_ids`, `input_count`, `coverage`, `missing_inputs`, `facts`, `themes`, `trends`, `risks`, `todos`, `display_summary`, `evidence_pointer_id`, and `rerun_of_run_id`.
 
+`DreamPolicyDefinition` requires the fields shown in the valid example. `masking_rules` and `risk_signal_rules` are optional with empty-array defaults, `evidence_retention` defaults to `pointer_only`, and `max_attempts` defaults to `3`. Public snapshots are bounded typed summaries, never raw text or arbitrary maps. Dream run status is exactly `pending|running|waiting_confirmation|succeeded|failed`. Governance risk is exactly `low|high`; `ReviewRoute` is the canonical review result and binds the change, resource, requester, mode, reviewer/path or queue, and route state.
+
 - [ ] **Step 4: Generate and verify contracts**
 
 Run: `make generate && go test ./schemas ./internal/app -run Contract -count=1`

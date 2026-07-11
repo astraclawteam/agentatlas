@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentatlas.dev/schemas/governance/governance.schema.json",
+  "title": "AgentAtlas public governance contracts",
+  "$defs": {
+    "ResourceType": {"enum": ["knowledge_entry", "sop", "workflow", "dream_policy", "method_outline"]},
+    "ChangeAction": {"enum": ["create", "update", "publish", "disable", "delete"]},
+    "ChangeState": {"enum": ["draft", "submitted", "approved", "rejected", "published", "withdrawn"]},
+    "RiskLevel": {"enum": ["low", "high"]},
+    "ReviewMode": {"enum": ["single_confirmation", "upward_review", "enterprise_knowledge_admin_queue"]},
+    "RouteState": {"enum": ["pending", "approved", "rejected", "cancelled"]},
+    "ChangeDraft": {
+      "type": "object", "additionalProperties": false,
+      "required": ["change_id", "enterprise_id", "org_unit_id", "resource_type", "resource_id", "action", "requester_user_id", "origin", "permission_mode", "revision", "state", "base_version", "proposed_content", "created_at", "updated_at"],
+      "properties": {
+        "change_id": {"type": "string", "minLength": 1, "maxLength": 128}, "enterprise_id": {"type": "string", "minLength": 1, "maxLength": 128}, "org_unit_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "resource_type": {"$ref": "#/$defs/ResourceType"}, "resource_id": {"type": "string", "minLength": 1, "maxLength": 128}, "action": {"$ref": "#/$defs/ChangeAction"}, "requester_user_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "origin": {"enum": ["direct_edit", "employee_suggestion"]}, "permission_mode": {"enum": ["direct_edit", "suggestion_only"]},
+        "revision": {"type": "integer", "minimum": 1}, "state": {"$ref": "#/$defs/ChangeState"}, "base_version": {"type": "integer", "minimum": 0},
+        "proposed_content": {"type": "object", "maxProperties": 100, "additionalProperties": true},
+        "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}
+      },
+      "allOf": [{"if": {"properties": {"origin": {"const": "employee_suggestion"}}, "required": ["origin"]}, "then": {"properties": {"permission_mode": {"const": "suggestion_only"}, "action": {"not": {"const": "publish"}}}}}]
+    },
+    "RiskAssessment": {
+      "type": "object", "additionalProperties": false, "required": ["risk_level", "risk_reasons"],
+      "properties": {"risk_level": {"$ref": "#/$defs/RiskLevel"}, "risk_reasons": {"type": "array", "maxItems": 100, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256}}}
+    },
+    "ReviewRoute": {
+      "type": "object", "additionalProperties": false,
+      "required": ["change_id", "resource_type", "resource_id", "requester_user_id", "risk_level", "mode", "state", "org_path"],
+      "properties": {
+        "change_id": {"type": "string", "minLength": 1, "maxLength": 128}, "resource_type": {"$ref": "#/$defs/ResourceType"}, "resource_id": {"type": "string", "minLength": 1, "maxLength": 128}, "requester_user_id": {"type": "string", "minLength": 1, "maxLength": 128}, "reviewer_user_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "risk_level": {"$ref": "#/$defs/RiskLevel"}, "mode": {"$ref": "#/$defs/ReviewMode"}, "state": {"$ref": "#/$defs/RouteState"},
+        "org_path": {"type": "array", "maxItems": 100, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}}, "queue": {"type": "string", "minLength": 1, "maxLength": 128}
+      },
+      "oneOf": [
+        {"properties": {"mode": {"const": "single_confirmation"}, "risk_level": {"const": "low"}}, "not": {"anyOf": [{"required": ["reviewer_user_id"]}, {"required": ["queue"]}]}},
+        {"required": ["reviewer_user_id"], "properties": {"mode": {"const": "upward_review"}, "risk_level": {"const": "high"}, "org_path": {"minItems": 1}}, "not": {"required": ["queue"]}},
+        {"required": ["queue"], "properties": {"mode": {"const": "enterprise_knowledge_admin_queue"}, "risk_level": {"const": "high"}}, "not": {"required": ["reviewer_user_id"]}}
+      ]
+    }
+  },
+  "oneOf": [{"$ref": "#/$defs/ChangeDraft"}, {"$ref": "#/$defs/RiskAssessment"}, {"$ref": "#/$defs/ReviewRoute"}]
+}

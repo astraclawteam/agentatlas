@@ -4,7 +4,11 @@
 package agentapi
 
 import (
+	"encoding/json"
+	"fmt"
 	"time"
+
+	"github.com/oapi-codegen/runtime"
 )
 
 const (
@@ -13,19 +17,19 @@ const (
 
 // Defines values for AgentRunPendingConfirmationRiskLevel.
 const (
-	High   AgentRunPendingConfirmationRiskLevel = "high"
-	Low    AgentRunPendingConfirmationRiskLevel = "low"
-	Medium AgentRunPendingConfirmationRiskLevel = "medium"
+	AgentRunPendingConfirmationRiskLevelHigh   AgentRunPendingConfirmationRiskLevel = "high"
+	AgentRunPendingConfirmationRiskLevelLow    AgentRunPendingConfirmationRiskLevel = "low"
+	AgentRunPendingConfirmationRiskLevelMedium AgentRunPendingConfirmationRiskLevel = "medium"
 )
 
 // Valid indicates whether the value is a known member of the AgentRunPendingConfirmationRiskLevel enum.
 func (e AgentRunPendingConfirmationRiskLevel) Valid() bool {
 	switch e {
-	case High:
+	case AgentRunPendingConfirmationRiskLevelHigh:
 		return true
-	case Low:
+	case AgentRunPendingConfirmationRiskLevelLow:
 		return true
-	case Medium:
+	case AgentRunPendingConfirmationRiskLevelMedium:
 		return true
 	default:
 		return false
@@ -34,37 +38,226 @@ func (e AgentRunPendingConfirmationRiskLevel) Valid() bool {
 
 // Defines values for AgentRunStatus.
 const (
-	Completed           AgentRunStatus = "completed"
-	Failed              AgentRunStatus = "failed"
-	Running             AgentRunStatus = "running"
-	WaitingConfirmation AgentRunStatus = "waiting_confirmation"
+	AgentRunStatusCompleted           AgentRunStatus = "completed"
+	AgentRunStatusFailed              AgentRunStatus = "failed"
+	AgentRunStatusRunning             AgentRunStatus = "running"
+	AgentRunStatusWaitingConfirmation AgentRunStatus = "waiting_confirmation"
 )
 
 // Valid indicates whether the value is a known member of the AgentRunStatus enum.
 func (e AgentRunStatus) Valid() bool {
 	switch e {
-	case Completed:
+	case AgentRunStatusCompleted:
 		return true
-	case Failed:
+	case AgentRunStatusFailed:
 		return true
-	case Running:
+	case AgentRunStatusRunning:
 		return true
-	case WaitingConfirmation:
+	case AgentRunStatusWaitingConfirmation:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for DreamPolicyConfirmationMode.
+// Defines values for ChangeDraftAction.
 const (
-	DreamConfirmationAlways       DreamPolicyConfirmationMode = "always"
-	DreamConfirmationHighRiskOnly DreamPolicyConfirmationMode = "high_risk_only"
-	DreamConfirmationNever        DreamPolicyConfirmationMode = "never"
+	ChangeDraftActionCreate  ChangeDraftAction = "create"
+	ChangeDraftActionDelete  ChangeDraftAction = "delete"
+	ChangeDraftActionDisable ChangeDraftAction = "disable"
+	ChangeDraftActionPublish ChangeDraftAction = "publish"
+	ChangeDraftActionUpdate  ChangeDraftAction = "update"
 )
 
-// Valid indicates whether the value is a known member of the DreamPolicyConfirmationMode enum.
-func (e DreamPolicyConfirmationMode) Valid() bool {
+// Valid indicates whether the value is a known member of the ChangeDraftAction enum.
+func (e ChangeDraftAction) Valid() bool {
+	switch e {
+	case ChangeDraftActionCreate:
+		return true
+	case ChangeDraftActionDelete:
+		return true
+	case ChangeDraftActionDisable:
+		return true
+	case ChangeDraftActionPublish:
+		return true
+	case ChangeDraftActionUpdate:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChangeDraftOrigin.
+const (
+	ChangeDraftOriginDirectEdit         ChangeDraftOrigin = "direct_edit"
+	ChangeDraftOriginEmployeeSuggestion ChangeDraftOrigin = "employee_suggestion"
+)
+
+// Valid indicates whether the value is a known member of the ChangeDraftOrigin enum.
+func (e ChangeDraftOrigin) Valid() bool {
+	switch e {
+	case ChangeDraftOriginDirectEdit:
+		return true
+	case ChangeDraftOriginEmployeeSuggestion:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChangeDraftPermissionMode.
+const (
+	ChangeDraftPermissionModeDirectEdit     ChangeDraftPermissionMode = "direct_edit"
+	ChangeDraftPermissionModeSuggestionOnly ChangeDraftPermissionMode = "suggestion_only"
+)
+
+// Valid indicates whether the value is a known member of the ChangeDraftPermissionMode enum.
+func (e ChangeDraftPermissionMode) Valid() bool {
+	switch e {
+	case ChangeDraftPermissionModeDirectEdit:
+		return true
+	case ChangeDraftPermissionModeSuggestionOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChangeDraftResourceType.
+const (
+	ChangeDraftResourceTypeDreamPolicy    ChangeDraftResourceType = "dream_policy"
+	ChangeDraftResourceTypeKnowledgeEntry ChangeDraftResourceType = "knowledge_entry"
+	ChangeDraftResourceTypeMethodOutline  ChangeDraftResourceType = "method_outline"
+	ChangeDraftResourceTypeSop            ChangeDraftResourceType = "sop"
+	ChangeDraftResourceTypeWorkflow       ChangeDraftResourceType = "workflow"
+)
+
+// Valid indicates whether the value is a known member of the ChangeDraftResourceType enum.
+func (e ChangeDraftResourceType) Valid() bool {
+	switch e {
+	case ChangeDraftResourceTypeDreamPolicy:
+		return true
+	case ChangeDraftResourceTypeKnowledgeEntry:
+		return true
+	case ChangeDraftResourceTypeMethodOutline:
+		return true
+	case ChangeDraftResourceTypeSop:
+		return true
+	case ChangeDraftResourceTypeWorkflow:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChangeDraftState.
+const (
+	ChangeDraftStateApproved  ChangeDraftState = "approved"
+	ChangeDraftStateDraft     ChangeDraftState = "draft"
+	ChangeDraftStatePublished ChangeDraftState = "published"
+	ChangeDraftStateRejected  ChangeDraftState = "rejected"
+	ChangeDraftStateSubmitted ChangeDraftState = "submitted"
+	ChangeDraftStateWithdrawn ChangeDraftState = "withdrawn"
+)
+
+// Valid indicates whether the value is a known member of the ChangeDraftState enum.
+func (e ChangeDraftState) Valid() bool {
+	switch e {
+	case ChangeDraftStateApproved:
+		return true
+	case ChangeDraftStateDraft:
+		return true
+	case ChangeDraftStatePublished:
+		return true
+	case ChangeDraftStateRejected:
+		return true
+	case ChangeDraftStateSubmitted:
+		return true
+	case ChangeDraftStateWithdrawn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChangeDraft0Origin.
+const (
+	DirectEdit ChangeDraft0Origin = "direct_edit"
+)
+
+// Valid indicates whether the value is a known member of the ChangeDraft0Origin enum.
+func (e ChangeDraft0Origin) Valid() bool {
+	switch e {
+	case DirectEdit:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChangeDraft1Action.
+const (
+	ChangeDraft1ActionCreate  ChangeDraft1Action = "create"
+	ChangeDraft1ActionDelete  ChangeDraft1Action = "delete"
+	ChangeDraft1ActionDisable ChangeDraft1Action = "disable"
+	ChangeDraft1ActionUpdate  ChangeDraft1Action = "update"
+)
+
+// Valid indicates whether the value is a known member of the ChangeDraft1Action enum.
+func (e ChangeDraft1Action) Valid() bool {
+	switch e {
+	case ChangeDraft1ActionCreate:
+		return true
+	case ChangeDraft1ActionDelete:
+		return true
+	case ChangeDraft1ActionDisable:
+		return true
+	case ChangeDraft1ActionUpdate:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChangeDraft1Origin.
+const (
+	EmployeeSuggestion ChangeDraft1Origin = "employee_suggestion"
+)
+
+// Valid indicates whether the value is a known member of the ChangeDraft1Origin enum.
+func (e ChangeDraft1Origin) Valid() bool {
+	switch e {
+	case EmployeeSuggestion:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChangeDraft1PermissionMode.
+const (
+	SuggestionOnly ChangeDraft1PermissionMode = "suggestion_only"
+)
+
+// Valid indicates whether the value is a known member of the ChangeDraft1PermissionMode enum.
+func (e ChangeDraft1PermissionMode) Valid() bool {
+	switch e {
+	case SuggestionOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DreamPolicyDefinitionConfirmationMode.
+const (
+	DreamConfirmationAlways       DreamPolicyDefinitionConfirmationMode = "always"
+	DreamConfirmationHighRiskOnly DreamPolicyDefinitionConfirmationMode = "high_risk_only"
+	DreamConfirmationNever        DreamPolicyDefinitionConfirmationMode = "never"
+)
+
+// Valid indicates whether the value is a known member of the DreamPolicyDefinitionConfirmationMode enum.
+func (e DreamPolicyDefinitionConfirmationMode) Valid() bool {
 	switch e {
 	case DreamConfirmationAlways:
 		return true
@@ -77,14 +270,14 @@ func (e DreamPolicyConfirmationMode) Valid() bool {
 	}
 }
 
-// Defines values for DreamPolicyEvidenceRetention.
+// Defines values for DreamPolicyDefinitionEvidenceRetention.
 const (
-	DreamEvidencePointerOnly               DreamPolicyEvidenceRetention = "pointer_only"
-	DreamEvidencePointerPlusDisplaySummary DreamPolicyEvidenceRetention = "pointer_plus_display_summary"
+	DreamEvidencePointerOnly               DreamPolicyDefinitionEvidenceRetention = "pointer_only"
+	DreamEvidencePointerPlusDisplaySummary DreamPolicyDefinitionEvidenceRetention = "pointer_plus_display_summary"
 )
 
-// Valid indicates whether the value is a known member of the DreamPolicyEvidenceRetention enum.
-func (e DreamPolicyEvidenceRetention) Valid() bool {
+// Valid indicates whether the value is a known member of the DreamPolicyDefinitionEvidenceRetention enum.
+func (e DreamPolicyDefinitionEvidenceRetention) Valid() bool {
 	switch e {
 	case DreamEvidencePointerOnly:
 		return true
@@ -95,20 +288,20 @@ func (e DreamPolicyEvidenceRetention) Valid() bool {
 	}
 }
 
-// Defines values for DreamPolicyInputSources.
+// Defines values for DreamPolicyDefinitionInputSources.
 const (
-	DreamSourceAgentAnswer       DreamPolicyInputSources = "agent_answer"
-	DreamSourceChildDreamSummary DreamPolicyInputSources = "child_dream_summary"
-	DreamSourceCompletedTask     DreamPolicyInputSources = "completed_task"
-	DreamSourceExternalEvidence  DreamPolicyInputSources = "external_evidence"
-	DreamSourceProjectRecord     DreamPolicyInputSources = "project_record"
-	DreamSourceRiskEvent         DreamPolicyInputSources = "risk_event"
-	DreamSourceSOPUpdate         DreamPolicyInputSources = "sop_update"
-	DreamSourceWorkBrief         DreamPolicyInputSources = "work_brief"
+	DreamSourceAgentAnswer       DreamPolicyDefinitionInputSources = "agent_answer"
+	DreamSourceChildDreamSummary DreamPolicyDefinitionInputSources = "child_dream_summary"
+	DreamSourceCompletedTask     DreamPolicyDefinitionInputSources = "completed_task"
+	DreamSourceExternalEvidence  DreamPolicyDefinitionInputSources = "external_evidence"
+	DreamSourceProjectRecord     DreamPolicyDefinitionInputSources = "project_record"
+	DreamSourceRiskEvent         DreamPolicyDefinitionInputSources = "risk_event"
+	DreamSourceSOPUpdate         DreamPolicyDefinitionInputSources = "sop_update"
+	DreamSourceWorkBrief         DreamPolicyDefinitionInputSources = "work_brief"
 )
 
-// Valid indicates whether the value is a known member of the DreamPolicyInputSources enum.
-func (e DreamPolicyInputSources) Valid() bool {
+// Valid indicates whether the value is a known member of the DreamPolicyDefinitionInputSources enum.
+func (e DreamPolicyDefinitionInputSources) Valid() bool {
 	switch e {
 	case DreamSourceAgentAnswer:
 		return true
@@ -131,15 +324,15 @@ func (e DreamPolicyInputSources) Valid() bool {
 	}
 }
 
-// Defines values for DreamPolicyVisibilityLevel.
+// Defines values for DreamPolicyDefinitionVisibilityLevel.
 const (
-	DreamVisibilityCompanySanitized DreamPolicyVisibilityLevel = "company_sanitized"
-	DreamVisibilityManagers         DreamPolicyVisibilityLevel = "managers"
-	DreamVisibilityMembers          DreamPolicyVisibilityLevel = "members"
+	DreamVisibilityCompanySanitized DreamPolicyDefinitionVisibilityLevel = "company_sanitized"
+	DreamVisibilityManagers         DreamPolicyDefinitionVisibilityLevel = "managers"
+	DreamVisibilityMembers          DreamPolicyDefinitionVisibilityLevel = "members"
 )
 
-// Valid indicates whether the value is a known member of the DreamPolicyVisibilityLevel enum.
-func (e DreamPolicyVisibilityLevel) Valid() bool {
+// Valid indicates whether the value is a known member of the DreamPolicyDefinitionVisibilityLevel enum.
+func (e DreamPolicyDefinitionVisibilityLevel) Valid() bool {
 	switch e {
 	case DreamVisibilityCompanySanitized:
 		return true
@@ -152,82 +345,17 @@ func (e DreamPolicyVisibilityLevel) Valid() bool {
 	}
 }
 
-// Defines values for DreamPolicyDraftEvidenceRetention.
+// Defines values for DreamRunViewStatus.
 const (
-	PointerOnly               DreamPolicyDraftEvidenceRetention = "pointer_only"
-	PointerPlusDisplaySummary DreamPolicyDraftEvidenceRetention = "pointer_plus_display_summary"
+	DreamRunFailed              DreamRunViewStatus = "failed"
+	DreamRunPending             DreamRunViewStatus = "pending"
+	DreamRunRunning             DreamRunViewStatus = "running"
+	DreamRunSucceeded           DreamRunViewStatus = "succeeded"
+	DreamRunWaitingConfirmation DreamRunViewStatus = "waiting_confirmation"
 )
 
-// Valid indicates whether the value is a known member of the DreamPolicyDraftEvidenceRetention enum.
-func (e DreamPolicyDraftEvidenceRetention) Valid() bool {
-	switch e {
-	case PointerOnly:
-		return true
-	case PointerPlusDisplaySummary:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for DreamPolicyDraftInputSources.
-const (
-	AgentAnswers     DreamPolicyDraftInputSources = "agent_answers"
-	ExternalEvidence DreamPolicyDraftInputSources = "external_evidence"
-	ProjectRecords   DreamPolicyDraftInputSources = "project_records"
-	SopUpdates       DreamPolicyDraftInputSources = "sop_updates"
-	WorkBriefs       DreamPolicyDraftInputSources = "work_briefs"
-)
-
-// Valid indicates whether the value is a known member of the DreamPolicyDraftInputSources enum.
-func (e DreamPolicyDraftInputSources) Valid() bool {
-	switch e {
-	case AgentAnswers:
-		return true
-	case ExternalEvidence:
-		return true
-	case ProjectRecords:
-		return true
-	case SopUpdates:
-		return true
-	case WorkBriefs:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for DreamPolicyDraftVisibilityLevel.
-const (
-	CompanySanitized DreamPolicyDraftVisibilityLevel = "company_sanitized"
-	Managers         DreamPolicyDraftVisibilityLevel = "managers"
-	Members          DreamPolicyDraftVisibilityLevel = "members"
-)
-
-// Valid indicates whether the value is a known member of the DreamPolicyDraftVisibilityLevel enum.
-func (e DreamPolicyDraftVisibilityLevel) Valid() bool {
-	switch e {
-	case CompanySanitized:
-		return true
-	case Managers:
-		return true
-	case Members:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for DreamRunStatus.
-const (
-	DreamRunFailed    DreamRunStatus = "failed"
-	DreamRunPending   DreamRunStatus = "pending"
-	DreamRunRunning   DreamRunStatus = "running"
-	DreamRunSucceeded DreamRunStatus = "succeeded"
-)
-
-// Valid indicates whether the value is a known member of the DreamRunStatus enum.
-func (e DreamRunStatus) Valid() bool {
+// Valid indicates whether the value is a known member of the DreamRunViewStatus enum.
+func (e DreamRunViewStatus) Valid() bool {
 	switch e {
 	case DreamRunFailed:
 		return true
@@ -237,47 +365,346 @@ func (e DreamRunStatus) Valid() bool {
 		return true
 	case DreamRunSucceeded:
 		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for PublishDecisionMode.
-const (
-	PublishModeEnterpriseKnowledgeAdminQueue PublishDecisionMode = "enterprise_knowledge_admin_queue"
-	PublishModeSingleConfirmation            PublishDecisionMode = "single_confirmation"
-	PublishModeUpwardReview                  PublishDecisionMode = "upward_review"
-)
-
-// Valid indicates whether the value is a known member of the PublishDecisionMode enum.
-func (e PublishDecisionMode) Valid() bool {
-	switch e {
-	case PublishModeEnterpriseKnowledgeAdminQueue:
-		return true
-	case PublishModeSingleConfirmation:
-		return true
-	case PublishModeUpwardReview:
+	case DreamRunWaitingConfirmation:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for PublishDecisionRiskLevel.
+// Defines values for InputSnapshotSummarySourceCountsSourceType.
 const (
-	PublishRiskHigh   PublishDecisionRiskLevel = "high"
-	PublishRiskLow    PublishDecisionRiskLevel = "low"
-	PublishRiskMedium PublishDecisionRiskLevel = "medium"
+	InputSnapshotSummarySourceCountsSourceTypeAgentAnswer       InputSnapshotSummarySourceCountsSourceType = "agent_answer"
+	InputSnapshotSummarySourceCountsSourceTypeChildDreamSummary InputSnapshotSummarySourceCountsSourceType = "child_dream_summary"
+	InputSnapshotSummarySourceCountsSourceTypeCompletedTask     InputSnapshotSummarySourceCountsSourceType = "completed_task"
+	InputSnapshotSummarySourceCountsSourceTypeExternalEvidence  InputSnapshotSummarySourceCountsSourceType = "external_evidence"
+	InputSnapshotSummarySourceCountsSourceTypeProjectRecord     InputSnapshotSummarySourceCountsSourceType = "project_record"
+	InputSnapshotSummarySourceCountsSourceTypeRiskEvent         InputSnapshotSummarySourceCountsSourceType = "risk_event"
+	InputSnapshotSummarySourceCountsSourceTypeSopUpdate         InputSnapshotSummarySourceCountsSourceType = "sop_update"
+	InputSnapshotSummarySourceCountsSourceTypeWorkBrief         InputSnapshotSummarySourceCountsSourceType = "work_brief"
 )
 
-// Valid indicates whether the value is a known member of the PublishDecisionRiskLevel enum.
-func (e PublishDecisionRiskLevel) Valid() bool {
+// Valid indicates whether the value is a known member of the InputSnapshotSummarySourceCountsSourceType enum.
+func (e InputSnapshotSummarySourceCountsSourceType) Valid() bool {
 	switch e {
-	case PublishRiskHigh:
+	case InputSnapshotSummarySourceCountsSourceTypeAgentAnswer:
 		return true
-	case PublishRiskLow:
+	case InputSnapshotSummarySourceCountsSourceTypeChildDreamSummary:
 		return true
-	case PublishRiskMedium:
+	case InputSnapshotSummarySourceCountsSourceTypeCompletedTask:
+		return true
+	case InputSnapshotSummarySourceCountsSourceTypeExternalEvidence:
+		return true
+	case InputSnapshotSummarySourceCountsSourceTypeProjectRecord:
+		return true
+	case InputSnapshotSummarySourceCountsSourceTypeRiskEvent:
+		return true
+	case InputSnapshotSummarySourceCountsSourceTypeSopUpdate:
+		return true
+	case InputSnapshotSummarySourceCountsSourceTypeWorkBrief:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MissingInputReason.
+const (
+	MissingInputReasonFailed        MissingInputReason = "failed"
+	MissingInputReasonMasked        MissingInputReason = "masked"
+	MissingInputReasonNotAuthorized MissingInputReason = "not_authorized"
+	MissingInputReasonNotCompleted  MissingInputReason = "not_completed"
+	MissingInputReasonNotFound      MissingInputReason = "not_found"
+)
+
+// Valid indicates whether the value is a known member of the MissingInputReason enum.
+func (e MissingInputReason) Valid() bool {
+	switch e {
+	case MissingInputReasonFailed:
+		return true
+	case MissingInputReasonMasked:
+		return true
+	case MissingInputReasonNotAuthorized:
+		return true
+	case MissingInputReasonNotCompleted:
+		return true
+	case MissingInputReasonNotFound:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MissingInputSourceType.
+const (
+	MissingInputSourceTypeAgentAnswer       MissingInputSourceType = "agent_answer"
+	MissingInputSourceTypeChildDreamSummary MissingInputSourceType = "child_dream_summary"
+	MissingInputSourceTypeCompletedTask     MissingInputSourceType = "completed_task"
+	MissingInputSourceTypeExternalEvidence  MissingInputSourceType = "external_evidence"
+	MissingInputSourceTypeProjectRecord     MissingInputSourceType = "project_record"
+	MissingInputSourceTypeRiskEvent         MissingInputSourceType = "risk_event"
+	MissingInputSourceTypeSopUpdate         MissingInputSourceType = "sop_update"
+	MissingInputSourceTypeWorkBrief         MissingInputSourceType = "work_brief"
+)
+
+// Valid indicates whether the value is a known member of the MissingInputSourceType enum.
+func (e MissingInputSourceType) Valid() bool {
+	switch e {
+	case MissingInputSourceTypeAgentAnswer:
+		return true
+	case MissingInputSourceTypeChildDreamSummary:
+		return true
+	case MissingInputSourceTypeCompletedTask:
+		return true
+	case MissingInputSourceTypeExternalEvidence:
+		return true
+	case MissingInputSourceTypeProjectRecord:
+		return true
+	case MissingInputSourceTypeRiskEvent:
+		return true
+	case MissingInputSourceTypeSopUpdate:
+		return true
+	case MissingInputSourceTypeWorkBrief:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReviewRouteMode.
+const (
+	ReviewModeEnterpriseKnowledgeAdminQueue ReviewRouteMode = "enterprise_knowledge_admin_queue"
+	ReviewModeSingleConfirmation            ReviewRouteMode = "single_confirmation"
+	ReviewModeUpwardReview                  ReviewRouteMode = "upward_review"
+)
+
+// Valid indicates whether the value is a known member of the ReviewRouteMode enum.
+func (e ReviewRouteMode) Valid() bool {
+	switch e {
+	case ReviewModeEnterpriseKnowledgeAdminQueue:
+		return true
+	case ReviewModeSingleConfirmation:
+		return true
+	case ReviewModeUpwardReview:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReviewRouteResourceType.
+const (
+	ReviewRouteResourceTypeDreamPolicy    ReviewRouteResourceType = "dream_policy"
+	ReviewRouteResourceTypeKnowledgeEntry ReviewRouteResourceType = "knowledge_entry"
+	ReviewRouteResourceTypeMethodOutline  ReviewRouteResourceType = "method_outline"
+	ReviewRouteResourceTypeSop            ReviewRouteResourceType = "sop"
+	ReviewRouteResourceTypeWorkflow       ReviewRouteResourceType = "workflow"
+)
+
+// Valid indicates whether the value is a known member of the ReviewRouteResourceType enum.
+func (e ReviewRouteResourceType) Valid() bool {
+	switch e {
+	case ReviewRouteResourceTypeDreamPolicy:
+		return true
+	case ReviewRouteResourceTypeKnowledgeEntry:
+		return true
+	case ReviewRouteResourceTypeMethodOutline:
+		return true
+	case ReviewRouteResourceTypeSop:
+		return true
+	case ReviewRouteResourceTypeWorkflow:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReviewRouteRiskLevel.
+const (
+	ReviewRouteRiskLevelHigh ReviewRouteRiskLevel = "high"
+	ReviewRouteRiskLevelLow  ReviewRouteRiskLevel = "low"
+)
+
+// Valid indicates whether the value is a known member of the ReviewRouteRiskLevel enum.
+func (e ReviewRouteRiskLevel) Valid() bool {
+	switch e {
+	case ReviewRouteRiskLevelHigh:
+		return true
+	case ReviewRouteRiskLevelLow:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReviewRouteState.
+const (
+	ReviewRouteStateApproved  ReviewRouteState = "approved"
+	ReviewRouteStateCancelled ReviewRouteState = "cancelled"
+	ReviewRouteStatePending   ReviewRouteState = "pending"
+	ReviewRouteStateRejected  ReviewRouteState = "rejected"
+)
+
+// Valid indicates whether the value is a known member of the ReviewRouteState enum.
+func (e ReviewRouteState) Valid() bool {
+	switch e {
+	case ReviewRouteStateApproved:
+		return true
+	case ReviewRouteStateCancelled:
+		return true
+	case ReviewRouteStatePending:
+		return true
+	case ReviewRouteStateRejected:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReviewRoute0Mode.
+const (
+	SingleConfirmation ReviewRoute0Mode = "single_confirmation"
+)
+
+// Valid indicates whether the value is a known member of the ReviewRoute0Mode enum.
+func (e ReviewRoute0Mode) Valid() bool {
+	switch e {
+	case SingleConfirmation:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReviewRoute0RiskLevel.
+const (
+	Low ReviewRoute0RiskLevel = "low"
+)
+
+// Valid indicates whether the value is a known member of the ReviewRoute0RiskLevel enum.
+func (e ReviewRoute0RiskLevel) Valid() bool {
+	switch e {
+	case Low:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReviewRoute1Mode.
+const (
+	UpwardReview ReviewRoute1Mode = "upward_review"
+)
+
+// Valid indicates whether the value is a known member of the ReviewRoute1Mode enum.
+func (e ReviewRoute1Mode) Valid() bool {
+	switch e {
+	case UpwardReview:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReviewRoute1RiskLevel.
+const (
+	ReviewRoute1RiskLevelHigh ReviewRoute1RiskLevel = "high"
+)
+
+// Valid indicates whether the value is a known member of the ReviewRoute1RiskLevel enum.
+func (e ReviewRoute1RiskLevel) Valid() bool {
+	switch e {
+	case ReviewRoute1RiskLevelHigh:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReviewRoute2Mode.
+const (
+	EnterpriseKnowledgeAdminQueue ReviewRoute2Mode = "enterprise_knowledge_admin_queue"
+)
+
+// Valid indicates whether the value is a known member of the ReviewRoute2Mode enum.
+func (e ReviewRoute2Mode) Valid() bool {
+	switch e {
+	case EnterpriseKnowledgeAdminQueue:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReviewRoute2RiskLevel.
+const (
+	ReviewRoute2RiskLevelHigh ReviewRoute2RiskLevel = "high"
+)
+
+// Valid indicates whether the value is a known member of the ReviewRoute2RiskLevel enum.
+func (e ReviewRoute2RiskLevel) Valid() bool {
+	switch e {
+	case ReviewRoute2RiskLevelHigh:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RiskAssessmentRiskLevel.
+const (
+	GovernanceRiskHigh RiskAssessmentRiskLevel = "high"
+	GovernanceRiskLow  RiskAssessmentRiskLevel = "low"
+)
+
+// Valid indicates whether the value is a known member of the RiskAssessmentRiskLevel enum.
+func (e RiskAssessmentRiskLevel) Valid() bool {
+	switch e {
+	case GovernanceRiskHigh:
+		return true
+	case GovernanceRiskLow:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for StructuredSignalSeverity.
+const (
+	Critical StructuredSignalSeverity = "critical"
+	Info     StructuredSignalSeverity = "info"
+	Warning  StructuredSignalSeverity = "warning"
+)
+
+// Valid indicates whether the value is a known member of the StructuredSignalSeverity enum.
+func (e StructuredSignalSeverity) Valid() bool {
+	switch e {
+	case Critical:
+		return true
+	case Info:
+		return true
+	case Warning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VisibilitySnapshotSummaryVisibilityLevel.
+const (
+	CompanySanitized VisibilitySnapshotSummaryVisibilityLevel = "company_sanitized"
+	Managers         VisibilitySnapshotSummaryVisibilityLevel = "managers"
+	Members          VisibilitySnapshotSummaryVisibilityLevel = "members"
+)
+
+// Valid indicates whether the value is a known member of the VisibilitySnapshotSummaryVisibilityLevel enum.
+func (e VisibilitySnapshotSummaryVisibilityLevel) Valid() bool {
+	switch e {
+	case CompanySanitized:
+		return true
+	case Managers:
+		return true
+	case Members:
 		return true
 	default:
 		return false
@@ -361,117 +788,145 @@ type AgentRunStatus string
 
 // ChangeDraft defines model for ChangeDraft.
 type ChangeDraft struct {
-	Action          string                 `json:"action"`
-	BaseVersion     int                    `json:"base_version"`
-	CreatedAt       time.Time              `json:"created_at"`
-	EnterpriseId    string                 `json:"enterprise_id"`
-	OrgUnitId       string                 `json:"org_unit_id"`
-	ProposedContent map[string]interface{} `json:"proposed_content"`
-	RequesterUserId string                 `json:"requester_user_id"`
-	ResourceId      string                 `json:"resource_id"`
-	ResourceType    string                 `json:"resource_type"`
-	Revision        int                    `json:"revision"`
-	State           string                 `json:"state"`
-	UpdatedAt       time.Time              `json:"updated_at"`
+	Action          ChangeDraftAction         `json:"action"`
+	BaseVersion     int                       `json:"base_version"`
+	ChangeId        string                    `json:"change_id"`
+	CreatedAt       time.Time                 `json:"created_at"`
+	EnterpriseId    string                    `json:"enterprise_id"`
+	OrgUnitId       string                    `json:"org_unit_id"`
+	Origin          ChangeDraftOrigin         `json:"origin"`
+	PermissionMode  ChangeDraftPermissionMode `json:"permission_mode"`
+	ProposedContent map[string]interface{}    `json:"proposed_content"`
+	RequesterUserId string                    `json:"requester_user_id"`
+	ResourceId      string                    `json:"resource_id"`
+	ResourceType    ChangeDraftResourceType   `json:"resource_type"`
+	Revision        int                       `json:"revision"`
+	State           ChangeDraftState          `json:"state"`
+	UpdatedAt       time.Time                 `json:"updated_at"`
+	union           json.RawMessage
 }
 
-// DreamPolicy defines model for DreamPolicy.
-type DreamPolicy struct {
-	ConfirmationMode  DreamPolicyConfirmationMode  `json:"confirmation_mode"`
-	EvidenceRetention DreamPolicyEvidenceRetention `json:"evidence_retention"`
-	InputSources      []DreamPolicyInputSources    `json:"input_sources"`
-	MaskingRules      []string                     `json:"masking_rules"`
-	MaxAttempts       int                          `json:"max_attempts"`
-	OrgUnitId         string                       `json:"org_unit_id"`
-	OutputSpaceId     string                       `json:"output_space_id"`
-	RiskSignalRules   []string                     `json:"risk_signal_rules"`
+// ChangeDraftAction defines model for ChangeDraft.Action.
+type ChangeDraftAction string
 
-	// Schedule Cron expression evaluated in the named timezone
-	Schedule        string                     `json:"schedule"`
-	Timezone        string                     `json:"timezone"`
-	VisibilityLevel DreamPolicyVisibilityLevel `json:"visibility_level"`
-	Workflow        WorkflowRef                `json:"workflow"`
+// ChangeDraftOrigin defines model for ChangeDraft.Origin.
+type ChangeDraftOrigin string
+
+// ChangeDraftPermissionMode defines model for ChangeDraft.PermissionMode.
+type ChangeDraftPermissionMode string
+
+// ChangeDraftResourceType defines model for ChangeDraft.ResourceType.
+type ChangeDraftResourceType string
+
+// ChangeDraftState defines model for ChangeDraft.State.
+type ChangeDraftState string
+
+// ChangeDraft0 defines model for .
+type ChangeDraft0 struct {
+	Origin *ChangeDraft0Origin `json:"origin,omitempty"`
 }
 
-// DreamPolicyConfirmationMode defines model for DreamPolicy.ConfirmationMode.
-type DreamPolicyConfirmationMode string
+// ChangeDraft0Origin defines model for ChangeDraft.0.Origin.
+type ChangeDraft0Origin string
 
-// DreamPolicyEvidenceRetention defines model for DreamPolicy.EvidenceRetention.
-type DreamPolicyEvidenceRetention string
-
-// DreamPolicyInputSources defines model for DreamPolicy.InputSources.
-type DreamPolicyInputSources string
-
-// DreamPolicyVisibilityLevel defines model for DreamPolicy.VisibilityLevel.
-type DreamPolicyVisibilityLevel string
-
-// DreamPolicyDraft defines model for DreamPolicyDraft.
-type DreamPolicyDraft struct {
-	EnterpriseId      string                             `json:"enterprise_id"`
-	EvidenceRetention *DreamPolicyDraftEvidenceRetention `json:"evidence_retention,omitempty"`
-	InputSources      []DreamPolicyDraftInputSources     `json:"input_sources"`
-	MaskingRules      *[]string                          `json:"masking_rules,omitempty"`
-	OrgScope          string                             `json:"org_scope"`
-	OutputSpaceId     string                             `json:"output_space_id"`
-	RetryPolicy       *struct {
-		BackoffSeconds *int `json:"backoff_seconds,omitempty"`
-		MaxAttempts    *int `json:"max_attempts,omitempty"`
-	} `json:"retry_policy,omitempty"`
-	RiskSignalRules *[]string `json:"risk_signal_rules,omitempty"`
-
-	// Schedule Cron expression evaluated in the enterprise timezone
-	Schedule        string                          `json:"schedule"`
-	VisibilityLevel DreamPolicyDraftVisibilityLevel `json:"visibility_level"`
+// ChangeDraft1 defines model for .
+type ChangeDraft1 struct {
+	Action         *ChangeDraft1Action         `json:"action,omitempty"`
+	Origin         *ChangeDraft1Origin         `json:"origin,omitempty"`
+	PermissionMode *ChangeDraft1PermissionMode `json:"permission_mode,omitempty"`
 }
 
-// DreamPolicyDraftEvidenceRetention defines model for DreamPolicyDraft.EvidenceRetention.
-type DreamPolicyDraftEvidenceRetention string
+// ChangeDraft1Action defines model for ChangeDraft.1.Action.
+type ChangeDraft1Action string
 
-// DreamPolicyDraftInputSources defines model for DreamPolicyDraft.InputSources.
-type DreamPolicyDraftInputSources string
+// ChangeDraft1Origin defines model for ChangeDraft.1.Origin.
+type ChangeDraft1Origin string
 
-// DreamPolicyDraftVisibilityLevel defines model for DreamPolicyDraft.VisibilityLevel.
-type DreamPolicyDraftVisibilityLevel string
+// ChangeDraft1PermissionMode defines model for ChangeDraft.1.PermissionMode.
+type ChangeDraft1PermissionMode string
 
-// DreamRun defines model for DreamRun.
-type DreamRun struct {
-	Attempt            int                      `json:"attempt"`
-	Coverage           map[string]interface{}   `json:"coverage"`
-	IdempotencyKey     string                   `json:"idempotency_key"`
-	InputSnapshot      map[string]interface{}   `json:"input_snapshot"`
-	MissingInputs      []map[string]interface{} `json:"missing_inputs"`
-	ModelRoute         string                   `json:"model_route"`
-	ModelVersion       string                   `json:"model_version"`
-	OrgUnitId          string                   `json:"org_unit_id"`
-	ParentRunIds       []string                 `json:"parent_run_ids"`
-	PolicyVersion      int                      `json:"policy_version"`
-	RerunOfRunId       *string                  `json:"rerun_of_run_id,omitempty"`
-	RunId              string                   `json:"run_id"`
-	Status             DreamRunStatus           `json:"status"`
-	Summaries          []DreamSummary           `json:"summaries"`
-	VisibilitySnapshot map[string]interface{}   `json:"visibility_snapshot"`
-	WindowEnd          time.Time                `json:"window_end"`
-	WindowStart        time.Time                `json:"window_start"`
-	WorkflowId         string                   `json:"workflow_id"`
-	WorkflowVersion    int                      `json:"workflow_version"`
+// Coverage defines model for Coverage.
+type Coverage struct {
+	CompletedChildren int `json:"completed_children"`
+	ExpectedChildren  int `json:"expected_children"`
+	InputCount        int `json:"input_count"`
 }
 
-// DreamRunStatus defines model for DreamRun.Status.
-type DreamRunStatus string
+// DreamPolicyDefinition defines model for DreamPolicyDefinition.
+type DreamPolicyDefinition struct {
+	ConfirmationMode  DreamPolicyDefinitionConfirmationMode   `json:"confirmation_mode"`
+	EvidenceRetention *DreamPolicyDefinitionEvidenceRetention `json:"evidence_retention,omitempty"`
+	InputSources      []DreamPolicyDefinitionInputSources     `json:"input_sources"`
+	MaskingRules      *[]string                               `json:"masking_rules,omitempty"`
+	MaxAttempts       *int                                    `json:"max_attempts,omitempty"`
+	OrgUnitId         string                                  `json:"org_unit_id"`
+	OutputSpaceId     string                                  `json:"output_space_id"`
+	RiskSignalRules   *[]string                               `json:"risk_signal_rules,omitempty"`
 
-// DreamSummary defines model for DreamSummary.
-type DreamSummary struct {
-	Coverage            map[string]interface{}   `json:"coverage"`
-	DisplaySummary      string                   `json:"display_summary"`
-	EvidencePointerId   string                   `json:"evidence_pointer_id"`
-	Facts               []map[string]interface{} `json:"facts"`
-	MissingInputs       []map[string]interface{} `json:"missing_inputs"`
-	RetrievalSummary    string                   `json:"retrieval_summary"`
-	Risks               []map[string]interface{} `json:"risks"`
-	SealedDetailPointer string                   `json:"sealed_detail_pointer"`
-	Themes              []map[string]interface{} `json:"themes"`
-	Todos               []map[string]interface{} `json:"todos"`
-	Trends              []map[string]interface{} `json:"trends"`
+	// Schedule Five-field cron evaluated in the named IANA timezone
+	Schedule        string                               `json:"schedule"`
+	Timezone        string                               `json:"timezone"`
+	VisibilityLevel DreamPolicyDefinitionVisibilityLevel `json:"visibility_level"`
+	Workflow        WorkflowRef                          `json:"workflow"`
+}
+
+// DreamPolicyDefinitionConfirmationMode defines model for DreamPolicyDefinition.ConfirmationMode.
+type DreamPolicyDefinitionConfirmationMode string
+
+// DreamPolicyDefinitionEvidenceRetention defines model for DreamPolicyDefinition.EvidenceRetention.
+type DreamPolicyDefinitionEvidenceRetention string
+
+// DreamPolicyDefinitionInputSources defines model for DreamPolicyDefinition.InputSources.
+type DreamPolicyDefinitionInputSources string
+
+// DreamPolicyDefinitionVisibilityLevel defines model for DreamPolicyDefinition.VisibilityLevel.
+type DreamPolicyDefinitionVisibilityLevel string
+
+// DreamRunView defines model for DreamRunView.
+type DreamRunView struct {
+	Attempt            int                       `json:"attempt"`
+	Coverage           Coverage                  `json:"coverage"`
+	DisplaySummary     string                    `json:"display_summary"`
+	EvidencePointerId  string                    `json:"evidence_pointer_id"`
+	Facts              []StructuredSignal        `json:"facts"`
+	IdempotencyKey     string                    `json:"idempotency_key"`
+	InputCount         int                       `json:"input_count"`
+	InputSnapshot      InputSnapshotSummary      `json:"input_snapshot"`
+	MissingInputs      []MissingInput            `json:"missing_inputs"`
+	ModelRoute         string                    `json:"model_route"`
+	ModelVersion       string                    `json:"model_version"`
+	OrgUnitId          string                    `json:"org_unit_id"`
+	ParentRunIds       []string                  `json:"parent_run_ids"`
+	PolicyVersion      int                       `json:"policy_version"`
+	RerunOfRunId       *string                   `json:"rerun_of_run_id,omitempty"`
+	Risks              []StructuredSignal        `json:"risks"`
+	RunId              string                    `json:"run_id"`
+	Status             DreamRunViewStatus        `json:"status"`
+	Themes             []StructuredSignal        `json:"themes"`
+	Todos              []StructuredSignal        `json:"todos"`
+	Trends             []StructuredSignal        `json:"trends"`
+	VisibilitySnapshot VisibilitySnapshotSummary `json:"visibility_snapshot"`
+	WindowEnd          time.Time                 `json:"window_end"`
+	WindowStart        time.Time                 `json:"window_start"`
+	Workflow           WorkflowRef               `json:"workflow"`
+}
+
+// DreamRunViewStatus defines model for DreamRunView.Status.
+type DreamRunViewStatus string
+
+// DreamSummaryView defines model for DreamSummaryView.
+type DreamSummaryView struct {
+	Coverage            Coverage           `json:"coverage"`
+	DisplaySummary      string             `json:"display_summary"`
+	EvidencePointerId   string             `json:"evidence_pointer_id"`
+	Facts               []StructuredSignal `json:"facts"`
+	MissingInputs       []MissingInput     `json:"missing_inputs"`
+	RetrievalSummary    string             `json:"retrieval_summary"`
+	Risks               []StructuredSignal `json:"risks"`
+	SealedDetailPointer string             `json:"sealed_detail_pointer"`
+	Themes              []StructuredSignal `json:"themes"`
+	Todos               []StructuredSignal `json:"todos"`
+	Trends              []StructuredSignal `json:"trends"`
 }
 
 // Error defines model for Error.
@@ -480,23 +935,125 @@ type Error struct {
 	Message string `json:"message"`
 }
 
-// PublishDecision defines model for PublishDecision.
-type PublishDecision struct {
-	IdempotencyKey  string                   `json:"idempotency_key"`
-	Mode            PublishDecisionMode      `json:"mode"`
-	OrgPath         []string                 `json:"org_path"`
-	RequesterUserId string                   `json:"requester_user_id"`
-	ReviewerUserId  *string                  `json:"reviewer_user_id,omitempty"`
-	RiskLevel       PublishDecisionRiskLevel `json:"risk_level"`
-	RiskReasons     []string                 `json:"risk_reasons"`
-	State           string                   `json:"state"`
+// InputSnapshotSummary defines model for InputSnapshotSummary.
+type InputSnapshotSummary struct {
+	SanitizedInputIds []string `json:"sanitized_input_ids"`
+	SourceCounts      []struct {
+		Count      int                                        `json:"count"`
+		SourceType InputSnapshotSummarySourceCountsSourceType `json:"source_type"`
+	} `json:"source_counts"`
 }
 
-// PublishDecisionMode defines model for PublishDecision.Mode.
-type PublishDecisionMode string
+// InputSnapshotSummarySourceCountsSourceType defines model for InputSnapshotSummary.SourceCounts.SourceType.
+type InputSnapshotSummarySourceCountsSourceType string
 
-// PublishDecisionRiskLevel defines model for PublishDecision.RiskLevel.
-type PublishDecisionRiskLevel string
+// MissingInput defines model for MissingInput.
+type MissingInput struct {
+	Reason     MissingInputReason     `json:"reason"`
+	SourceId   string                 `json:"source_id"`
+	SourceType MissingInputSourceType `json:"source_type"`
+}
+
+// MissingInputReason defines model for MissingInput.Reason.
+type MissingInputReason string
+
+// MissingInputSourceType defines model for MissingInput.SourceType.
+type MissingInputSourceType string
+
+// ReviewRoute defines model for ReviewRoute.
+type ReviewRoute struct {
+	ChangeId        string                  `json:"change_id"`
+	Mode            ReviewRouteMode         `json:"mode"`
+	OrgPath         []string                `json:"org_path"`
+	Queue           *string                 `json:"queue,omitempty"`
+	RequesterUserId string                  `json:"requester_user_id"`
+	ResourceId      string                  `json:"resource_id"`
+	ResourceType    ReviewRouteResourceType `json:"resource_type"`
+	ReviewerUserId  *string                 `json:"reviewer_user_id,omitempty"`
+	RiskLevel       ReviewRouteRiskLevel    `json:"risk_level"`
+	State           ReviewRouteState        `json:"state"`
+	union           json.RawMessage
+}
+
+// ReviewRouteMode defines model for ReviewRoute.Mode.
+type ReviewRouteMode string
+
+// ReviewRouteResourceType defines model for ReviewRoute.ResourceType.
+type ReviewRouteResourceType string
+
+// ReviewRouteRiskLevel defines model for ReviewRoute.RiskLevel.
+type ReviewRouteRiskLevel string
+
+// ReviewRouteState defines model for ReviewRoute.State.
+type ReviewRouteState string
+
+// ReviewRoute0 defines model for .
+type ReviewRoute0 struct {
+	Mode      *ReviewRoute0Mode      `json:"mode,omitempty"`
+	RiskLevel *ReviewRoute0RiskLevel `json:"risk_level,omitempty"`
+}
+
+// ReviewRoute0Mode defines model for ReviewRoute.0.Mode.
+type ReviewRoute0Mode string
+
+// ReviewRoute0RiskLevel defines model for ReviewRoute.0.RiskLevel.
+type ReviewRoute0RiskLevel string
+
+// ReviewRoute1 defines model for .
+type ReviewRoute1 struct {
+	Mode      *ReviewRoute1Mode      `json:"mode,omitempty"`
+	OrgPath   interface{}            `json:"org_path,omitempty"`
+	RiskLevel *ReviewRoute1RiskLevel `json:"risk_level,omitempty"`
+}
+
+// ReviewRoute1Mode defines model for ReviewRoute.1.Mode.
+type ReviewRoute1Mode string
+
+// ReviewRoute1RiskLevel defines model for ReviewRoute.1.RiskLevel.
+type ReviewRoute1RiskLevel string
+
+// ReviewRoute2 defines model for .
+type ReviewRoute2 struct {
+	Mode      *ReviewRoute2Mode      `json:"mode,omitempty"`
+	RiskLevel *ReviewRoute2RiskLevel `json:"risk_level,omitempty"`
+}
+
+// ReviewRoute2Mode defines model for ReviewRoute.2.Mode.
+type ReviewRoute2Mode string
+
+// ReviewRoute2RiskLevel defines model for ReviewRoute.2.RiskLevel.
+type ReviewRoute2RiskLevel string
+
+// RiskAssessment defines model for RiskAssessment.
+type RiskAssessment struct {
+	RiskLevel   RiskAssessmentRiskLevel `json:"risk_level"`
+	RiskReasons []string                `json:"risk_reasons"`
+}
+
+// RiskAssessmentRiskLevel defines model for RiskAssessment.RiskLevel.
+type RiskAssessmentRiskLevel string
+
+// StructuredSignal defines model for StructuredSignal.
+type StructuredSignal struct {
+	Detail            string                   `json:"detail"`
+	EvidencePointerId string                   `json:"evidence_pointer_id"`
+	Id                string                   `json:"id"`
+	Severity          StructuredSignalSeverity `json:"severity"`
+	Title             string                   `json:"title"`
+}
+
+// StructuredSignalSeverity defines model for StructuredSignal.Severity.
+type StructuredSignalSeverity string
+
+// VisibilitySnapshotSummary defines model for VisibilitySnapshotSummary.
+type VisibilitySnapshotSummary struct {
+	MaskedFieldCount int                                      `json:"masked_field_count"`
+	OrgUnitIds       []string                                 `json:"org_unit_ids"`
+	VisibilityLevel  VisibilitySnapshotSummaryVisibilityLevel `json:"visibility_level"`
+}
+
+// VisibilitySnapshotSummaryVisibilityLevel defines model for VisibilitySnapshotSummary.VisibilityLevel.
+type VisibilitySnapshotSummaryVisibilityLevel string
 
 // WorkflowRef defines model for WorkflowRef.
 type WorkflowRef struct {
@@ -578,7 +1135,7 @@ type PostAgentRunConfirmationJSONRequestBody PostAgentRunConfirmationJSONBody
 type PostAgentRunMessageJSONRequestBody PostAgentRunMessageJSONBody
 
 // CreateDreamPolicyJSONRequestBody defines body for CreateDreamPolicy for application/json ContentType.
-type CreateDreamPolicyJSONRequestBody = DreamPolicyDraft
+type CreateDreamPolicyJSONRequestBody = DreamPolicyDefinition
 
 // CreateMethodOutlineJSONRequestBody defines body for CreateMethodOutline for application/json ContentType.
 type CreateMethodOutlineJSONRequestBody CreateMethodOutlineJSONBody
@@ -588,3 +1145,503 @@ type CreateWorkflowDraftJSONRequestBody CreateWorkflowDraftJSONBody
 
 // StartWorkflowRunJSONRequestBody defines body for StartWorkflowRun for application/json ContentType.
 type StartWorkflowRunJSONRequestBody StartWorkflowRunJSONBody
+
+// AsChangeDraft0 returns the union data inside the ChangeDraft as a ChangeDraft0
+func (t ChangeDraft) AsChangeDraft0() (ChangeDraft0, error) {
+	var body ChangeDraft0
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromChangeDraft0 overwrites any union data inside the ChangeDraft as the provided ChangeDraft0
+func (t *ChangeDraft) FromChangeDraft0(v ChangeDraft0) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeChangeDraft0 performs a merge with any union data inside the ChangeDraft, using the provided ChangeDraft0
+func (t *ChangeDraft) MergeChangeDraft0(v ChangeDraft0) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsChangeDraft1 returns the union data inside the ChangeDraft as a ChangeDraft1
+func (t ChangeDraft) AsChangeDraft1() (ChangeDraft1, error) {
+	var body ChangeDraft1
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromChangeDraft1 overwrites any union data inside the ChangeDraft as the provided ChangeDraft1
+func (t *ChangeDraft) FromChangeDraft1(v ChangeDraft1) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeChangeDraft1 performs a merge with any union data inside the ChangeDraft, using the provided ChangeDraft1
+func (t *ChangeDraft) MergeChangeDraft1(v ChangeDraft1) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t ChangeDraft) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	object := make(map[string]json.RawMessage)
+	if t.union != nil {
+		err = json.Unmarshal(b, &object)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	object["action"], err = json.Marshal(t.Action)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'action': %w", err)
+	}
+
+	object["base_version"], err = json.Marshal(t.BaseVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'base_version': %w", err)
+	}
+
+	object["change_id"], err = json.Marshal(t.ChangeId)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'change_id': %w", err)
+	}
+
+	object["created_at"], err = json.Marshal(t.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'created_at': %w", err)
+	}
+
+	object["enterprise_id"], err = json.Marshal(t.EnterpriseId)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'enterprise_id': %w", err)
+	}
+
+	object["org_unit_id"], err = json.Marshal(t.OrgUnitId)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'org_unit_id': %w", err)
+	}
+
+	object["origin"], err = json.Marshal(t.Origin)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'origin': %w", err)
+	}
+
+	object["permission_mode"], err = json.Marshal(t.PermissionMode)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'permission_mode': %w", err)
+	}
+
+	if t.ProposedContent != nil {
+		object["proposed_content"], err = json.Marshal(t.ProposedContent)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'proposed_content': %w", err)
+		}
+	}
+
+	object["requester_user_id"], err = json.Marshal(t.RequesterUserId)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'requester_user_id': %w", err)
+	}
+
+	object["resource_id"], err = json.Marshal(t.ResourceId)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'resource_id': %w", err)
+	}
+
+	object["resource_type"], err = json.Marshal(t.ResourceType)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'resource_type': %w", err)
+	}
+
+	object["revision"], err = json.Marshal(t.Revision)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'revision': %w", err)
+	}
+
+	object["state"], err = json.Marshal(t.State)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'state': %w", err)
+	}
+
+	object["updated_at"], err = json.Marshal(t.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'updated_at': %w", err)
+	}
+
+	b, err = json.Marshal(object)
+	return b, err
+}
+
+func (t *ChangeDraft) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	if err != nil {
+		return err
+	}
+	object := make(map[string]json.RawMessage)
+	err = json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["action"]; found {
+		err = json.Unmarshal(raw, &t.Action)
+		if err != nil {
+			return fmt.Errorf("error reading 'action': %w", err)
+		}
+	}
+
+	if raw, found := object["base_version"]; found {
+		err = json.Unmarshal(raw, &t.BaseVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'base_version': %w", err)
+		}
+	}
+
+	if raw, found := object["change_id"]; found {
+		err = json.Unmarshal(raw, &t.ChangeId)
+		if err != nil {
+			return fmt.Errorf("error reading 'change_id': %w", err)
+		}
+	}
+
+	if raw, found := object["created_at"]; found {
+		err = json.Unmarshal(raw, &t.CreatedAt)
+		if err != nil {
+			return fmt.Errorf("error reading 'created_at': %w", err)
+		}
+	}
+
+	if raw, found := object["enterprise_id"]; found {
+		err = json.Unmarshal(raw, &t.EnterpriseId)
+		if err != nil {
+			return fmt.Errorf("error reading 'enterprise_id': %w", err)
+		}
+	}
+
+	if raw, found := object["org_unit_id"]; found {
+		err = json.Unmarshal(raw, &t.OrgUnitId)
+		if err != nil {
+			return fmt.Errorf("error reading 'org_unit_id': %w", err)
+		}
+	}
+
+	if raw, found := object["origin"]; found {
+		err = json.Unmarshal(raw, &t.Origin)
+		if err != nil {
+			return fmt.Errorf("error reading 'origin': %w", err)
+		}
+	}
+
+	if raw, found := object["permission_mode"]; found {
+		err = json.Unmarshal(raw, &t.PermissionMode)
+		if err != nil {
+			return fmt.Errorf("error reading 'permission_mode': %w", err)
+		}
+	}
+
+	if raw, found := object["proposed_content"]; found {
+		err = json.Unmarshal(raw, &t.ProposedContent)
+		if err != nil {
+			return fmt.Errorf("error reading 'proposed_content': %w", err)
+		}
+	}
+
+	if raw, found := object["requester_user_id"]; found {
+		err = json.Unmarshal(raw, &t.RequesterUserId)
+		if err != nil {
+			return fmt.Errorf("error reading 'requester_user_id': %w", err)
+		}
+	}
+
+	if raw, found := object["resource_id"]; found {
+		err = json.Unmarshal(raw, &t.ResourceId)
+		if err != nil {
+			return fmt.Errorf("error reading 'resource_id': %w", err)
+		}
+	}
+
+	if raw, found := object["resource_type"]; found {
+		err = json.Unmarshal(raw, &t.ResourceType)
+		if err != nil {
+			return fmt.Errorf("error reading 'resource_type': %w", err)
+		}
+	}
+
+	if raw, found := object["revision"]; found {
+		err = json.Unmarshal(raw, &t.Revision)
+		if err != nil {
+			return fmt.Errorf("error reading 'revision': %w", err)
+		}
+	}
+
+	if raw, found := object["state"]; found {
+		err = json.Unmarshal(raw, &t.State)
+		if err != nil {
+			return fmt.Errorf("error reading 'state': %w", err)
+		}
+	}
+
+	if raw, found := object["updated_at"]; found {
+		err = json.Unmarshal(raw, &t.UpdatedAt)
+		if err != nil {
+			return fmt.Errorf("error reading 'updated_at': %w", err)
+		}
+	}
+
+	return err
+}
+
+// AsReviewRoute0 returns the union data inside the ReviewRoute as a ReviewRoute0
+func (t ReviewRoute) AsReviewRoute0() (ReviewRoute0, error) {
+	var body ReviewRoute0
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromReviewRoute0 overwrites any union data inside the ReviewRoute as the provided ReviewRoute0
+func (t *ReviewRoute) FromReviewRoute0(v ReviewRoute0) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeReviewRoute0 performs a merge with any union data inside the ReviewRoute, using the provided ReviewRoute0
+func (t *ReviewRoute) MergeReviewRoute0(v ReviewRoute0) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsReviewRoute1 returns the union data inside the ReviewRoute as a ReviewRoute1
+func (t ReviewRoute) AsReviewRoute1() (ReviewRoute1, error) {
+	var body ReviewRoute1
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromReviewRoute1 overwrites any union data inside the ReviewRoute as the provided ReviewRoute1
+func (t *ReviewRoute) FromReviewRoute1(v ReviewRoute1) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeReviewRoute1 performs a merge with any union data inside the ReviewRoute, using the provided ReviewRoute1
+func (t *ReviewRoute) MergeReviewRoute1(v ReviewRoute1) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsReviewRoute2 returns the union data inside the ReviewRoute as a ReviewRoute2
+func (t ReviewRoute) AsReviewRoute2() (ReviewRoute2, error) {
+	var body ReviewRoute2
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromReviewRoute2 overwrites any union data inside the ReviewRoute as the provided ReviewRoute2
+func (t *ReviewRoute) FromReviewRoute2(v ReviewRoute2) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeReviewRoute2 performs a merge with any union data inside the ReviewRoute, using the provided ReviewRoute2
+func (t *ReviewRoute) MergeReviewRoute2(v ReviewRoute2) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t ReviewRoute) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	object := make(map[string]json.RawMessage)
+	if t.union != nil {
+		err = json.Unmarshal(b, &object)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	object["change_id"], err = json.Marshal(t.ChangeId)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'change_id': %w", err)
+	}
+
+	object["mode"], err = json.Marshal(t.Mode)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'mode': %w", err)
+	}
+
+	if t.OrgPath != nil {
+		object["org_path"], err = json.Marshal(t.OrgPath)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'org_path': %w", err)
+		}
+	}
+
+	if t.Queue != nil {
+		object["queue"], err = json.Marshal(t.Queue)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'queue': %w", err)
+		}
+	}
+
+	object["requester_user_id"], err = json.Marshal(t.RequesterUserId)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'requester_user_id': %w", err)
+	}
+
+	object["resource_id"], err = json.Marshal(t.ResourceId)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'resource_id': %w", err)
+	}
+
+	object["resource_type"], err = json.Marshal(t.ResourceType)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'resource_type': %w", err)
+	}
+
+	if t.ReviewerUserId != nil {
+		object["reviewer_user_id"], err = json.Marshal(t.ReviewerUserId)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'reviewer_user_id': %w", err)
+		}
+	}
+
+	object["risk_level"], err = json.Marshal(t.RiskLevel)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'risk_level': %w", err)
+	}
+
+	object["state"], err = json.Marshal(t.State)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'state': %w", err)
+	}
+
+	b, err = json.Marshal(object)
+	return b, err
+}
+
+func (t *ReviewRoute) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	if err != nil {
+		return err
+	}
+	object := make(map[string]json.RawMessage)
+	err = json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["change_id"]; found {
+		err = json.Unmarshal(raw, &t.ChangeId)
+		if err != nil {
+			return fmt.Errorf("error reading 'change_id': %w", err)
+		}
+	}
+
+	if raw, found := object["mode"]; found {
+		err = json.Unmarshal(raw, &t.Mode)
+		if err != nil {
+			return fmt.Errorf("error reading 'mode': %w", err)
+		}
+	}
+
+	if raw, found := object["org_path"]; found {
+		err = json.Unmarshal(raw, &t.OrgPath)
+		if err != nil {
+			return fmt.Errorf("error reading 'org_path': %w", err)
+		}
+	}
+
+	if raw, found := object["queue"]; found {
+		err = json.Unmarshal(raw, &t.Queue)
+		if err != nil {
+			return fmt.Errorf("error reading 'queue': %w", err)
+		}
+	}
+
+	if raw, found := object["requester_user_id"]; found {
+		err = json.Unmarshal(raw, &t.RequesterUserId)
+		if err != nil {
+			return fmt.Errorf("error reading 'requester_user_id': %w", err)
+		}
+	}
+
+	if raw, found := object["resource_id"]; found {
+		err = json.Unmarshal(raw, &t.ResourceId)
+		if err != nil {
+			return fmt.Errorf("error reading 'resource_id': %w", err)
+		}
+	}
+
+	if raw, found := object["resource_type"]; found {
+		err = json.Unmarshal(raw, &t.ResourceType)
+		if err != nil {
+			return fmt.Errorf("error reading 'resource_type': %w", err)
+		}
+	}
+
+	if raw, found := object["reviewer_user_id"]; found {
+		err = json.Unmarshal(raw, &t.ReviewerUserId)
+		if err != nil {
+			return fmt.Errorf("error reading 'reviewer_user_id': %w", err)
+		}
+	}
+
+	if raw, found := object["risk_level"]; found {
+		err = json.Unmarshal(raw, &t.RiskLevel)
+		if err != nil {
+			return fmt.Errorf("error reading 'risk_level': %w", err)
+		}
+	}
+
+	if raw, found := object["state"]; found {
+		err = json.Unmarshal(raw, &t.State)
+		if err != nil {
+			return fmt.Errorf("error reading 'state': %w", err)
+		}
+	}
+
+	return err
+}
