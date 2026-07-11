@@ -93,6 +93,9 @@ func TestDreamPolicyRouteConsumesCanonicalDefinition(t *testing.T) {
 	if got := request["$ref"]; got != "#/components/schemas/DreamPolicyDefinition" {
 		t.Fatalf("create request ref = %v", got)
 	}
+	response := nestedMap(t, post, "responses", "201", "content", "application/json", "schema")
+	assertObjectProperties(t, response, []string{"dream_policy_id", "status"}, nil)
+	assertEnum(t, property(t, response, "status"), []any{"draft"})
 }
 
 func TestDreamRunViewMatchesCanonicalRuntimeFields(t *testing.T) {

@@ -159,7 +159,7 @@ paths:
                 required: [dream_policy_id, status]
                 properties:
                   dream_policy_id: { type: string }
-                  status: { type: string, enum: [draft, published] }
+                  status: { type: string, enum: [draft] }
     get:
       operationId: listDreamPolicies
       summary: List the enterprise's published dream policies (console policy panel)

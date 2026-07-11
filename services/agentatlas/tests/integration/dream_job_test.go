@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/config"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
@@ -95,14 +96,17 @@ func TestDreamJob(t *testing.T) {
 
 	// policy: draft -> publish
 	policySvc := dream.NewPolicyService(q)
-	policyID, err := policySvc.CreateDraft(ctx, entID, dream.Policy{
-		OrgScope: "project_group:pg1", Schedule: "0 22 * * *",
-		InputSources: []string{"work_briefs"}, VisibilityLevel: "members",
+	policyID, err := policySvc.CreateDraft(ctx, entID, dream.Policy(sdkdream.DreamPolicyDefinition{
+		OrgUnitID: "project_group:pg1", Timezone: "UTC", Schedule: "0 22 * * *",
+		InputSources:      []sdkdream.Source{sdkdream.SourceWorkBrief},
+		Workflow:          sdkdream.WorkflowRef{ID: "legacy-direct-dream", Version: 1},
+		VisibilityLevel:   sdkdream.VisibilityMembers,
 		MaskingRules:      []string{`1[3-9]\d{9}`},
 		RiskSignalRules:   []string{`风险[:：]\S+`},
-		EvidenceRetention: "pointer_plus_display_summary",
+		EvidenceRetention: sdkdream.EvidencePointerPlusDisplaySummary,
+		ConfirmationMode:  sdkdream.ConfirmationHighRiskOnly,
 		OutputSpaceID:     spaceID,
-	})
+	}))
 	if err != nil {
 		t.Fatalf("policy draft: %v", err)
 	}

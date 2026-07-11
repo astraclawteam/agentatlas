@@ -731,16 +731,13 @@ func (e PostAgentRunConfirmationJSONBodyDecision) Valid() bool {
 
 // Defines values for CreateDreamPolicy201JSONResponseBodyStatus.
 const (
-	Draft     CreateDreamPolicy201JSONResponseBodyStatus = "draft"
-	Published CreateDreamPolicy201JSONResponseBodyStatus = "published"
+	Draft CreateDreamPolicy201JSONResponseBodyStatus = "draft"
 )
 
 // Valid indicates whether the value is a known member of the CreateDreamPolicy201JSONResponseBodyStatus enum.
 func (e CreateDreamPolicy201JSONResponseBodyStatus) Valid() bool {
 	switch e {
 	case Draft:
-		return true
-	case Published:
 		return true
 	default:
 		return false
