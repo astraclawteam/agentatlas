@@ -1,6 +1,6 @@
-// Package nexus defines the client contract AgentAtlas requires from
-// AgentNexus. This mirrors api/openapi/agentnexus-client.yaml (a proposal
-// contract until the AgentNexus repository lands). All enterprise resource
+// Package nexus defines the client contract AgentAtlas consumes from
+// AgentNexus. This mirrors api/openapi/agentnexus-client.yaml and its frozen
+// published-contract fixtures. All enterprise resource
 // access in AgentAtlas must flow through an implementation of Client; no
 // module may reach enterprise data sources directly.
 package nexus
@@ -56,25 +56,27 @@ type ReadEvidenceResponse struct {
 type AuditAction string
 
 const (
-	AuditWorkflowDraftCreated     AuditAction = "workflow_draft_created"
-	AuditWorkflowVersionPublished AuditAction = "workflow_version_published"
-	AuditDreamPolicyCreated       AuditAction = "dream_policy_created"
-	AuditDreamJobRun              AuditAction = "dream_job_run"
-	AuditRetrievalPlanCreated     AuditAction = "retrieval_plan_created"
-	AuditEvidenceLocated          AuditAction = "evidence_located"
-	AuditEvidenceRead             AuditAction = "evidence_read"
-	AuditAnswerTraceCreated       AuditAction = "answer_trace_created"
-	AuditSensitiveArtifactParsed  AuditAction = "sensitive_artifact_parsed"
-	AuditVisibilityRuleChanged    AuditAction = "visibility_rule_changed"
+	AuditWorkflowDraftCreated       AuditAction = "workflow_draft_created"
+	AuditWorkflowVersionPublished   AuditAction = "workflow_version_published"
+	AuditDreamPolicyCreated         AuditAction = "dream_policy_created"
+	AuditDreamPolicyCreateRequested AuditAction = "dream_policy_create_requested"
+	AuditDreamJobRun                AuditAction = "dream_job_run"
+	AuditRetrievalPlanCreated       AuditAction = "retrieval_plan_created"
+	AuditEvidenceLocated            AuditAction = "evidence_located"
+	AuditEvidenceRead               AuditAction = "evidence_read"
+	AuditAnswerTraceCreated         AuditAction = "answer_trace_created"
+	AuditSensitiveArtifactParsed    AuditAction = "sensitive_artifact_parsed"
+	AuditVisibilityRuleChanged      AuditAction = "visibility_rule_changed"
 )
 
 type AppendAuditEvidenceRequest struct {
-	TicketID      string         `json:"ticket_id"`
-	EnterpriseID  string         `json:"enterprise_id"`
-	Action        AuditAction    `json:"action"`
-	TraceID       string         `json:"trace_id,omitempty"`
-	WorkflowRunID string         `json:"workflow_run_id,omitempty"`
-	Details       map[string]any `json:"details,omitempty"`
+	TicketID     string         `json:"ticket_id"`
+	EnterpriseID string         `json:"enterprise_id"`
+	Action       AuditAction    `json:"action"`
+	ResourceType string         `json:"resource_type"`
+	ResourceID   string         `json:"resource_id"`
+	TraceID      string         `json:"trace_id,omitempty"`
+	Details      map[string]any `json:"details,omitempty"`
 }
 
 type AppendAuditEvidenceResponse struct {

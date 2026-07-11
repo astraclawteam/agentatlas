@@ -77,6 +77,27 @@ func TestRiskAssessmentValidation(t *testing.T) {
 	}
 }
 
+func TestValidationCountsUnicodeCodePointsLikeJSONSchema(t *testing.T) {
+	draft := validChangeDraft()
+	draft.ResourceID = strings.Repeat("知", 128)
+	if err := draft.Validate(); err != nil {
+		t.Fatalf("128 Unicode characters must satisfy maxLength 128: %v", err)
+	}
+	draft.ResourceID += "识"
+	if err := draft.Validate(); err == nil {
+		t.Fatal("129 Unicode characters must exceed maxLength 128")
+	}
+
+	risk := RiskAssessment{RiskLevel: RiskHigh, RiskReasons: []string{strings.Repeat("风", 256)}}
+	if err := risk.Validate(); err != nil {
+		t.Fatalf("256 Unicode characters must satisfy maxLength 256: %v", err)
+	}
+	risk.RiskReasons[0] += "险"
+	if err := risk.Validate(); err == nil {
+		t.Fatal("257 Unicode characters must exceed maxLength 256")
+	}
+}
+
 func TestReviewRouteRejectsMissingBindingsAndInvalidEnums(t *testing.T) {
 	base := ReviewRoute{ChangeID: "chg", ResourceType: ResourceWorkflow, ResourceID: "wf", RequesterUserID: "u1", RiskLevel: RiskLow, Mode: ReviewSingleConfirmation, State: RoutePending, OrgPath: []string{}}
 	if err := base.Validate(); err != nil {

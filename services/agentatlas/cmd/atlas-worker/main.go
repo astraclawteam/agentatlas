@@ -53,6 +53,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	nexusClient, err := nexusclient.New(cfg.AgentNexus.BaseURL, 30*time.Second, cfg.AgentNexus.ClientID, cfg.AgentNexus.SecretFile)
+	if err != nil {
+		return err
+	}
 	logger, err := observability.NewLogger("atlas-worker")
 	if err != nil {
 		return err
@@ -187,8 +191,6 @@ func run() error {
 	retrievalSvc.SetMetrics(metrics)
 	traceSvc := trace.NewService(queries)
 	traceSvc.SetMetrics(metrics)
-	nexusClient := nexusclient.New(cfg.AgentNexus.BaseURL, 30*time.Second)
-
 	// Workflow runs execute HERE: real executors behind every node type.
 	workflowSvc, err := workflow.NewService(queries)
 	if err != nil {

@@ -23,6 +23,8 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             {{- include "agentatlas.env" . | nindent 12 }}
+          volumeMounts:
+            {{- include "agentatlas.nexusSecretVolumeMount" . | nindent 12 }}
           ports:
             - containerPort: 9091
           readinessProbe:
@@ -35,3 +37,5 @@ spec:
             periodSeconds: 20
           resources:
             {{- toYaml .Values.resources.atlasWorker | nindent 12 }}
+      volumes:
+        {{- include "agentatlas.nexusSecretVolume" . | nindent 8 }}

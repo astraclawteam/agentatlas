@@ -48,14 +48,14 @@ func (h *dreamPolicyHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	policyID := dream.NewPolicyID()
-	// Record the authorized create attempt before persistence. A failed audit
+	// Record the create request before persistence. A failed audit
 	// therefore cannot leave an unaudited draft in the local store.
 	if _, err := h.deps.Nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{
 		TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID,
-		Action: nexus.AuditDreamPolicyCreated,
+		Action: nexus.AuditDreamPolicyCreateRequested, ResourceType: "dream_policy", ResourceID: policyID,
 		Details: map[string]any{
 			"dream_policy_id": policyID, "org_unit_id": req.OrgUnitID,
-			"visibility_level": req.VisibilityLevel, "phase": "authorized_create_attempt",
+			"visibility_level": req.VisibilityLevel, "phase": "create_requested",
 		},
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "audit_failed", err.Error())

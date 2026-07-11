@@ -9,6 +9,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -19,17 +22,42 @@ import (
 
 // HTTPClient implements nexus.Client against api/openapi/agentnexus-client.yaml.
 type HTTPClient struct {
-	baseURL string
-	http    *http.Client
+	baseURL         string
+	http            *http.Client
+	serviceClientID string
+	serviceSecret   string
 }
 
 var _ nexus.Client = (*HTTPClient)(nil)
 
-func New(baseURL string, timeout time.Duration) *HTTPClient {
+func (c *HTTPClient) String() string {
+	if c == nil {
+		return "HTTPClient<nil>"
+	}
+	return fmt.Sprintf("HTTPClient{baseURL:%q, serviceClientID:%q, serviceSecret:[REDACTED]}", c.baseURL, c.serviceClientID)
+}
+
+func (c *HTTPClient) GoString() string { return c.String() }
+
+func New(baseURL string, timeout time.Duration, serviceClientID, serviceSecretFile string) (*HTTPClient, error) {
+	if strings.TrimSpace(baseURL) == "" || timeout <= 0 || serviceClientID != "agentatlas" {
+		return nil, fmt.Errorf("invalid AgentNexus client configuration")
+	}
+	serviceSecret, err := loadServiceSecretFile(serviceSecretFile)
+	if err != nil {
+		return nil, fmt.Errorf("load AgentNexus service credential: %w", err)
+	}
 	return &HTTPClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		http:    &http.Client{Timeout: timeout},
-	}
+		http: &http.Client{
+			Timeout: timeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+		serviceClientID: serviceClientID,
+		serviceSecret:   serviceSecret,
+	}, nil
 }
 
 func (c *HTTPClient) post(ctx context.Context, path string, in, out any) error {
@@ -52,6 +80,9 @@ func (c *HTTPClient) doPost(ctx context.Context, path string, in, out any) error
 		return fmt.Errorf("nexus %s: %w", path, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if path == "/v1/audit/evidence" {
+		req.SetBasicAuth(c.serviceClientID, c.serviceSecret)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("nexus %s: %w", path, err)
@@ -71,6 +102,41 @@ func (c *HTTPClient) doPost(ctx context.Context, path string, in, out any) error
 		return fmt.Errorf("nexus %s: decode: %w", path, err)
 	}
 	return nil
+}
+
+func loadServiceSecretFile(path string) (string, error) {
+	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return "", fmt.Errorf("secret path must be canonical and absolute")
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("secret must be a regular non-symlink file")
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+		return "", fmt.Errorf("secret file permissions are too broad")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	secret := string(data)
+	if len(secret) < 32 || len(secret) > 256 {
+		return "", fmt.Errorf("secret must contain 32 to 256 bytes")
+	}
+	seen := map[byte]struct{}{}
+	for i := 0; i < len(secret); i++ {
+		if secret[i] < 0x21 || secret[i] > 0x7e {
+			return "", fmt.Errorf("secret must be printable ASCII without whitespace")
+		}
+		seen[secret[i]] = struct{}{}
+	}
+	if len(seen) < 12 {
+		return "", fmt.Errorf("secret does not meet minimum entropy diversity")
+	}
+	return secret, nil
 }
 
 func (c *HTTPClient) VerifyTicket(ctx context.Context, req nexus.VerifyTicketRequest) (nexus.VerifyTicketResponse, error) {

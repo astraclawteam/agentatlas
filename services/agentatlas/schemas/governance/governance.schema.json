@@ -20,9 +20,9 @@
         "proposed_content": {"type": "object", "maxProperties": 100, "additionalProperties": true},
         "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}
       },
-      "allOf": [
-        {"if": {"properties": {"origin": {"const": "employee_suggestion"}}, "required": ["origin"]}, "then": {"properties": {"permission_mode": {"const": "suggestion_only"}, "action": {"not": {"const": "publish"}}}}},
-        {"if": {"properties": {"origin": {"const": "direct_edit"}}, "required": ["origin"]}, "then": {"properties": {"permission_mode": {"const": "direct_edit"}}}}
+      "oneOf": [
+        {"properties": {"origin": {"type": "string", "enum": ["direct_edit"]}, "permission_mode": {"type": "string", "enum": ["direct_edit"]}}},
+        {"properties": {"origin": {"type": "string", "enum": ["employee_suggestion"]}, "permission_mode": {"type": "string", "enum": ["suggestion_only"]}, "action": {"type": "string", "enum": ["create", "update", "disable", "delete"]}}}
       ]
     },
     "RiskAssessment": {

@@ -3,6 +3,7 @@ package governance
 import (
 	"fmt"
 	"time"
+	"unicode/utf8"
 )
 
 type ResourceType string
@@ -94,7 +95,7 @@ type ChangeDraft struct {
 
 func (d ChangeDraft) Validate() error {
 	for name, value := range map[string]string{"change_id": d.ChangeID, "enterprise_id": d.EnterpriseID, "org_unit_id": d.OrgUnitID, "resource_id": d.ResourceID, "requester_user_id": d.RequesterUserID} {
-		if value == "" || len(value) > 128 {
+		if value == "" || utf8.RuneCountInString(value) > 128 {
 			return fmt.Errorf("%s must contain 1..128 characters", name)
 		}
 	}
@@ -136,7 +137,7 @@ func (r RiskAssessment) Validate() error {
 	}
 	seen := map[string]bool{}
 	for _, reason := range r.RiskReasons {
-		if reason == "" || len(reason) > 256 || seen[reason] {
+		if reason == "" || utf8.RuneCountInString(reason) > 256 || seen[reason] {
 			return fmt.Errorf("risk reasons must be unique strings of 1..256 characters")
 		}
 		seen[reason] = true
@@ -159,7 +160,7 @@ type ReviewRoute struct {
 
 func (r ReviewRoute) Validate() error {
 	for name, value := range map[string]string{"change_id": r.ChangeID, "resource_id": r.ResourceID, "requester_user_id": r.RequesterUserID} {
-		if value == "" || len(value) > 128 {
+		if value == "" || utf8.RuneCountInString(value) > 128 {
 			return fmt.Errorf("%s must contain 1..128 characters", name)
 		}
 	}
@@ -171,12 +172,12 @@ func (r ReviewRoute) Validate() error {
 	}
 	seen := map[string]bool{}
 	for _, item := range r.OrgPath {
-		if item == "" || len(item) > 128 || seen[item] {
+		if item == "" || utf8.RuneCountInString(item) > 128 || seen[item] {
 			return fmt.Errorf("org_path entries must be unique strings of 1..128 characters")
 		}
 		seen[item] = true
 	}
-	if len(r.ReviewerUserID) > 128 || len(r.Queue) > 128 {
+	if utf8.RuneCountInString(r.ReviewerUserID) > 128 || utf8.RuneCountInString(r.Queue) > 128 {
 		return fmt.Errorf("reviewer_user_id and queue are bounded to 128 characters")
 	}
 	if r.ReviewerUserID != "" && r.RequesterUserID == r.ReviewerUserID {

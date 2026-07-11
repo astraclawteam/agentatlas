@@ -44,7 +44,9 @@ type LLMRouter struct {
 }
 
 type AgentNexus struct {
-	BaseURL string `yaml:"base_url"`
+	BaseURL    string `yaml:"base_url"`
+	ClientID   string `yaml:"client_id"`
+	SecretFile string `yaml:"secret_file"`
 }
 
 type ParserEndpoint struct {
@@ -83,7 +85,7 @@ func Default() *Config {
 			Bucket:   "agentatlas",
 		},
 		LLMRouter:  LLMRouter{BaseURL: "http://localhost:8000/v1"},
-		AgentNexus: AgentNexus{BaseURL: "http://localhost:8100"},
+		AgentNexus: AgentNexus{BaseURL: "http://localhost:8100", ClientID: "agentatlas", SecretFile: "/run/secrets/agentatlas_agentnexus_service_secret"},
 		Parsers: Parsers{
 			Docling: ParserEndpoint{BaseURL: "http://localhost:5001"},
 			MinerU:  ParserEndpoint{BaseURL: "http://localhost:5002"},
@@ -136,6 +138,8 @@ func (c *Config) applyEnv() {
 	set(&c.LLMRouter.DefaultModel, "ATLAS_LLMROUTER_MODEL")
 	set(&c.LLMRouter.RerankModel, "ATLAS_LLMROUTER_RERANK_MODEL")
 	set(&c.AgentNexus.BaseURL, "ATLAS_NEXUS_BASE_URL")
+	set(&c.AgentNexus.ClientID, "ATLAS_NEXUS_CLIENT_ID")
+	set(&c.AgentNexus.SecretFile, "ATLAS_NEXUS_SERVICE_SECRET_FILE")
 	set(&c.Parsers.GatewayURL, "ATLAS_PARSER_GATEWAY_URL")
 	set(&c.Parsers.Docling.BaseURL, "ATLAS_DOCLING_URL")
 	set(&c.Parsers.MinerU.BaseURL, "ATLAS_MINERU_URL")

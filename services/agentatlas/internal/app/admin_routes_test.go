@@ -501,6 +501,9 @@ func TestWorkflowCreatePublishRoute(t *testing.T) {
 	var audited bool
 	for _, e := range mock.AuditLog {
 		if e.Action == nexus.AuditWorkflowVersionPublished {
+			if e.ResourceType != "workflow" || e.ResourceID != wfID {
+				t.Fatalf("workflow audit binding=%+v", e)
+			}
 			audited = true
 		}
 	}
@@ -569,7 +572,10 @@ func TestDreamPolicyRouteCreatesCanonicalDraftWithoutPublishing(t *testing.T) {
 	}
 	var audited bool
 	for _, e := range mock.AuditLog {
-		if e.Action == nexus.AuditDreamPolicyCreated {
+		if e.Action == nexus.AuditDreamPolicyCreateRequested {
+			if e.ResourceType != "dream_policy" || e.ResourceID != policyID {
+				t.Fatalf("dream policy audit binding=%+v", e)
+			}
 			audited = true
 		}
 	}
@@ -580,7 +586,7 @@ func TestDreamPolicyRouteCreatesCanonicalDraftWithoutPublishing(t *testing.T) {
 	if auditID != policyID {
 		t.Fatalf("audit id %v != response id %s", auditID, policyID)
 	}
-	if phase := mock.AuditLog[len(mock.AuditLog)-1].Details["phase"]; phase != "authorized_create_attempt" {
+	if phase := mock.AuditLog[len(mock.AuditLog)-1].Details["phase"]; phase != "create_requested" {
 		t.Fatalf("audit phase = %v", phase)
 	}
 }

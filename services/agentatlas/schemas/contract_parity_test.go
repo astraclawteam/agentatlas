@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
 	"github.com/astraclawteam/agentatlas/sdk/go/governance"
@@ -71,16 +72,12 @@ func normalizedContractShape(schema, root map[string]any, prefix string) map[str
 	if items, ok := schema["items"].(map[string]any); ok {
 		out["items"] = normalizedContractShape(items, root, prefix)
 	}
-	if properties, ok := schema["properties"].(map[string]any); ok {
-		if _, hasMode := properties["mode"]; hasMode {
-			if branches, ok := schema["oneOf"].([]any); ok {
-				values := make([]any, len(branches))
-				for i, branch := range branches {
-					values[i] = normalizedBranch(branch.(map[string]any))
-				}
-				out["oneOf"] = values
-			}
+	if branches, ok := schema["oneOf"].([]any); ok {
+		values := make([]any, len(branches))
+		for i, branch := range branches {
+			values[i] = normalizedBranch(branch.(map[string]any))
 		}
+		out["oneOf"] = values
 	}
 	return out
 }
@@ -128,7 +125,8 @@ func assertSDKShape(t *testing.T, schemaJSON []byte, name string, typ reflect.Ty
 	if err := json.Unmarshal(schemaJSON, &doc); err != nil {
 		t.Fatal(err)
 	}
-	schema := doc["$defs"].(map[string]any)[name].(map[string]any)
+	defs := doc["$defs"].(map[string]any)
+	schema := defs[name].(map[string]any)
 	properties := schema["properties"].(map[string]any)
 	required := map[string]bool{}
 	for _, value := range schema["required"].([]any) {
@@ -143,6 +141,13 @@ func assertSDKShape(t *testing.T, schemaJSON []byte, name string, typ reflect.Ty
 		if required[name] == optional {
 			t.Fatalf("SDK %s required/omitempty drift for %s", typ.Name(), name)
 		}
+		property := dereferenceJSONSchema(properties[name].(map[string]any), defs)
+		if got, want := property["type"], sdkJSONType(typ.Field(i).Type); got != want {
+			t.Fatalf("SDK %s JSON type drift for %s: schema=%v SDK=%s", typ.Name(), name, got, want)
+		}
+		if typ.Field(i).Type == reflect.TypeOf(time.Time{}) && property["format"] != "date-time" {
+			t.Fatalf("SDK %s time field %s is not date-time in schema", typ.Name(), name)
+		}
 	}
 	if len(seen) != len(properties) {
 		t.Fatalf("SDK %s field count %d != schema properties %d", typ.Name(), len(seen), len(properties))
@@ -151,6 +156,39 @@ func assertSDKShape(t *testing.T, schemaJSON []byte, name string, typ reflect.Ty
 		if !seen[name] {
 			t.Fatalf("SDK %s missing JSON field %s", typ.Name(), name)
 		}
+	}
+}
+
+func dereferenceJSONSchema(schema, defs map[string]any) map[string]any {
+	if ref, ok := schema["$ref"].(string); ok && strings.HasPrefix(ref, "#/$defs/") {
+		return defs[strings.TrimPrefix(ref, "#/$defs/")].(map[string]any)
+	}
+	return schema
+}
+
+func sdkJSONType(typ reflect.Type) string {
+	if typ == reflect.TypeOf(time.Time{}) {
+		return "string"
+	}
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	switch typ.Kind() {
+	case reflect.String:
+		return "string"
+	case reflect.Bool:
+		return "boolean"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "integer"
+	case reflect.Float32, reflect.Float64:
+		return "number"
+	case reflect.Array, reflect.Slice:
+		return "array"
+	case reflect.Map, reflect.Struct:
+		return "object"
+	default:
+		return ""
 	}
 }
 
