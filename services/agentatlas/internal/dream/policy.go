@@ -137,8 +137,14 @@ func newID(prefix string) string {
 	return prefix + "_" + hex.EncodeToString(b)
 }
 
+func NewPolicyID() string { return newID("pol") }
+
 // CreateDraft validates and stores a draft policy.
 func (s *PolicyService) CreateDraft(ctx context.Context, enterpriseID string, p Policy) (string, error) {
+	return s.CreateDraftWithID(ctx, enterpriseID, NewPolicyID(), p)
+}
+
+func (s *PolicyService) CreateDraftWithID(ctx context.Context, enterpriseID, policyID string, p Policy) (string, error) {
 	p = withPolicyDefaults(p)
 	if err := p.Validate(); err != nil {
 		return "", err
@@ -148,7 +154,7 @@ func (s *PolicyService) CreateDraft(ctx context.Context, enterpriseID string, p 
 		return "", err
 	}
 	row, err := s.store.CreateDreamPolicy(ctx, db.CreateDreamPolicyParams{
-		ID: newID("pol"), EnterpriseID: enterpriseID, OrgScope: p.OrgUnitID,
+		ID: policyID, EnterpriseID: enterpriseID, OrgScope: p.OrgUnitID,
 		Status: "draft", Draft: raw,
 	})
 	if err != nil {

@@ -182,13 +182,28 @@ func (e ChangeDraftState) Valid() bool {
 
 // Defines values for ChangeDraft0Origin.
 const (
-	DirectEdit ChangeDraft0Origin = "direct_edit"
+	ChangeDraft0OriginDirectEdit ChangeDraft0Origin = "direct_edit"
 )
 
 // Valid indicates whether the value is a known member of the ChangeDraft0Origin enum.
 func (e ChangeDraft0Origin) Valid() bool {
 	switch e {
-	case DirectEdit:
+	case ChangeDraft0OriginDirectEdit:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChangeDraft0PermissionMode.
+const (
+	ChangeDraft0PermissionModeDirectEdit ChangeDraft0PermissionMode = "direct_edit"
+)
+
+// Valid indicates whether the value is a known member of the ChangeDraft0PermissionMode enum.
+func (e ChangeDraft0PermissionMode) Valid() bool {
+	switch e {
+	case ChangeDraft0PermissionModeDirectEdit:
 		return true
 	default:
 		return false
@@ -820,11 +835,15 @@ type ChangeDraftState string
 
 // ChangeDraft0 defines model for .
 type ChangeDraft0 struct {
-	Origin *ChangeDraft0Origin `json:"origin,omitempty"`
+	Origin         *ChangeDraft0Origin         `json:"origin,omitempty"`
+	PermissionMode *ChangeDraft0PermissionMode `json:"permission_mode,omitempty"`
 }
 
 // ChangeDraft0Origin defines model for ChangeDraft.0.Origin.
 type ChangeDraft0Origin string
+
+// ChangeDraft0PermissionMode defines model for ChangeDraft.0.PermissionMode.
+type ChangeDraft0PermissionMode string
 
 // ChangeDraft1 defines model for .
 type ChangeDraft1 struct {

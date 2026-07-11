@@ -599,6 +599,7 @@ components:
       oneOf:
         - properties:
             origin: { type: string, enum: [direct_edit] }
+            permission_mode: { type: string, enum: [direct_edit] }
         - properties:
             origin: { type: string, enum: [employee_suggestion] }
             permission_mode: { type: string, enum: [suggestion_only] }

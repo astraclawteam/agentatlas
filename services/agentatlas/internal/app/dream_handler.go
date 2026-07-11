@@ -42,21 +42,27 @@ func (h *dreamPolicyHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	policyID, err := h.deps.Dreams.CreateDraft(r.Context(), actor.Ticket.EnterpriseID, dream.Policy(req))
-	if err != nil {
+	policy := dream.Policy(req)
+	if err := policy.Validate(); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "invalid_policy", err.Error())
 		return
 	}
-	// Policy creation governs data visibility — audit append is mandatory.
+	policyID := dream.NewPolicyID()
+	// Record the authorized create attempt before persistence. A failed audit
+	// therefore cannot leave an unaudited draft in the local store.
 	if _, err := h.deps.Nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{
 		TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID,
 		Action: nexus.AuditDreamPolicyCreated,
 		Details: map[string]any{
 			"dream_policy_id": policyID, "org_unit_id": req.OrgUnitID,
-			"visibility_level": req.VisibilityLevel,
+			"visibility_level": req.VisibilityLevel, "phase": "authorized_create_attempt",
 		},
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "audit_failed", err.Error())
+		return
+	}
+	if _, err := h.deps.Dreams.CreateDraftWithID(r.Context(), actor.Ticket.EnterpriseID, policyID, policy); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "invalid_policy", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"dream_policy_id": policyID, "status": "draft"})

@@ -49,3 +49,10 @@ func TestValidateChangeDraftSuggestionCannotPublish(t *testing.T) {
 		t.Fatal("employee suggestion was allowed to request publish")
 	}
 }
+
+func TestValidateChangeDraftRejectsInvalidDateTimeFormat(t *testing.T) {
+	doc := []byte(`{"change_id":"chg-1","enterprise_id":"ent-1","org_unit_id":"dept-rd","resource_type":"knowledge_entry","resource_id":"k-1","action":"update","requester_user_id":"u-1","origin":"direct_edit","permission_mode":"direct_edit","revision":1,"state":"draft","base_version":0,"proposed_content":{},"created_at":"not-a-time","updated_at":"also-not-a-time"}`)
+	if err := ValidateChangeDraft(doc); err == nil {
+		t.Fatal("invalid ChangeDraft date-time accepted")
+	}
+}

@@ -15,6 +15,7 @@ func validateDefinition(schemaJSON []byte, resource, name string, data []byte) (
 		return nil, err
 	}
 	compiler := jsonschema.NewCompiler()
+	compiler.AssertFormat()
 	if err := compiler.AddResource(resource, schemaDoc); err != nil {
 		return nil, err
 	}

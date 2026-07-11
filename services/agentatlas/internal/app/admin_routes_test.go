@@ -576,6 +576,29 @@ func TestDreamPolicyRouteCreatesCanonicalDraftWithoutPublishing(t *testing.T) {
 	if !audited {
 		t.Fatal("dream policy creation must append audit evidence")
 	}
+	auditID := mock.AuditLog[len(mock.AuditLog)-1].Details["dream_policy_id"]
+	if auditID != policyID {
+		t.Fatalf("audit id %v != response id %s", auditID, policyID)
+	}
+	if phase := mock.AuditLog[len(mock.AuditLog)-1].Details["phase"]; phase != "authorized_create_attempt" {
+		t.Fatalf("audit phase = %v", phase)
+	}
+}
+
+func TestDreamPolicyCreateAuditFailureLeavesNoDraftOrVersion(t *testing.T) {
+	srv, _, store := newAgentTestServerWithPolicyStore(t, &failingAuditNexus{Mock: adminMock()})
+	resp := postJSONReq(t, srv.URL+"/v1/dream-policies", "tick_admin", map[string]any{
+		"org_unit_id": "pg_mes", "timezone": "Asia/Shanghai", "schedule": "0 22 * * *",
+		"input_sources": []string{"work_brief"}, "workflow": map[string]any{"id": "wf-dream", "version": 3},
+		"visibility_level": "members", "confirmation_mode": "high_risk_only", "output_space_id": "spc_1",
+	})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("audit failure status = %d, want 500", resp.StatusCode)
+	}
+	if len(store.policies) != 0 || len(store.versions) != 0 {
+		t.Fatalf("audit failure persisted state: policies=%v versions=%v", store.policies, store.versions)
+	}
 }
 
 func TestDreamPolicyListMigratesLegacyPublishedDraftJSON(t *testing.T) {

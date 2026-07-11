@@ -65,3 +65,10 @@ func TestValidateDreamRunRejectsRawStructuredData(t *testing.T) {
 		t.Fatal("untyped structured signal accepted")
 	}
 }
+
+func TestValidateDreamRunRejectsInvalidDateTimeFormat(t *testing.T) {
+	doc := []byte(`{"run_id":"run-1","status":"succeeded","org_unit_id":"dept-rd","window_start":"yesterday","window_end":"tomorrow","policy_version":1,"workflow":{"id":"wf-dream","version":3},"parent_run_ids":[],"input_count":0,"coverage":{"expected_children":0,"completed_children":0,"input_count":0},"missing_inputs":[],"facts":[],"themes":[],"trends":[],"risks":[],"todos":[],"display_summary":"done","evidence_pointer_id":"ev-1","input_snapshot":{"source_counts":[],"sanitized_input_ids":[]},"visibility_snapshot":{"visibility_level":"managers","org_unit_ids":["dept-rd"],"masked_field_count":0},"model_route":"reasoning","model_version":"v1","attempt":1,"idempotency_key":"idem-1"}`)
+	if err := ValidateDreamRun(doc); err == nil {
+		t.Fatal("invalid DreamRun date-time accepted")
+	}
+}

@@ -263,3 +263,22 @@ agent SHA-256:   CB41E6EA79D3EDA58ECB0FCD2EFE7CD794A4565B62E2DA31865D478B477CA50
 ### Environment caveat
 
 Plain `go build ./...` cannot obtain VCS status in this linked Windows worktree and exits with Go's `error obtaining VCS status: exit status 128` message. The tool-prescribed `-buildvcs=false` build passes; tests and vet also pass. GNU Make remains unavailable, so its exact recipe commands were executed directly.
+
+## Quality review closure
+
+The final review added four defense-in-depth gates:
+
+- Dream policy creation now validates first, allocates one ID, appends the already-supported `dream_policy_created` audit with `phase=authorized_create_attempt`, then persists with that exact ID. The RED test proved the previous audit failure left a draft; the GREEN test proves audit failure leaves no policy or version and the successful response/audit IDs match.
+- JSON Schema compilation enables `AssertFormat()`. RED fixtures with invalid DreamRun and ChangeDraft date-times were accepted before the change and are rejected afterward.
+- Governance SDK validators now enforce required identifiers, closed enums, revision/version bounds, timestamps, content/path/reason limits, permission-safe origin rules, and all review-route branches. Valid/invalid matrices cover each class.
+- A structured parity guard compares JSON Schema and OpenAPI required fields, enums, defaults, formats, patterns, limits, nested refs, and ReviewRoute `oneOf/not/anyOf` branches. Reflection verifies SDK JSON field sets and `omitempty` requiredness against the schemas. The obsolete legacy shape function was deleted.
+
+Fresh verification after these changes:
+
+```text
+go test ./... -count=1         # services/agentatlas: PASS
+go test ./... -count=1         # sdk/go: PASS
+go vet ./...                   # PASS
+go build -buildvcs=false ./... # PASS
+git diff --check               # PASS
+```

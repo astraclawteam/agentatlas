@@ -93,8 +93,31 @@ type ChangeDraft struct {
 }
 
 func (d ChangeDraft) Validate() error {
+	for name, value := range map[string]string{"change_id": d.ChangeID, "enterprise_id": d.EnterpriseID, "org_unit_id": d.OrgUnitID, "resource_id": d.ResourceID, "requester_user_id": d.RequesterUserID} {
+		if value == "" || len(value) > 128 {
+			return fmt.Errorf("%s must contain 1..128 characters", name)
+		}
+	}
+	if !validResourceType(d.ResourceType) || !validAction(d.Action) || !validChangeState(d.State) {
+		return fmt.Errorf("change draft contains an invalid enum")
+	}
+	if d.Revision < 1 || d.BaseVersion < 0 {
+		return fmt.Errorf("revision must be positive and base_version non-negative")
+	}
+	if d.ProposedContent == nil || len(d.ProposedContent) > 100 {
+		return fmt.Errorf("proposed_content must contain at most 100 properties")
+	}
+	if d.CreatedAt.IsZero() || d.UpdatedAt.IsZero() {
+		return fmt.Errorf("created_at and updated_at are required")
+	}
+	if d.Origin == OriginDirectEdit && d.PermissionMode != PermissionDirectEdit {
+		return fmt.Errorf("direct edits require direct_edit permission mode")
+	}
 	if d.Origin == OriginEmployeeSuggestion && (d.PermissionMode != PermissionSuggestionOnly || d.Action == ActionPublish) {
 		return fmt.Errorf("employee suggestions are suggestion-only and cannot publish")
+	}
+	if d.Origin != OriginDirectEdit && d.Origin != OriginEmployeeSuggestion {
+		return fmt.Errorf("invalid change origin")
 	}
 	return nil
 }
@@ -103,6 +126,24 @@ type RiskAssessment struct {
 	RiskLevel   RiskLevel `json:"risk_level"`
 	RiskReasons []string  `json:"risk_reasons"`
 }
+
+func (r RiskAssessment) Validate() error {
+	if r.RiskLevel != RiskLow && r.RiskLevel != RiskHigh {
+		return fmt.Errorf("invalid risk level")
+	}
+	if r.RiskReasons == nil || len(r.RiskReasons) > 100 {
+		return fmt.Errorf("too many risk reasons")
+	}
+	seen := map[string]bool{}
+	for _, reason := range r.RiskReasons {
+		if reason == "" || len(reason) > 256 || seen[reason] {
+			return fmt.Errorf("risk reasons must be unique strings of 1..256 characters")
+		}
+		seen[reason] = true
+	}
+	return nil
+}
+
 type ReviewRoute struct {
 	ChangeID        string       `json:"change_id"`
 	ResourceType    ResourceType `json:"resource_type"`
@@ -117,6 +158,27 @@ type ReviewRoute struct {
 }
 
 func (r ReviewRoute) Validate() error {
+	for name, value := range map[string]string{"change_id": r.ChangeID, "resource_id": r.ResourceID, "requester_user_id": r.RequesterUserID} {
+		if value == "" || len(value) > 128 {
+			return fmt.Errorf("%s must contain 1..128 characters", name)
+		}
+	}
+	if !validResourceType(r.ResourceType) || !validRiskLevel(r.RiskLevel) || !validRouteState(r.State) {
+		return fmt.Errorf("review route contains an invalid enum")
+	}
+	if r.OrgPath == nil || len(r.OrgPath) > 100 {
+		return fmt.Errorf("org_path is required and bounded to 100 entries")
+	}
+	seen := map[string]bool{}
+	for _, item := range r.OrgPath {
+		if item == "" || len(item) > 128 || seen[item] {
+			return fmt.Errorf("org_path entries must be unique strings of 1..128 characters")
+		}
+		seen[item] = true
+	}
+	if len(r.ReviewerUserID) > 128 || len(r.Queue) > 128 {
+		return fmt.Errorf("reviewer_user_id and queue are bounded to 128 characters")
+	}
 	if r.ReviewerUserID != "" && r.RequesterUserID == r.ReviewerUserID {
 		return fmt.Errorf("requester cannot review their own change")
 	}
@@ -137,4 +199,34 @@ func (r ReviewRoute) Validate() error {
 		return fmt.Errorf("unknown review mode")
 	}
 	return nil
+}
+
+func validResourceType(v ResourceType) bool {
+	switch v {
+	case ResourceKnowledgeEntry, ResourceSOP, ResourceWorkflow, ResourceDreamPolicy, ResourceMethodOutline:
+		return true
+	}
+	return false
+}
+func validAction(v Action) bool {
+	switch v {
+	case ActionCreate, ActionUpdate, ActionPublish, ActionDisable, ActionDelete:
+		return true
+	}
+	return false
+}
+func validChangeState(v ChangeState) bool {
+	switch v {
+	case ChangeDraftState, ChangeSubmitted, ChangeApproved, ChangeRejected, ChangePublished, ChangeWithdrawn:
+		return true
+	}
+	return false
+}
+func validRiskLevel(v RiskLevel) bool { return v == RiskLow || v == RiskHigh }
+func validRouteState(v RouteState) bool {
+	switch v {
+	case RoutePending, RouteApproved, RouteRejected, RouteCancelled:
+		return true
+	}
+	return false
 }

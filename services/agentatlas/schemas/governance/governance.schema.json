@@ -3,24 +3,27 @@
   "$id": "https://agentatlas.dev/schemas/governance/governance.schema.json",
   "title": "AgentAtlas public governance contracts",
   "$defs": {
-    "ResourceType": {"enum": ["knowledge_entry", "sop", "workflow", "dream_policy", "method_outline"]},
-    "ChangeAction": {"enum": ["create", "update", "publish", "disable", "delete"]},
-    "ChangeState": {"enum": ["draft", "submitted", "approved", "rejected", "published", "withdrawn"]},
-    "RiskLevel": {"enum": ["low", "high"]},
-    "ReviewMode": {"enum": ["single_confirmation", "upward_review", "enterprise_knowledge_admin_queue"]},
-    "RouteState": {"enum": ["pending", "approved", "rejected", "cancelled"]},
+    "ResourceType": {"type": "string", "enum": ["knowledge_entry", "sop", "workflow", "dream_policy", "method_outline"]},
+    "ChangeAction": {"type": "string", "enum": ["create", "update", "publish", "disable", "delete"]},
+    "ChangeState": {"type": "string", "enum": ["draft", "submitted", "approved", "rejected", "published", "withdrawn"]},
+    "RiskLevel": {"type": "string", "enum": ["low", "high"]},
+    "ReviewMode": {"type": "string", "enum": ["single_confirmation", "upward_review", "enterprise_knowledge_admin_queue"]},
+    "RouteState": {"type": "string", "enum": ["pending", "approved", "rejected", "cancelled"]},
     "ChangeDraft": {
       "type": "object", "additionalProperties": false,
       "required": ["change_id", "enterprise_id", "org_unit_id", "resource_type", "resource_id", "action", "requester_user_id", "origin", "permission_mode", "revision", "state", "base_version", "proposed_content", "created_at", "updated_at"],
       "properties": {
         "change_id": {"type": "string", "minLength": 1, "maxLength": 128}, "enterprise_id": {"type": "string", "minLength": 1, "maxLength": 128}, "org_unit_id": {"type": "string", "minLength": 1, "maxLength": 128},
         "resource_type": {"$ref": "#/$defs/ResourceType"}, "resource_id": {"type": "string", "minLength": 1, "maxLength": 128}, "action": {"$ref": "#/$defs/ChangeAction"}, "requester_user_id": {"type": "string", "minLength": 1, "maxLength": 128},
-        "origin": {"enum": ["direct_edit", "employee_suggestion"]}, "permission_mode": {"enum": ["direct_edit", "suggestion_only"]},
+        "origin": {"type": "string", "enum": ["direct_edit", "employee_suggestion"]}, "permission_mode": {"type": "string", "enum": ["direct_edit", "suggestion_only"]},
         "revision": {"type": "integer", "minimum": 1}, "state": {"$ref": "#/$defs/ChangeState"}, "base_version": {"type": "integer", "minimum": 0},
         "proposed_content": {"type": "object", "maxProperties": 100, "additionalProperties": true},
         "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}
       },
-      "allOf": [{"if": {"properties": {"origin": {"const": "employee_suggestion"}}, "required": ["origin"]}, "then": {"properties": {"permission_mode": {"const": "suggestion_only"}, "action": {"not": {"const": "publish"}}}}}]
+      "allOf": [
+        {"if": {"properties": {"origin": {"const": "employee_suggestion"}}, "required": ["origin"]}, "then": {"properties": {"permission_mode": {"const": "suggestion_only"}, "action": {"not": {"const": "publish"}}}}},
+        {"if": {"properties": {"origin": {"const": "direct_edit"}}, "required": ["origin"]}, "then": {"properties": {"permission_mode": {"const": "direct_edit"}}}}
+      ]
     },
     "RiskAssessment": {
       "type": "object", "additionalProperties": false, "required": ["risk_level", "risk_reasons"],
