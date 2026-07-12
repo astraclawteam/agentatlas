@@ -20,13 +20,13 @@ const (
 )
 
 type ResolvedInput struct {
-	SourceType        sdkdream.Source
-	SourceID          string
-	OrgUnitID         string
-	EvidencePointerID string
-	SanitizedText     string
-	Visibility        []string
-	ParentRunID       string
+	SourceType        sdkdream.Source `json:"source_type"`
+	SourceID          string          `json:"source_id"`
+	OrgUnitID         string          `json:"org_unit_id"`
+	EvidencePointerID string          `json:"evidence_pointer_id"`
+	SanitizedText     string          `json:"sanitized_text"`
+	Visibility        []string        `json:"visibility"`
+	ParentRunID       string          `json:"parent_run_id"`
 }
 
 // SourceInput is the internal, provenance-bearing value exchanged across a
@@ -47,9 +47,9 @@ type SourceInput struct {
 }
 
 type Coverage struct {
-	ExpectedChildren  int
-	CompletedChildren int
-	InputCount        int
+	ExpectedChildren  int `json:"expected_children"`
+	CompletedChildren int `json:"completed_children"`
+	InputCount        int `json:"input_count"`
 }
 
 type MissingInput = sdkdream.MissingInput

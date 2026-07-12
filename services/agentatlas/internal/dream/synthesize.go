@@ -10,6 +10,7 @@ import (
 
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/llmutil"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/workflow"
 )
 
 // Synthesizer produces LLM-grade dream aggregations. Masking and risk
@@ -89,30 +90,30 @@ func (s *Synthesizer) Aggregate(ctx context.Context, scopeName string, windowSta
 	}, nil
 }
 
-// AggregateTexts adapts the synthesizer for workflow dream.aggregate nodes:
-// plain masked texts in (with per-node masking/risk rules), layer map out.
-// The nil-synthesizer/deterministic degraded mode applies as usual.
-func (s *Synthesizer) AggregateTexts(ctx context.Context, scopeName string, texts []string, maskingRules, riskRules []string) (map[string]any, error) {
-	masker, err := NewMasker(maskingRules)
-	if err != nil {
-		return nil, fmt.Errorf("masking rules: %w", err)
+// AggregateWorkflowInput is the sole Synthesizer adapter exposed to the
+// dream.aggregate executor. Its inputs have already crossed the resolver's
+// masking and provenance boundary, so they are never replaced by raw reads.
+func (s *Synthesizer) AggregateWorkflowInput(ctx context.Context, input workflow.DreamAggregateInput) (map[string]any, error) {
+	briefs := make([]db.WorkBrief, len(input.Inputs))
+	for i, item := range input.Inputs {
+		briefs[i] = db.WorkBrief{ID: item.SourceID, EmployeeUserID: item.SourceID, Summary: item.SanitizedText}
 	}
-	risks, err := NewRiskExtractor(riskRules)
+	masker, _ := NewMasker(nil)
+	risks, err := NewRiskExtractor(input.RiskSignalRules)
 	if err != nil {
 		return nil, fmt.Errorf("risk rules: %w", err)
 	}
-	briefs := make([]db.WorkBrief, len(texts))
-	for i, t := range texts {
-		briefs[i] = db.WorkBrief{ID: fmt.Sprintf("wfb_%d", i), EmployeeUserID: "workflow", Summary: t}
-	}
-	now := time.Now().UTC()
-	agg, err := s.Aggregate(ctx, scopeName, now.Add(-24*time.Hour), now, briefs, masker, risks)
+	agg, err := s.Aggregate(ctx, input.OrgUnitID, input.WindowStart, input.WindowEnd, briefs, masker, risks)
 	if err != nil {
 		return nil, err
 	}
+	if agg.SealedDetail == "" {
+		agg.SealedDetail = sealedStructural(input.OrgUnitID, input.WindowStart, input.WindowEnd, map[string][]string{}, nil)
+	}
 	return map[string]any{
-		"display": agg.Display, "retrieval": agg.Retrieval,
-		"risk_signals": agg.RiskSignals, "source": agg.Source,
+		"display": agg.Display, "retrieval": agg.Retrieval, "sealed_detail": agg.SealedDetail,
+		"facts": []any{}, "themes": []any{}, "trends": []any{}, "risks": []any{}, "todos": []any{},
+		"source": agg.Source,
 	}, nil
 }
 

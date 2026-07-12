@@ -121,6 +121,21 @@ type PolicyStore interface {
 	ListPublishedDreamPolicies(ctx context.Context, enterpriseID string) ([]db.DreamPolicy, error)
 }
 
+// LoadVersion returns exactly one immutable published policy version.
+func (s *PolicyService) LoadVersion(ctx context.Context, policyID string, version int32) (Policy, error) {
+	store, ok := s.store.(interface {
+		GetDreamPolicyVersion(context.Context, db.GetDreamPolicyVersionParams) (db.DreamPolicyVersion, error)
+	})
+	if !ok {
+		return Policy{}, fmt.Errorf("policy store cannot load exact published versions")
+	}
+	row, err := store.GetDreamPolicyVersion(ctx, db.GetDreamPolicyVersionParams{PolicyID: policyID, Version: version})
+	if err != nil {
+		return Policy{}, fmt.Errorf("load policy %s@%d: %w", policyID, version, err)
+	}
+	return decodePolicy(row.Definition)
+}
+
 type PolicyService struct {
 	store PolicyStore
 }

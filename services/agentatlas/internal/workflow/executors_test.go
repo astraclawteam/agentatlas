@@ -63,8 +63,8 @@ func TestExecutorsCoverAllSixteenNodeTypes(t *testing.T) {
 		},
 		Retrieval: fakeRetriever{},
 		Nexus:     nexusclient.NewMock(),
-		Dream: func(_ context.Context, scope string, texts []string, _, _ []string) (map[string]any, error) {
-			return map[string]any{"display": scope + fmt.Sprint(len(texts)), "source": "deterministic"}, nil
+		Dream: func(_ context.Context, input DreamAggregateInput) (map[string]any, error) {
+			return map[string]any{"display": input.OrgUnitID + fmt.Sprint(len(input.Inputs)), "source": "deterministic"}, nil
 		},
 		Answer: func(_ context.Context, q string, snips []string) (string, string, error) {
 			return "答案:" + q, "test/model", nil
@@ -87,6 +87,55 @@ func TestExecutorsCoverAllSixteenNodeTypes(t *testing.T) {
 		if err != nil && strings.Contains(err.Error(), "not wired") {
 			t.Fatalf("node type %s still notWired", typ)
 		}
+	}
+}
+
+func TestDreamExecutorConsumesOnlyTypedBoundedSanitizedInput(t *testing.T) {
+	var captured DreamAggregateInput
+	r := NewRegistryWithServices(Executors{Dream: func(_ context.Context, input DreamAggregateInput) (map[string]any, error) {
+		captured = input
+		return map[string]any{
+			"display": "display", "retrieval": "retrieval", "sealed_detail": "sealed",
+			"facts": []any{}, "themes": []any{}, "trends": []any{}, "risks": []any{}, "todos": []any{},
+			"source": "deterministic", "model_route": "workflow/dream", "model_version": "v3",
+		}, nil
+	}})
+	run := &RunContext{EnterpriseID: "ent-1", Input: map[string]any{
+		"org_unit_id": "department:rd", "window_start": "2026-07-11T00:00:00Z", "window_end": "2026-07-12T00:00:00Z",
+		"inputs":   []any{map[string]any{"source_type": "work_brief", "source_id": "brief-1", "org_unit_id": "department:rd", "sanitized_text": "safe", "visibility": []any{"managers"}}},
+		"coverage": map[string]any{"expected_children": float64(0), "completed_children": float64(0), "input_count": float64(1)},
+		"missing":  []any{},
+	}, Outputs: map[string]map[string]any{}}
+	out := execNode(t, r, sdkworkflow.Node{ID: "dream", Type: sdkworkflow.NodeDreamAggregate}, run)
+	if captured.OrgUnitID != "department:rd" || len(captured.Inputs) != 1 || captured.Inputs[0].SanitizedText != "safe" {
+		t.Fatalf("captured = %+v", captured)
+	}
+	if out["sealed_detail"] != "sealed" {
+		t.Fatalf("out = %v", out)
+	}
+
+	run.Input["inputs"] = make([]any, 1001)
+	if _, err := r[sdkworkflow.NodeDreamAggregate].Execute(context.Background(), sdkworkflow.Node{ID: "dream", Type: sdkworkflow.NodeDreamAggregate}, run); err == nil || !strings.Contains(err.Error(), "bound") {
+		t.Fatalf("unbounded typed input must fail before aggregation: %v", err)
+	}
+}
+
+func TestTraceRecordPreservesDreamRunWorkflowPolicyAndEvidenceLineage(t *testing.T) {
+	run := &RunContext{RunID: "wrun-1", EnterpriseID: "ent-1", Input: map[string]any{
+		"dream_run_id": "dr-1", "dream_policy_id": "policy-1", "dream_policy_version": float64(7),
+		"workflow_id": "wf-dream", "workflow_version": float64(3),
+		"evidence_pointer_ids": []any{"ev-1", "ev-2"}, "parent_dream_run_ids": []any{"dr-child"},
+	}, Outputs: map[string]map[string]any{}}
+	rec, err := traceRecord(sdkworkflow.Node{ID: "trace", Type: sdkworkflow.NodeTraceAppend}, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.CaseTicketID != "dream-run/dr-1" || rec.WorkflowRunID != "wrun-1" || len(rec.EvidencePointerIDs) != 2 || len(rec.Steps) != 1 {
+		t.Fatalf("record = %+v", rec)
+	}
+	detail := rec.Steps[0].Detail
+	if detail["dream_run_id"] != "dr-1" || detail["dream_policy_id"] != "policy-1" || detail["workflow_id"] != "wf-dream" {
+		t.Fatalf("lineage detail = %v", detail)
 	}
 }
 

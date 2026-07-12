@@ -222,8 +222,8 @@ func (q *Queries) CreateDreamRunLineage(ctx context.Context, arg CreateDreamRunL
 }
 
 const createDreamSummary = `-- name: CreateDreamSummary :one
-INSERT INTO dream_summaries (id, run_id, enterprise_id, space_id, layer, summary_text, sealed_object_key, evidence_pointer_id, risk_signals)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO dream_summaries (id, run_id, enterprise_id, space_id, layer, summary_text, sealed_object_key, evidence_pointer_id, risk_signals, facts, themes, trends, todos)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 RETURNING id, run_id, enterprise_id, space_id, layer, summary_text, sealed_object_key, evidence_pointer_id, risk_signals, created_at, facts, themes, trends, todos
 `
 
@@ -237,6 +237,10 @@ type CreateDreamSummaryParams struct {
 	SealedObjectKey   string      `json:"sealed_object_key"`
 	EvidencePointerID pgtype.Text `json:"evidence_pointer_id"`
 	RiskSignals       []byte      `json:"risk_signals"`
+	Facts             []byte      `json:"facts"`
+	Themes            []byte      `json:"themes"`
+	Trends            []byte      `json:"trends"`
+	Todos             []byte      `json:"todos"`
 }
 
 func (q *Queries) CreateDreamSummary(ctx context.Context, arg CreateDreamSummaryParams) (DreamSummary, error) {
@@ -250,6 +254,10 @@ func (q *Queries) CreateDreamSummary(ctx context.Context, arg CreateDreamSummary
 		arg.SealedObjectKey,
 		arg.EvidencePointerID,
 		arg.RiskSignals,
+		arg.Facts,
+		arg.Themes,
+		arg.Trends,
+		arg.Todos,
 	)
 	var i DreamSummary
 	err := row.Scan(
@@ -286,6 +294,27 @@ func (q *Queries) GetDreamPolicy(ctx context.Context, id string) (DreamPolicy, e
 		&i.Draft,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getDreamPolicyVersion = `-- name: GetDreamPolicyVersion :one
+SELECT policy_id, version, definition, published_at FROM dream_policy_versions WHERE policy_id = $1 AND version = $2
+`
+
+type GetDreamPolicyVersionParams struct {
+	PolicyID string `json:"policy_id"`
+	Version  int32  `json:"version"`
+}
+
+func (q *Queries) GetDreamPolicyVersion(ctx context.Context, arg GetDreamPolicyVersionParams) (DreamPolicyVersion, error) {
+	row := q.db.QueryRow(ctx, getDreamPolicyVersion, arg.PolicyID, arg.Version)
+	var i DreamPolicyVersion
+	err := row.Scan(
+		&i.PolicyID,
+		&i.Version,
+		&i.Definition,
+		&i.PublishedAt,
 	)
 	return i, err
 }

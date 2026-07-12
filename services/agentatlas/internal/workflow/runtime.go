@@ -45,6 +45,44 @@ type runState struct {
 	Input     map[string]any            `json:"input"`
 }
 
+// RunResult is the bounded execution surface consumed by typed orchestrators.
+// Outputs are the persisted outputs of the exact published workflow version.
+type RunResult struct {
+	RunID   string
+	Status  string
+	Outputs map[string]map[string]any
+}
+
+// RunPublished executes one exact immutable workflow version and returns its
+// node outputs. It never substitutes the latest version.
+func (r *Runtime) RunPublished(ctx context.Context, enterpriseID, workflowID string, version int32, input map[string]any) (RunResult, error) {
+	wf, err := r.store.GetWorkflow(ctx, workflowID)
+	if err != nil {
+		return RunResult{}, fmt.Errorf("load workflow %s: %w", workflowID, err)
+	}
+	if wf.EnterpriseID != enterpriseID {
+		return RunResult{}, ErrWorkflowForbidden
+	}
+	runID, status, runErr := r.StartRun(ctx, enterpriseID, workflowID, version, input)
+	result := RunResult{RunID: runID, Status: status, Outputs: map[string]map[string]any{}}
+	if runID != "" {
+		run, err := r.store.GetWorkflowRun(ctx, runID)
+		if err != nil {
+			return result, errors.Join(runErr, fmt.Errorf("load completed run %s: %w", runID, err))
+		}
+		if len(run.Output) > 0 {
+			var state runState
+			if err := json.Unmarshal(run.Output, &state); err != nil {
+				return result, errors.Join(runErr, fmt.Errorf("decode completed run %s: %w", runID, err))
+			}
+			if state.Outputs != nil {
+				result.Outputs = state.Outputs
+			}
+		}
+	}
+	return result, runErr
+}
+
 // StartRun creates a run bound to a published version and executes until
 // completion, failure, or a human.confirm pause.
 func (r *Runtime) StartRun(ctx context.Context, enterpriseID, workflowID string, version int32, input map[string]any) (string, string, error) {

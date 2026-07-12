@@ -184,8 +184,6 @@ func run() error {
 	defer func() { _ = shutdownTracing(context.Background()) }()
 
 	artifactSvc := artifacts.NewService(queries, objects, parserGW, runner, summarizer)
-	dreamRunner := dream.NewRunner(queries, objects, dream.NewPolicyService(queries), runner, synthesizer)
-	dreamRunner.SetMetrics(metrics)
 	indexer := retrieval.NewIndexer(queries, search, embedder)
 	retrievalSvc := retrieval.NewService(queries, search, embedder, reranker)
 	retrievalSvc.SetMetrics(metrics)
@@ -203,12 +201,14 @@ func run() error {
 		Summarize: summarizer,
 		Retrieval: retrievalSvc,
 		Nexus:     nexusClient,
-		Dream:     synthesizer.AggregateTexts,
+		Dream:     synthesizer.AggregateWorkflowInput,
 		Answer:    answerGen,
 		Traces:    traceSvc,
 	})
 	workflowRuntime := workflow.NewRuntime(queries, workflowSvc, registry)
 	workflowRuntime.SetMetrics(metrics)
+	dreamRunner := dream.NewRunner(queries, objects, dream.NewPolicyService(queries), runner, dream.NewOrchestrator(workflowRuntime))
+	dreamRunner.SetMetrics(metrics)
 	runJobs := workflow.NewRunJobHandler(workflowRuntime, queries, runner)
 
 	metricsAddr := os.Getenv("ATLAS_WORKER_METRICS_ADDR")

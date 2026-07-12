@@ -207,6 +207,40 @@ func TestPublishedVersionImmutable(t *testing.T) {
 	}
 }
 
+func TestRunPublishedReturnsOutputsFromExactlyPinnedVersion(t *testing.T) {
+	store, svc, rt := setup(t)
+	ctx := context.Background()
+	def1 := Definition{WorkflowID: "wf_pinned", Kind: sdkworkflow.KindDream,
+		Nodes: []sdkworkflow.Node{{ID: "v1", Type: sdkworkflow.NodeInputManual}}, Edges: []sdkworkflow.Edge{}, RiskLevel: sdkworkflow.RiskLow}
+	id, err := svc.CreateDraft(ctx, "ent_1", "Dream", "admin", def1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Publish(ctx, "ent_1", id, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	def2 := def1
+	def2.Nodes = append(def2.Nodes, sdkworkflow.Node{ID: "v2", Type: sdkworkflow.NodeInputEvidencePointer, Config: map[string]any{"evidence_pointer_id": "ev-v2"}})
+	def2.Edges = []sdkworkflow.Edge{{From: "v1", To: "v2"}}
+	if err := svc.UpdateDraft(ctx, "ent_1", id, def2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Publish(ctx, "ent_1", id, "admin"); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := rt.RunPublished(ctx, "ent_1", id, 1, map[string]any{"value": "safe"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != RunSucceeded || result.Outputs["v1"]["input"] == nil || result.Outputs["v2"] != nil {
+		t.Fatalf("result = %+v", result)
+	}
+	if stored := store.runs[result.RunID]; stored.Version != 1 || stored.WorkflowID != id {
+		t.Fatalf("stored binding = %s@%d", stored.WorkflowID, stored.Version)
+	}
+}
+
 func TestRunPausesAtHumanConfirmAndResumes(t *testing.T) {
 	store, svc, rt := setup(t)
 	ctx := context.Background()

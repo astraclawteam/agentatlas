@@ -371,11 +371,21 @@ func TestAgentAtlasMVP(t *testing.T) {
 	if pgSpace.ID == "" {
 		t.Fatal("project group space missing")
 	}
+	dreamWorkflowID := "legacy-direct-dream"
+	if _, err := wfSvc.CreateDraft(ctx, enterpriseID, "Published Dream", "admin", workflow.Definition{
+		WorkflowID: dreamWorkflowID, Kind: sdkworkflow.KindDream, RiskLevel: sdkworkflow.RiskLow,
+		Nodes: []sdkworkflow.Node{{ID: "aggregate", Type: sdkworkflow.NodeDreamAggregate}}, Edges: []sdkworkflow.Edge{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wfSvc.Publish(ctx, enterpriseID, dreamWorkflowID, "admin"); err != nil {
+		t.Fatal(err)
+	}
 	policySvc := dream.NewPolicyService(q)
 	policyID, err := policySvc.CreateDraft(ctx, enterpriseID, dream.Policy(sdkdream.DreamPolicyDefinition{
 		OrgUnitID: "project_group:pg_mes", Timezone: "UTC", Schedule: "0 22 * * *",
 		InputSources:      []sdkdream.Source{sdkdream.SourceWorkBrief},
-		Workflow:          sdkdream.WorkflowRef{ID: "legacy-direct-dream", Version: 1},
+		Workflow:          sdkdream.WorkflowRef{ID: dreamWorkflowID, Version: 1},
 		VisibilityLevel:   sdkdream.VisibilityMembers,
 		MaskingRules:      []string{`1[3-9]\d{9}`},
 		RiskSignalRules:   []string{`风险[:：]\S+`},
@@ -389,7 +399,9 @@ func TestAgentAtlasMVP(t *testing.T) {
 	if _, err := policySvc.Publish(ctx, policyID); err != nil {
 		t.Fatal(err)
 	}
-	dreamRunner := dream.NewRunner(q, objects, policySvc, runner, nil)
+	synth := dream.NewSynthesizer(nil)
+	dreamWorkflowRuntime := workflow.NewRuntime(q, wfSvc, workflow.NewRegistryWithServices(workflow.Executors{Dream: synth.AggregateWorkflowInput}))
+	dreamRunner := dream.NewRunner(q, objects, policySvc, runner, dream.NewOrchestrator(dreamWorkflowRuntime))
 	if err := dreamRunner.RegisterJobHandler(); err != nil {
 		t.Fatal(err)
 	}

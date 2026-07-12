@@ -17,6 +17,9 @@ RETURNING *;
 -- name: GetLatestDreamPolicyVersion :one
 SELECT * FROM dream_policy_versions WHERE policy_id = $1 ORDER BY version DESC LIMIT 1;
 
+-- name: GetDreamPolicyVersion :one
+SELECT * FROM dream_policy_versions WHERE policy_id = sqlc.arg(policy_id) AND version = sqlc.arg(version);
+
 -- name: ListPublishedDreamPolicies :many
 SELECT * FROM dream_policies WHERE enterprise_id = $1 AND status = 'published' ORDER BY id;
 
@@ -58,8 +61,8 @@ INSERT INTO dream_inputs (run_id, source_type, source_id)
 VALUES ($1, $2, $3);
 
 -- name: CreateDreamSummary :one
-INSERT INTO dream_summaries (id, run_id, enterprise_id, space_id, layer, summary_text, sealed_object_key, evidence_pointer_id, risk_signals)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO dream_summaries (id, run_id, enterprise_id, space_id, layer, summary_text, sealed_object_key, evidence_pointer_id, risk_signals, facts, themes, trends, todos)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 RETURNING *;
 
 -- name: GetDreamSummary :one

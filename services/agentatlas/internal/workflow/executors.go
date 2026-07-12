@@ -1,8 +1,12 @@
 package workflow
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/astraclawteam/agentatlas/sdk/go/atlasdocument"
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
@@ -45,9 +49,36 @@ type Retriever interface {
 	Execute(ctx context.Context, planID string, q retrieval.Query) ([]retrieval.Result, error)
 }
 
-// DreamAggregator aggregates masked texts into dream layers
-// (*dream.Synthesizer.AggregateTexts satisfies it via adapter).
-type DreamAggregator func(ctx context.Context, scopeName string, texts []string, maskingRules, riskRules []string) (map[string]any, error)
+type DreamResolvedInput struct {
+	SourceType        string   `json:"source_type"`
+	SourceID          string   `json:"source_id"`
+	OrgUnitID         string   `json:"org_unit_id"`
+	EvidencePointerID string   `json:"evidence_pointer_id"`
+	SanitizedText     string   `json:"sanitized_text"`
+	Visibility        []string `json:"visibility"`
+	ParentRunID       string   `json:"parent_run_id"`
+}
+
+type DreamAggregateInput struct {
+	OrgUnitID       string               `json:"org_unit_id"`
+	WindowStart     time.Time            `json:"window_start"`
+	WindowEnd       time.Time            `json:"window_end"`
+	Inputs          []DreamResolvedInput `json:"inputs"`
+	RiskSignalRules []string             `json:"risk_signal_rules"`
+	Coverage        struct {
+		ExpectedChildren  int `json:"expected_children"`
+		CompletedChildren int `json:"completed_children"`
+		InputCount        int `json:"input_count"`
+	} `json:"coverage"`
+	Missing []struct {
+		SourceType string `json:"source_type"`
+		SourceID   string `json:"source_id"`
+		Reason     string `json:"reason"`
+	} `json:"missing"`
+}
+
+// DreamAggregator consumes only the typed, sanitized Dream boundary.
+type DreamAggregator func(ctx context.Context, input DreamAggregateInput) (map[string]any, error)
 
 // AnswerGenerator produces grounded answer text (llmutil-backed closure at the
 // composition root; tests use a deterministic one).
@@ -315,20 +346,22 @@ func NewRegistryWithServices(e Executors) Registry {
 			if err := requireDep("dream aggregator", e.Dream != nil); err != nil {
 				return nil, err
 			}
-			texts := stringsFromConfig(node, run, "briefs")
-			if len(texts) == 0 {
-				texts = gatherStrings(run, "sanitized_excerpt", "summary")
-			}
-			if len(texts) == 0 {
-				return nil, fmt.Errorf("node %s: no brief texts from config/input/upstream", node.ID)
-			}
-			scope, _ := resolveString(node, run, "scope_name")
-			if scope == "" {
-				scope = "工作流汇总"
-			}
-			out, err := e.Dream(ctx, scope, texts, stringsFromConfig(node, run, "masking_rules"), stringsFromConfig(node, run, "risk_signal_rules"))
+			input, err := decodeDreamAggregateInput(run.Input)
 			if err != nil {
 				return nil, fmt.Errorf("node %s: %w", node.ID, err)
+			}
+			out, err := e.Dream(ctx, input)
+			if err != nil {
+				return nil, fmt.Errorf("node %s: %w", node.ID, err)
+			}
+			if out == nil {
+				return nil, fmt.Errorf("node %s: dream aggregator returned nil output", node.ID)
+			}
+			if _, ok := out["model_route"]; !ok {
+				out["model_route"] = fmt.Sprintf("workflow/%v", run.Input["workflow_id"])
+			}
+			if _, ok := out["model_version"]; !ok {
+				out["model_version"] = fmt.Sprintf("v%v", run.Input["workflow_version"])
 			}
 			return out, nil
 		}))
@@ -355,25 +388,11 @@ func NewRegistryWithServices(e Executors) Registry {
 			if err := requireDep("trace service", e.Traces != nil); err != nil {
 				return nil, err
 			}
-			ticketID, ok := resolveString(node, run, "ticket_id")
-			if !ok {
-				return nil, fmt.Errorf("node %s: ticket_id required for trace.append", node.ID)
+			record, err := traceRecord(node, run)
+			if err != nil {
+				return nil, err
 			}
-			actor, _ := resolveString(node, run, "actor_user_id")
-			if actor == "" {
-				actor = "workflow"
-			}
-			question, _ := resolveString(node, run, "question")
-			answer, _ := resolveString(node, run, "answer")
-			row, err := e.Traces.Create(ctx, trace.Record{
-				EnterpriseID: run.EnterpriseID, CaseTicketID: ticketID, ActorUserID: actor,
-				Question: question, SanitizedQuestionSummary: question,
-				WorkflowRunID:      run.RunID,
-				EvidencePointerIDs: gatherStrings(run, "evidence_pointer_id", "evidence_pointer_ids"),
-				ReadGrantIDs:       gatherStrings(run, "grant_id"),
-				ModelRoute:         firstString(run, "model_route"),
-				Answer:             answer,
-			})
+			row, err := e.Traces.Create(ctx, record)
 			if err != nil {
 				return nil, fmt.Errorf("node %s: %w", node.ID, err)
 			}
@@ -383,6 +402,55 @@ func NewRegistryWithServices(e Executors) Registry {
 	return r
 }
 
+func traceRecord(node sdkworkflow.Node, run *RunContext) (trace.Record, error) {
+	ticketID, ok := resolveString(node, run, "ticket_id")
+	if !ok {
+		if dreamRunID, dream := run.Input["dream_run_id"].(string); dream && dreamRunID != "" {
+			ticketID = "dream-run/" + dreamRunID
+		} else {
+			return trace.Record{}, fmt.Errorf("node %s: ticket_id required for trace.append", node.ID)
+		}
+	}
+	actor, _ := resolveString(node, run, "actor_user_id")
+	if actor == "" {
+		actor = "workflow"
+	}
+	question, _ := resolveString(node, run, "question")
+	answer, _ := resolveString(node, run, "answer")
+	evidence := append(gatherStrings(run, "evidence_pointer_id", "evidence_pointer_ids"), inputStrings(run.Input["evidence_pointer_ids"])...)
+	record := trace.Record{
+		EnterpriseID: run.EnterpriseID, CaseTicketID: ticketID, ActorUserID: actor,
+		Question: question, SanitizedQuestionSummary: question, WorkflowRunID: run.RunID,
+		EvidencePointerIDs: evidence, ReadGrantIDs: gatherStrings(run, "grant_id"),
+		ModelRoute: firstString(run, "model_route"), Answer: answer,
+	}
+	if dreamRunID, dream := run.Input["dream_run_id"].(string); dream && dreamRunID != "" {
+		record.Steps = []trace.Step{{Kind: "dream.lineage", Detail: map[string]any{
+			"dream_run_id": dreamRunID, "dream_policy_id": run.Input["dream_policy_id"],
+			"dream_policy_version": run.Input["dream_policy_version"], "workflow_id": run.Input["workflow_id"],
+			"workflow_version": run.Input["workflow_version"], "parent_dream_run_ids": inputStrings(run.Input["parent_dream_run_ids"]),
+		}}}
+	}
+	return record, nil
+}
+
+func inputStrings(value any) []string {
+	switch values := value.(type) {
+	case []string:
+		return append([]string(nil), values...)
+	case []any:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			if text, ok := value.(string); ok && text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
 func firstString(run *RunContext, key string) string {
 	for _, out := range run.Outputs {
 		if v, ok := out[key].(string); ok && v != "" {
@@ -390,4 +458,39 @@ func firstString(run *RunContext, key string) string {
 		}
 	}
 	return ""
+}
+
+func decodeDreamAggregateInput(input map[string]any) (DreamAggregateInput, error) {
+	selected := map[string]any{}
+	for _, key := range []string{"org_unit_id", "window_start", "window_end", "inputs", "coverage", "missing", "risk_signal_rules"} {
+		selected[key] = input[key]
+	}
+	raw, err := json.Marshal(selected)
+	if err != nil {
+		return DreamAggregateInput{}, fmt.Errorf("encode typed Dream input: %w", err)
+	}
+	var decoded DreamAggregateInput
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return DreamAggregateInput{}, fmt.Errorf("decode typed Dream input: %w", err)
+	}
+	if strings.TrimSpace(decoded.OrgUnitID) == "" || decoded.WindowStart.IsZero() || decoded.WindowEnd.IsZero() || !decoded.WindowEnd.After(decoded.WindowStart) {
+		return DreamAggregateInput{}, fmt.Errorf("typed Dream input requires org unit and increasing window")
+	}
+	if len(decoded.Inputs) > 1000 || len(decoded.Missing) > 1000 {
+		return DreamAggregateInput{}, fmt.Errorf("typed Dream input exceeds bound 1000")
+	}
+	if len(decoded.RiskSignalRules) > 100 {
+		return DreamAggregateInput{}, fmt.Errorf("typed Dream risk rules exceed bound 100")
+	}
+	if decoded.Coverage.ExpectedChildren < 0 || decoded.Coverage.CompletedChildren < 0 || decoded.Coverage.CompletedChildren > decoded.Coverage.ExpectedChildren || decoded.Coverage.InputCount != len(decoded.Inputs) {
+		return DreamAggregateInput{}, fmt.Errorf("typed Dream input has invalid coverage")
+	}
+	for _, item := range decoded.Inputs {
+		if item.SourceType == "" || item.SourceID == "" || item.OrgUnitID == "" || item.SanitizedText == "" || len([]rune(item.SanitizedText)) > 4000 || len(item.Visibility) == 0 || len(item.Visibility) > 64 {
+			return DreamAggregateInput{}, fmt.Errorf("typed Dream input contains invalid or unbounded resolved input")
+		}
+	}
+	return decoded, nil
 }

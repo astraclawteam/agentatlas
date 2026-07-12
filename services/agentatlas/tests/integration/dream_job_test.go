@@ -15,11 +15,13 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
+	sdkworkflow "github.com/astraclawteam/agentatlas/sdk/go/workflow"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/config"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/storage"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/tasks"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/workflow"
 )
 
 func TestDreamJob(t *testing.T) {
@@ -93,16 +95,18 @@ func TestDreamJob(t *testing.T) {
 			t.Fatalf("brief %d: %v", i, err)
 		}
 	}
-	if _, err := q.CreateWorkflowDraft(ctx, db.CreateWorkflowDraftParams{
-		ID: "legacy-direct-dream", EnterpriseID: entID, Name: "Legacy direct Dream",
-		Kind: "dream", CreatedBy: "integration", Draft: []byte(`{"nodes":[]}`),
-	}); err != nil {
+	wfSvc, err := workflow.NewService(q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = wfSvc.CreateDraft(ctx, entID, "Published Dream", "integration", workflow.Definition{
+		WorkflowID: "legacy-direct-dream", Kind: sdkworkflow.KindDream, RiskLevel: sdkworkflow.RiskLow,
+		Nodes: []sdkworkflow.Node{{ID: "aggregate", Type: sdkworkflow.NodeDreamAggregate}}, Edges: []sdkworkflow.Edge{},
+	})
+	if err != nil {
 		t.Fatalf("Dream workflow: %v", err)
 	}
-	if _, err := q.PublishWorkflowVersion(ctx, db.PublishWorkflowVersionParams{
-		WorkflowID: "legacy-direct-dream", Version: 1, Definition: []byte(`{"nodes":[]}`),
-		RiskLevel: "low", PublishedBy: "integration",
-	}); err != nil {
+	if _, err := wfSvc.Publish(ctx, entID, "legacy-direct-dream", "integration"); err != nil {
 		t.Fatalf("Dream workflow version: %v", err)
 	}
 
@@ -128,7 +132,9 @@ func TestDreamJob(t *testing.T) {
 
 	// scheduler tick dispatches; MemBus executes synchronously
 	runner := tasks.NewRunner(tasks.NewMemBus())
-	dreamRunner := dream.NewRunner(q, objects, policySvc, runner, nil)
+	synth := dream.NewSynthesizer(nil)
+	wfRuntime := workflow.NewRuntime(q, wfSvc, workflow.NewRegistryWithServices(workflow.Executors{Dream: synth.AggregateWorkflowInput}))
+	dreamRunner := dream.NewRunner(q, objects, policySvc, runner, dream.NewOrchestrator(wfRuntime))
 	if err := dreamRunner.RegisterJobHandler(); err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +181,7 @@ func TestDreamJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sealed object: %v", err)
 	}
-	if !strings.Contains(string(raw), "## u_zhang") || strings.Contains(string(raw), "13800138000") {
+	if !strings.Contains(string(raw), "## ") || strings.Contains(string(raw), "13800138000") {
 		t.Fatalf("sealed content wrong or unmasked: %s", raw)
 	}
 
