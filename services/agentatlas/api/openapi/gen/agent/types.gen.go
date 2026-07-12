@@ -870,14 +870,15 @@ type Coverage struct {
 
 // DreamPolicyDefinition defines model for DreamPolicyDefinition.
 type DreamPolicyDefinition struct {
-	ConfirmationMode  DreamPolicyDefinitionConfirmationMode   `json:"confirmation_mode"`
-	EvidenceRetention *DreamPolicyDefinitionEvidenceRetention `json:"evidence_retention,omitempty"`
-	InputSources      []DreamPolicyDefinitionInputSources     `json:"input_sources"`
-	MaskingRules      *[]string                               `json:"masking_rules,omitempty"`
-	MaxAttempts       *int                                    `json:"max_attempts,omitempty"`
-	OrgUnitId         string                                  `json:"org_unit_id"`
-	OutputSpaceId     string                                  `json:"output_space_id"`
-	RiskSignalRules   *[]string                               `json:"risk_signal_rules,omitempty"`
+	AllowPartialChildren *bool                                   `json:"allow_partial_children,omitempty"`
+	ConfirmationMode     DreamPolicyDefinitionConfirmationMode   `json:"confirmation_mode"`
+	EvidenceRetention    *DreamPolicyDefinitionEvidenceRetention `json:"evidence_retention,omitempty"`
+	InputSources         []DreamPolicyDefinitionInputSources     `json:"input_sources"`
+	MaskingRules         *[]string                               `json:"masking_rules,omitempty"`
+	MaxAttempts          *int                                    `json:"max_attempts,omitempty"`
+	OrgUnitId            string                                  `json:"org_unit_id"`
+	OutputSpaceId        string                                  `json:"output_space_id"`
+	RiskSignalRules      *[]string                               `json:"risk_signal_rules,omitempty"`
 
 	// Schedule Five-field cron evaluated in the named IANA timezone
 	Schedule        string                               `json:"schedule"`

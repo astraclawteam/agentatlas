@@ -69,7 +69,8 @@
         "risk_signal_rules": {"type": "array", "default": [], "maxItems": 100, "items": {"type": "string", "minLength": 1, "maxLength": 256}},
         "evidence_retention": {"type": "string", "enum": ["pointer_only", "pointer_plus_display_summary"], "default": "pointer_only"},
         "confirmation_mode": {"type": "string", "enum": ["always", "high_risk_only", "never"]},
-        "max_attempts": {"type": "integer", "minimum": 1, "maximum": 20, "default": 3}
+        "max_attempts": {"type": "integer", "minimum": 1, "maximum": 20, "default": 3},
+        "allow_partial_children": {"type": "boolean", "default": false}
       }
     },
     "DreamSummaryView": {

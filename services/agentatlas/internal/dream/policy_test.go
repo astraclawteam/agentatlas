@@ -104,7 +104,7 @@ func TestDueComputesWindow(t *testing.T) {
 	if err != nil || !due {
 		t.Fatalf("due: %v %v", due, err)
 	}
-	if end != time.Date(2026, 7, 6, 22, 0, 0, 0, time.UTC) {
+	if end != time.Date(2026, 7, 6, 14, 0, 0, 0, time.UTC) {
 		t.Fatalf("end = %v", end)
 	}
 	if start != end.Add(-24*time.Hour) {

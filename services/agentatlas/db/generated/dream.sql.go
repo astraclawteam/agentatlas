@@ -795,7 +795,10 @@ func (q *Queries) GetLatestDreamPolicyVersion(ctx context.Context, policyID stri
 }
 
 const getLatestDreamRunForPolicy = `-- name: GetLatestDreamRunForPolicy :one
-SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at FROM dream_runs WHERE policy_id = $1 ORDER BY window_end DESC LIMIT 1
+SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at FROM dream_runs
+WHERE policy_id = $1 AND rerun_of_run_id IS NULL
+ORDER BY window_end DESC, attempt DESC, created_at DESC, id DESC
+LIMIT 1
 `
 
 func (q *Queries) GetLatestDreamRunForPolicy(ctx context.Context, policyID string) (DreamRun, error) {

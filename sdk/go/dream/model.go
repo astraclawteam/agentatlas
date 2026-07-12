@@ -94,18 +94,19 @@ const (
 )
 
 type DreamPolicyDefinition struct {
-	OrgUnitID         string            `json:"org_unit_id"`
-	Timezone          string            `json:"timezone"`
-	Schedule          string            `json:"schedule"`
-	InputSources      []Source          `json:"input_sources"`
-	Workflow          WorkflowRef       `json:"workflow"`
-	OutputSpaceID     string            `json:"output_space_id"`
-	VisibilityLevel   VisibilityLevel   `json:"visibility_level"`
-	MaskingRules      []string          `json:"masking_rules,omitempty"`
-	RiskSignalRules   []string          `json:"risk_signal_rules,omitempty"`
-	EvidenceRetention EvidenceRetention `json:"evidence_retention,omitempty"`
-	ConfirmationMode  ConfirmationMode  `json:"confirmation_mode"`
-	MaxAttempts       int32             `json:"max_attempts,omitempty"`
+	OrgUnitID            string            `json:"org_unit_id"`
+	Timezone             string            `json:"timezone"`
+	Schedule             string            `json:"schedule"`
+	InputSources         []Source          `json:"input_sources"`
+	Workflow             WorkflowRef       `json:"workflow"`
+	OutputSpaceID        string            `json:"output_space_id"`
+	VisibilityLevel      VisibilityLevel   `json:"visibility_level"`
+	MaskingRules         []string          `json:"masking_rules,omitempty"`
+	RiskSignalRules      []string          `json:"risk_signal_rules,omitempty"`
+	EvidenceRetention    EvidenceRetention `json:"evidence_retention,omitempty"`
+	ConfirmationMode     ConfirmationMode  `json:"confirmation_mode"`
+	MaxAttempts          int32             `json:"max_attempts,omitempty"`
+	AllowPartialChildren bool              `json:"allow_partial_children,omitempty"`
 }
 
 type DreamSummaryView struct {

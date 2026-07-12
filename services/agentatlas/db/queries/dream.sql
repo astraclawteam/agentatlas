@@ -146,7 +146,10 @@ RETURNING id;
 SELECT id FROM dream_runs WHERE status='pending' ORDER BY created_at LIMIT sqlc.arg(result_limit);
 
 -- name: GetLatestDreamRunForPolicy :one
-SELECT * FROM dream_runs WHERE policy_id = $1 ORDER BY window_end DESC LIMIT 1;
+SELECT * FROM dream_runs
+WHERE policy_id = $1 AND rerun_of_run_id IS NULL
+ORDER BY window_end DESC, attempt DESC, created_at DESC, id DESC
+LIMIT 1;
 
 -- name: UpdateDreamRunStatus :execrows
 UPDATE dream_runs
