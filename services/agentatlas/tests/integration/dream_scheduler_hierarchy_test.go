@@ -107,7 +107,7 @@ func TestDreamSchedulerHierarchyPostgresConcurrentTicks(t *testing.T) {
 	}
 
 	backfillStart := time.Date(2026, 7, 7, 14, 0, 0, 0, time.UTC)
-	request := dream.BackfillRequest{EnterpriseID: ent, PolicyID: childPolicy, WindowStart: backfillStart, WindowEnd: backfillStart.Add(24 * time.Hour), IdempotencyKey: "shared-explicit-key-" + suffix}
+	request := dream.BackfillRequest{EnterpriseID: ent, PolicyID: childPolicy, WindowStart: backfillStart, WindowEnd: backfillStart.Add(24 * time.Hour), IdempotencyKey: "shared-explicit-key-" + suffix, AuditRefID: "audit-shared-explicit-" + suffix}
 	backfillID, err := scheduler.Backfill(ctx, request)
 	if err != nil {
 		t.Fatal(err)
@@ -125,16 +125,16 @@ func TestDreamSchedulerHierarchyPostgresConcurrentTicks(t *testing.T) {
 	if _, err := scheduler.Backfill(ctx, otherOrg); err == nil {
 		t.Fatal("same enterprise key with different org accepted")
 	}
-	if _, err := scheduler.Backfill(ctx, dream.BackfillRequest{EnterpriseID: ent, PolicyID: childPolicy, WindowStart: time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC), WindowEnd: time.Date(2026, 7, 20, 1, 0, 0, 0, time.UTC), IdempotencyKey: "future-" + suffix}); err == nil {
+	if _, err := scheduler.Backfill(ctx, dream.BackfillRequest{EnterpriseID: ent, PolicyID: childPolicy, WindowStart: time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC), WindowEnd: time.Date(2026, 7, 20, 1, 0, 0, 0, time.UTC), IdempotencyKey: "future-" + suffix, AuditRefID: "audit-future-" + suffix}); err == nil {
 		t.Fatal("future backfill accepted")
 	}
 	if _, err := q.UpdateDreamRunStatus(ctx, db.UpdateDreamRunStatusParams{ID: backfillID, Status: "failed", Error: "fixture"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := scheduler.Backfill(ctx, dream.BackfillRequest{EnterpriseID: ent, PolicyID: childPolicy, WindowStart: childRuns[0].WindowStart.Time, WindowEnd: childRuns[0].WindowEnd.Time, RerunOfRunID: backfillID, IdempotencyKey: "bad-lineage-" + suffix}); err == nil {
+	if _, err := scheduler.Backfill(ctx, dream.BackfillRequest{EnterpriseID: ent, PolicyID: childPolicy, WindowStart: childRuns[0].WindowStart.Time, WindowEnd: childRuns[0].WindowEnd.Time, RerunOfRunID: backfillID, IdempotencyKey: "bad-lineage-" + suffix, AuditRefID: "audit-bad-lineage-" + suffix}); err == nil {
 		t.Fatal("unrelated failed lineage accepted")
 	}
-	validLineage, err := scheduler.Backfill(ctx, dream.BackfillRequest{EnterpriseID: ent, PolicyID: childPolicy, WindowStart: childRuns[0].WindowStart.Time, WindowEnd: childRuns[0].WindowEnd.Time, RerunOfRunID: childRuns[0].ID, IdempotencyKey: "valid-lineage-" + suffix})
+	validLineage, err := scheduler.Backfill(ctx, dream.BackfillRequest{EnterpriseID: ent, PolicyID: childPolicy, WindowStart: childRuns[0].WindowStart.Time, WindowEnd: childRuns[0].WindowEnd.Time, RerunOfRunID: childRuns[0].ID, IdempotencyKey: "valid-lineage-" + suffix, AuditRefID: "audit-valid-lineage-" + suffix})
 	if err != nil {
 		t.Fatal(err)
 	}

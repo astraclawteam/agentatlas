@@ -361,6 +361,24 @@ func (e DreamPolicyDefinitionVisibilityLevel) Valid() bool {
 	}
 }
 
+// Defines values for DreamPolicyLifecyclePendingAction.
+const (
+	DreamPolicyLifecyclePendingActionDisable DreamPolicyLifecyclePendingAction = "disable"
+	DreamPolicyLifecyclePendingActionPublish DreamPolicyLifecyclePendingAction = "publish"
+)
+
+// Valid indicates whether the value is a known member of the DreamPolicyLifecyclePendingAction enum.
+func (e DreamPolicyLifecyclePendingAction) Valid() bool {
+	switch e {
+	case DreamPolicyLifecyclePendingActionDisable:
+		return true
+	case DreamPolicyLifecyclePendingActionPublish:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DreamPolicyLifecyclePermissionMode.
 const (
 	DreamPolicyLifecyclePermissionModeDirectEdit     DreamPolicyLifecyclePermissionMode = "direct_edit"
@@ -394,6 +412,27 @@ func (e DreamPolicyLifecycleReviewMode) Valid() bool {
 	case DreamPolicyLifecycleReviewModeSingleConfirmation:
 		return true
 	case DreamPolicyLifecycleReviewModeUpwardReview:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DreamPolicyLifecycleReviewState.
+const (
+	DreamPolicyLifecycleReviewStateApproved DreamPolicyLifecycleReviewState = "approved"
+	DreamPolicyLifecycleReviewStatePending  DreamPolicyLifecycleReviewState = "pending"
+	DreamPolicyLifecycleReviewStateRejected DreamPolicyLifecycleReviewState = "rejected"
+)
+
+// Valid indicates whether the value is a known member of the DreamPolicyLifecycleReviewState enum.
+func (e DreamPolicyLifecycleReviewState) Valid() bool {
+	switch e {
+	case DreamPolicyLifecycleReviewStateApproved:
+		return true
+	case DreamPolicyLifecycleReviewStatePending:
+		return true
+	case DreamPolicyLifecycleReviewStateRejected:
 		return true
 	default:
 		return false
@@ -712,12 +751,15 @@ func (e ReviewRoute1Mode) Valid() bool {
 // Defines values for ReviewRoute1RiskLevel.
 const (
 	ReviewRoute1RiskLevelHigh ReviewRoute1RiskLevel = "high"
+	ReviewRoute1RiskLevelLow  ReviewRoute1RiskLevel = "low"
 )
 
 // Valid indicates whether the value is a known member of the ReviewRoute1RiskLevel enum.
 func (e ReviewRoute1RiskLevel) Valid() bool {
 	switch e {
 	case ReviewRoute1RiskLevelHigh:
+		return true
+	case ReviewRoute1RiskLevelLow:
 		return true
 	default:
 		return false
@@ -742,12 +784,15 @@ func (e ReviewRoute2Mode) Valid() bool {
 // Defines values for ReviewRoute2RiskLevel.
 const (
 	ReviewRoute2RiskLevelHigh ReviewRoute2RiskLevel = "high"
+	ReviewRoute2RiskLevelLow  ReviewRoute2RiskLevel = "low"
 )
 
 // Valid indicates whether the value is a known member of the ReviewRoute2RiskLevel enum.
 func (e ReviewRoute2RiskLevel) Valid() bool {
 	switch e {
 	case ReviewRoute2RiskLevelHigh:
+		return true
+	case ReviewRoute2RiskLevelLow:
 		return true
 	default:
 		return false
@@ -916,6 +961,24 @@ func (e DecideDreamPolicyJSONBodyDecision) Valid() bool {
 	}
 }
 
+// Defines values for SubmitDreamPolicyReviewJSONBodyAction.
+const (
+	SubmitDreamPolicyReviewJSONBodyActionDisable SubmitDreamPolicyReviewJSONBodyAction = "disable"
+	SubmitDreamPolicyReviewJSONBodyActionPublish SubmitDreamPolicyReviewJSONBodyAction = "publish"
+)
+
+// Valid indicates whether the value is a known member of the SubmitDreamPolicyReviewJSONBodyAction enum.
+func (e SubmitDreamPolicyReviewJSONBodyAction) Valid() bool {
+	switch e {
+	case SubmitDreamPolicyReviewJSONBodyActionDisable:
+		return true
+	case SubmitDreamPolicyReviewJSONBodyActionPublish:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AnnotateDreamRunJSONBodyAction.
 const (
 	Comment       AnnotateDreamRunJSONBodyAction = "comment"
@@ -942,13 +1005,13 @@ func (e AnnotateDreamRunJSONBodyAction) Valid() bool {
 
 // Defines values for StartWorkflowRun202JSONResponseBodyStatus.
 const (
-	StartWorkflowRun202JSONResponseBodyStatusPending StartWorkflowRun202JSONResponseBodyStatus = "pending"
+	Pending StartWorkflowRun202JSONResponseBodyStatus = "pending"
 )
 
 // Valid indicates whether the value is a known member of the StartWorkflowRun202JSONResponseBodyStatus enum.
 func (e StartWorkflowRun202JSONResponseBodyStatus) Valid() bool {
 	switch e {
-	case StartWorkflowRun202JSONResponseBodyStatusPending:
+	case Pending:
 		return true
 	default:
 		return false
@@ -1084,11 +1147,13 @@ type DreamPolicyDefinitionVisibilityLevel string
 type DreamPolicyLifecycle struct {
 	DreamPolicyId   string                             `json:"dream_policy_id"`
 	OrgPath         []string                           `json:"org_path"`
+	PendingAction   *DreamPolicyLifecyclePendingAction `json:"pending_action,omitempty"`
 	PermissionMode  DreamPolicyLifecyclePermissionMode `json:"permission_mode"`
 	Policy          DreamPolicyDefinition              `json:"policy"`
 	Queue           *string                            `json:"queue,omitempty"`
 	RequesterUserId string                             `json:"requester_user_id"`
 	ReviewMode      *DreamPolicyLifecycleReviewMode    `json:"review_mode,omitempty"`
+	ReviewState     *DreamPolicyLifecycleReviewState   `json:"review_state,omitempty"`
 	ReviewerUserId  *string                            `json:"reviewer_user_id,omitempty"`
 	Revision        int                                `json:"revision"`
 	RiskLevel       *DreamPolicyLifecycleRiskLevel     `json:"risk_level,omitempty"`
@@ -1097,11 +1162,17 @@ type DreamPolicyLifecycle struct {
 	Version         int                                `json:"version"`
 }
 
+// DreamPolicyLifecyclePendingAction defines model for DreamPolicyLifecycle.PendingAction.
+type DreamPolicyLifecyclePendingAction string
+
 // DreamPolicyLifecyclePermissionMode defines model for DreamPolicyLifecycle.PermissionMode.
 type DreamPolicyLifecyclePermissionMode string
 
 // DreamPolicyLifecycleReviewMode defines model for DreamPolicyLifecycle.ReviewMode.
 type DreamPolicyLifecycleReviewMode string
+
+// DreamPolicyLifecycleReviewState defines model for DreamPolicyLifecycle.ReviewState.
+type DreamPolicyLifecycleReviewState string
 
 // DreamPolicyLifecycleRiskLevel defines model for DreamPolicyLifecycle.RiskLevel.
 type DreamPolicyLifecycleRiskLevel string
@@ -1332,6 +1403,11 @@ type PostAgentRunMessageJSONBody struct {
 	Message string `json:"message"`
 }
 
+// CreateDreamPolicyParams defines parameters for CreateDreamPolicy.
+type CreateDreamPolicyParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
 // CreateDreamPolicy201JSONResponseBodyPermissionMode defines parameters for CreateDreamPolicy.
 type CreateDreamPolicy201JSONResponseBodyPermissionMode string
 
@@ -1345,6 +1421,11 @@ type CreateDreamPolicy201JSONResponseBodyVersion int
 type UpdateDreamPolicyDraftJSONBody struct {
 	Policy   DreamPolicyDefinition `json:"policy"`
 	Revision int                   `json:"revision"`
+}
+
+// UpdateDreamPolicyDraftParams defines parameters for UpdateDreamPolicyDraft.
+type UpdateDreamPolicyDraftParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
 }
 
 // BackfillDreamPolicyJSONBody defines parameters for BackfillDreamPolicy.
@@ -1369,13 +1450,37 @@ type DecideDreamPolicyJSONBody struct {
 	Revision int                               `json:"revision"`
 }
 
+// DecideDreamPolicyParams defines parameters for DecideDreamPolicy.
+type DecideDreamPolicyParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
 // DecideDreamPolicyJSONBodyDecision defines parameters for DecideDreamPolicy.
 type DecideDreamPolicyJSONBodyDecision string
+
+// DisableDreamPolicyParams defines parameters for DisableDreamPolicy.
+type DisableDreamPolicyParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
+// PublishDreamPolicyParams defines parameters for PublishDreamPolicy.
+type PublishDreamPolicyParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
+// SubmitDreamPolicyReviewJSONBody defines parameters for SubmitDreamPolicyReview.
+type SubmitDreamPolicyReviewJSONBody struct {
+	Action   *SubmitDreamPolicyReviewJSONBodyAction `json:"action,omitempty"`
+	Revision int                                    `json:"revision"`
+}
 
 // SubmitDreamPolicyReviewParams defines parameters for SubmitDreamPolicyReview.
 type SubmitDreamPolicyReviewParams struct {
 	IdempotencyKey string `json:"Idempotency-Key"`
 }
+
+// SubmitDreamPolicyReviewJSONBodyAction defines parameters for SubmitDreamPolicyReview.
+type SubmitDreamPolicyReviewJSONBodyAction string
 
 // GetDreamOverviewParams defines parameters for GetDreamOverview.
 type GetDreamOverviewParams struct {
@@ -1460,7 +1565,7 @@ type DisableDreamPolicyJSONRequestBody = DreamPolicyRevision
 type PublishDreamPolicyJSONRequestBody = DreamPolicyRevision
 
 // SubmitDreamPolicyReviewJSONRequestBody defines body for SubmitDreamPolicyReview for application/json ContentType.
-type SubmitDreamPolicyReviewJSONRequestBody = DreamPolicyRevision
+type SubmitDreamPolicyReviewJSONRequestBody SubmitDreamPolicyReviewJSONBody
 
 // AnnotateDreamRunJSONRequestBody defines body for AnnotateDreamRun for application/json ContentType.
 type AnnotateDreamRunJSONRequestBody AnnotateDreamRunJSONBody

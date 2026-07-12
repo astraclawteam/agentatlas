@@ -143,6 +143,7 @@ paths:
     post:
       operationId: createDreamPolicy
       summary: Create a dream policy draft
+      parameters: [{name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}]
       requestBody:
         required: true
         content:
@@ -193,7 +194,7 @@ paths:
     put:
       operationId: updateDreamPolicyDraft
       summary: Revision-guarded update of a direct-edit Dream policy draft
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}, {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [revision, policy], properties: {revision: {type: integer, minimum: 0}, policy: {$ref: '#/components/schemas/DreamPolicyDefinition'}}}}}}
       responses: {'200': {description: Updated draft, content: {application/json: {schema: {$ref: '#/components/schemas/DreamPolicyLifecycle'}}}}, '409': {description: Stale revision or immutable suggestion}}
   /v1/dream-policies/{id}/review:
@@ -201,7 +202,7 @@ paths:
       operationId: submitDreamPolicyReview
       summary: Resolve and pin the AgentNexus confirmation or upward-review route
       parameters: [{name: id, in: path, required: true, schema: {type: string}}, {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/DreamPolicyRevision'}}}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, required: [revision], properties: {revision: {type: integer, minimum: 0}, action: {type: string, enum: [publish, disable], default: publish}}}}}}
       responses: {'200': {description: Review route pinned, content: {application/json: {schema: {$ref: '#/components/schemas/DreamPolicyLifecycle'}}}}}
   /v1/dream-policies/{id}/check:
     post:
@@ -217,21 +218,21 @@ paths:
     post:
       operationId: decideDreamPolicy
       summary: Approve or reject the current reviewed revision
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}, {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, required: [revision, decision], properties: {revision: {type: integer, minimum: 0}, decision: {type: string, enum: [approve, reject]}, comment: {type: string, maxLength: 4000}}}}}}
       responses: {'200': {description: Decision recorded, content: {application/json: {schema: {$ref: '#/components/schemas/DreamPolicyLifecycle'}}}}}
   /v1/dream-policies/{id}/publish:
     post:
       operationId: publishDreamPolicy
       summary: Atomically publish one approved revision as an immutable version
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}, {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/DreamPolicyRevision'}}}}
       responses: {'200': {description: Published, content: {application/json: {schema: {$ref: '#/components/schemas/DreamPolicyLifecycle'}}}}}
   /v1/dream-policies/{id}/disable:
     post:
       operationId: disableDreamPolicy
       summary: Revision-guarded disable of a published Dream policy
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}, {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/DreamPolicyRevision'}}}}
       responses: {'200': {description: Disabled, content: {application/json: {schema: {$ref: '#/components/schemas/DreamPolicyLifecycle'}}}}}
   /v1/dream-policies/{id}/backfills:
@@ -574,6 +575,8 @@ components:
         reviewer_user_id: {type: string}
         org_path: {type: array, items: {type: string}}
         queue: {type: string}
+        pending_action: {type: string, enum: [publish, disable]}
+        review_state: {type: string, enum: [pending, approved, rejected]}
         policy: {$ref: '#/components/schemas/DreamPolicyDefinition'}
     DreamPolicyDefinition:
       type: object
@@ -857,11 +860,11 @@ components:
         - required: [reviewer_user_id]
           properties:
             mode: { type: string, enum: [upward_review] }
-            risk_level: { type: string, enum: [high] }
+            risk_level: { type: string, enum: [low, high] }
             org_path: { minItems: 1 }
           not: { required: [queue] }
         - required: [queue]
           properties:
             mode: { type: string, enum: [enterprise_knowledge_admin_queue] }
-            risk_level: { type: string, enum: [high] }
+            risk_level: { type: string, enum: [low, high] }
           not: { required: [reviewer_user_id] }

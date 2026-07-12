@@ -8,7 +8,9 @@ func TestValidateReviewRouteMatrix(t *testing.T) {
 	}
 	valid := map[string]string{
 		"single low no reviewer": `{"change_id":"chg-1","resource_type":"knowledge_entry","resource_id":"k-1","requester_user_id":"u-1","risk_level":"low","mode":"single_confirmation","state":"pending","org_path":[]}`,
+		"upward low reviewer":    `{"change_id":"chg-4","resource_type":"dream_policy","resource_id":"p-2","requester_user_id":"u-1","risk_level":"low","mode":"upward_review","state":"pending","reviewer_user_id":"u-2","org_path":["dept-rd","company"]}`,
 		"upward high reviewer":   `{"change_id":"chg-2","resource_type":"dream_policy","resource_id":"p-1","requester_user_id":"u-1","risk_level":"high","mode":"upward_review","state":"pending","reviewer_user_id":"u-2","org_path":["dept-rd","company"]}`,
+		"admin low queue":        `{"change_id":"chg-5","resource_type":"workflow","resource_id":"wf-2","requester_user_id":"u-1","risk_level":"low","mode":"enterprise_knowledge_admin_queue","state":"pending","org_path":[],"queue":"knowledge-admins"}`,
 		"admin high queue":       `{"change_id":"chg-3","resource_type":"workflow","resource_id":"wf-1","requester_user_id":"u-1","risk_level":"high","mode":"enterprise_knowledge_admin_queue","state":"pending","org_path":[],"queue":"knowledge-admins"}`,
 	}
 	for name, doc := range valid {
@@ -22,11 +24,9 @@ func TestValidateReviewRouteMatrix(t *testing.T) {
 	invalid := map[string]string{
 		"medium risk":        `{"change_id":"chg","resource_type":"workflow","resource_id":"wf","requester_user_id":"u1","risk_level":"medium","mode":"single_confirmation","state":"pending","org_path":[]}`,
 		"single reviewer":    `{"change_id":"chg","resource_type":"workflow","resource_id":"wf","requester_user_id":"u1","reviewer_user_id":"u2","risk_level":"low","mode":"single_confirmation","state":"pending","org_path":[]}`,
-		"upward low":         `{"change_id":"chg","resource_type":"workflow","resource_id":"wf","requester_user_id":"u1","reviewer_user_id":"u2","risk_level":"low","mode":"upward_review","state":"pending","org_path":["company"]}`,
 		"upward no reviewer": `{"change_id":"chg","resource_type":"workflow","resource_id":"wf","requester_user_id":"u1","risk_level":"high","mode":"upward_review","state":"pending","org_path":["company"]}`,
 		"upward empty path":  `{"change_id":"chg","resource_type":"workflow","resource_id":"wf","requester_user_id":"u1","reviewer_user_id":"u2","risk_level":"high","mode":"upward_review","state":"pending","org_path":[]}`,
 		"self review":        `{"change_id":"chg","resource_type":"workflow","resource_id":"wf","requester_user_id":"u1","reviewer_user_id":"u1","risk_level":"high","mode":"upward_review","state":"pending","org_path":["company"]}`,
-		"admin low":          `{"change_id":"chg","resource_type":"workflow","resource_id":"wf","requester_user_id":"u1","risk_level":"low","mode":"enterprise_knowledge_admin_queue","state":"pending","org_path":[],"queue":"admins"}`,
 	}
 	for name, doc := range invalid {
 		t.Run(name, func(t *testing.T) {

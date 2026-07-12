@@ -39,8 +39,8 @@
       },
       "oneOf": [
         {"properties": {"mode": {"const": "single_confirmation"}, "risk_level": {"const": "low"}}, "not": {"anyOf": [{"required": ["reviewer_user_id"]}, {"required": ["queue"]}]}},
-        {"required": ["reviewer_user_id"], "properties": {"mode": {"const": "upward_review"}, "risk_level": {"const": "high"}, "org_path": {"minItems": 1}}, "not": {"required": ["queue"]}},
-        {"required": ["queue"], "properties": {"mode": {"const": "enterprise_knowledge_admin_queue"}, "risk_level": {"const": "high"}}, "not": {"required": ["reviewer_user_id"]}}
+        {"required": ["reviewer_user_id"], "properties": {"mode": {"const": "upward_review"}, "risk_level": {"enum": ["low", "high"]}, "org_path": {"minItems": 1}}, "not": {"required": ["queue"]}},
+        {"required": ["queue"], "properties": {"mode": {"const": "enterprise_knowledge_admin_queue"}, "risk_level": {"enum": ["low", "high"]}}, "not": {"required": ["reviewer_user_id"]}}
       ]
     }
   },

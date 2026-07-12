@@ -34,6 +34,7 @@ type AgentRouterDeps struct {
 
 type dreamBackfiller interface {
 	Backfill(context.Context, dream.BackfillRequest) (string, error)
+	LookupBackfill(context.Context, dream.BackfillRequest) (string, bool, error)
 }
 
 // actorContext carries the verified ticket identity through the request.

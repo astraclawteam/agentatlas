@@ -382,7 +382,8 @@ func TestAgentAtlasMVP(t *testing.T) {
 		t.Fatal(err)
 	}
 	policySvc := dream.NewPolicyService(q)
-	policyID, err := policySvc.CreateDraft(ctx, enterpriseID, dream.Policy(sdkdream.DreamPolicyDefinition{
+	fixturePolicies := dream.NewPolicyFixtureService(q)
+	policyID, err := fixturePolicies.CreateDraft(ctx, enterpriseID, dream.Policy(sdkdream.DreamPolicyDefinition{
 		OrgUnitID: "project_group:pg_mes", Timezone: "UTC", Schedule: "0 22 * * *",
 		InputSources:      []sdkdream.Source{sdkdream.SourceWorkBrief},
 		Workflow:          sdkdream.WorkflowRef{ID: dreamWorkflowID, Version: 1},
@@ -396,7 +397,7 @@ func TestAgentAtlasMVP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := policySvc.Publish(ctx, policyID); err != nil {
+	if _, err := fixturePolicies.Publish(ctx, policyID); err != nil {
 		t.Fatal(err)
 	}
 	synth := dream.NewSynthesizer(nil)

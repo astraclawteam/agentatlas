@@ -15,7 +15,7 @@ const bindDreamWorkflowRun = `-- name: BindDreamWorkflowRun :one
 UPDATE dream_runs SET workflow_run_id = $1
 WHERE enterprise_id = $2 AND id = $3
   AND (workflow_run_id IS NULL OR workflow_run_id = $1)
-RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind
+RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind, audit_ref_id
 `
 
 type BindDreamWorkflowRunParams struct {
@@ -58,6 +58,7 @@ func (q *Queries) BindDreamWorkflowRun(ctx context.Context, arg BindDreamWorkflo
 		&i.ExecutionLeaseExpiresAt,
 		&i.OrgVersion,
 		&i.OperationKind,
+		&i.AuditRefID,
 	)
 	return i, err
 }
@@ -92,6 +93,41 @@ func (q *Queries) ClaimDreamRunLease(ctx context.Context, arg ClaimDreamRunLease
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const completeDreamPolicyOperation = `-- name: CompleteDreamPolicyOperation :one
+UPDATE dream_policy_operations SET status='completed',result=$1,updated_at=now()
+WHERE enterprise_id=$2 AND operation_key=$3
+  AND status='pending' AND audit_ref_id IS NOT NULL
+RETURNING enterprise_id, operation_key, operation_kind, policy_id, actor_user_id, request_hash, facts_nonce, facts_issued_at, facts_expires_at, audit_ref_id, status, result, created_at, updated_at
+`
+
+type CompleteDreamPolicyOperationParams struct {
+	Result       []byte `json:"result"`
+	EnterpriseID string `json:"enterprise_id"`
+	OperationKey string `json:"operation_key"`
+}
+
+func (q *Queries) CompleteDreamPolicyOperation(ctx context.Context, arg CompleteDreamPolicyOperationParams) (DreamPolicyOperation, error) {
+	row := q.db.QueryRow(ctx, completeDreamPolicyOperation, arg.Result, arg.EnterpriseID, arg.OperationKey)
+	var i DreamPolicyOperation
+	err := row.Scan(
+		&i.EnterpriseID,
+		&i.OperationKey,
+		&i.OperationKind,
+		&i.PolicyID,
+		&i.ActorUserID,
+		&i.RequestHash,
+		&i.FactsNonce,
+		&i.FactsIssuedAt,
+		&i.FactsExpiresAt,
+		&i.AuditRefID,
+		&i.Status,
+		&i.Result,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const completeDreamRunOwned = `-- name: CompleteDreamRunOwned :execrows
@@ -179,7 +215,7 @@ func (q *Queries) CreateDreamAnnotation(ctx context.Context, arg CreateDreamAnno
 const createDreamPolicy = `-- name: CreateDreamPolicy :one
 INSERT INTO dream_policies (id, enterprise_id, org_scope, status, draft)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
+RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, pending_action, review_state, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
 `
 
 type CreateDreamPolicyParams struct {
@@ -210,6 +246,8 @@ func (q *Queries) CreateDreamPolicy(ctx context.Context, arg CreateDreamPolicyPa
 		&i.Revision,
 		&i.RequesterUserID,
 		&i.PermissionMode,
+		&i.PendingAction,
+		&i.ReviewState,
 		&i.RiskLevel,
 		&i.RiskReasons,
 		&i.ReviewMode,
@@ -223,10 +261,20 @@ func (q *Queries) CreateDreamPolicy(ctx context.Context, arg CreateDreamPolicyPa
 }
 
 const createDreamPolicyLifecycle = `-- name: CreateDreamPolicyLifecycle :one
-INSERT INTO dream_policies (id, enterprise_id, org_scope, status, draft, requester_user_id, permission_mode, audit_ref_id)
-VALUES ($1, $2, $3, 'draft', $4,
-        $5, $6, $7)
-RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
+WITH created AS (
+  INSERT INTO dream_policies (id, enterprise_id, org_scope, status, draft, requester_user_id, permission_mode, audit_ref_id)
+  SELECT $1,$2,$3,'draft',$4,
+         $5,$6,op.audit_ref_id
+  FROM dream_policy_operations op
+  WHERE op.enterprise_id=$2 AND op.operation_key=$7
+    AND op.operation_kind='create' AND op.policy_id=$1 AND op.status='pending' AND op.audit_ref_id IS NOT NULL
+  RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, pending_action, review_state, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
+), audit AS (
+  INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
+  SELECT enterprise_id,id,0,'create',$7,audit_ref_id,requester_user_id FROM created
+  RETURNING policy_id
+)
+SELECT created.id, created.enterprise_id, created.org_scope, created.status, created.draft, created.created_at, created.updated_at, created.revision, created.requester_user_id, created.permission_mode, created.pending_action, created.review_state, created.risk_level, created.risk_reasons, created.review_mode, created.reviewer_user_id, created.review_org_path, created.review_queue, created.decision, created.audit_ref_id FROM created JOIN audit ON audit.policy_id=created.id
 `
 
 type CreateDreamPolicyLifecycleParams struct {
@@ -236,10 +284,33 @@ type CreateDreamPolicyLifecycleParams struct {
 	Draft           []byte `json:"draft"`
 	RequesterUserID string `json:"requester_user_id"`
 	PermissionMode  string `json:"permission_mode"`
-	AuditRefID      string `json:"audit_ref_id"`
+	OperationKey    string `json:"operation_key"`
 }
 
-func (q *Queries) CreateDreamPolicyLifecycle(ctx context.Context, arg CreateDreamPolicyLifecycleParams) (DreamPolicy, error) {
+type CreateDreamPolicyLifecycleRow struct {
+	ID              string             `json:"id"`
+	EnterpriseID    string             `json:"enterprise_id"`
+	OrgScope        string             `json:"org_scope"`
+	Status          string             `json:"status"`
+	Draft           []byte             `json:"draft"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	Revision        int32              `json:"revision"`
+	RequesterUserID string             `json:"requester_user_id"`
+	PermissionMode  string             `json:"permission_mode"`
+	PendingAction   string             `json:"pending_action"`
+	ReviewState     string             `json:"review_state"`
+	RiskLevel       string             `json:"risk_level"`
+	RiskReasons     []byte             `json:"risk_reasons"`
+	ReviewMode      string             `json:"review_mode"`
+	ReviewerUserID  pgtype.Text        `json:"reviewer_user_id"`
+	ReviewOrgPath   []byte             `json:"review_org_path"`
+	ReviewQueue     pgtype.Text        `json:"review_queue"`
+	Decision        string             `json:"decision"`
+	AuditRefID      string             `json:"audit_ref_id"`
+}
+
+func (q *Queries) CreateDreamPolicyLifecycle(ctx context.Context, arg CreateDreamPolicyLifecycleParams) (CreateDreamPolicyLifecycleRow, error) {
 	row := q.db.QueryRow(ctx, createDreamPolicyLifecycle,
 		arg.ID,
 		arg.EnterpriseID,
@@ -247,9 +318,9 @@ func (q *Queries) CreateDreamPolicyLifecycle(ctx context.Context, arg CreateDrea
 		arg.Draft,
 		arg.RequesterUserID,
 		arg.PermissionMode,
-		arg.AuditRefID,
+		arg.OperationKey,
 	)
-	var i DreamPolicy
+	var i CreateDreamPolicyLifecycleRow
 	err := row.Scan(
 		&i.ID,
 		&i.EnterpriseID,
@@ -261,6 +332,8 @@ func (q *Queries) CreateDreamPolicyLifecycle(ctx context.Context, arg CreateDrea
 		&i.Revision,
 		&i.RequesterUserID,
 		&i.PermissionMode,
+		&i.PendingAction,
+		&i.ReviewState,
 		&i.RiskLevel,
 		&i.RiskReasons,
 		&i.ReviewMode,
@@ -279,7 +352,7 @@ INSERT INTO dream_runs (
     org_unit_id, policy_version, workflow_id, workflow_version, timezone,
     input_snapshot, visibility_snapshot, model_route, model_version, attempt,
     rerun_of_run_id, coverage, missing_inputs, idempotency_key, org_version,
-    operation_kind
+    operation_kind, audit_ref_id
 )
 VALUES (
     $1, $2, $3, $4,
@@ -290,10 +363,10 @@ VALUES (
     $16, $17, $18,
     $19, $20, $21,
     COALESCE(NULLIF($22::bigint, 0), 1),
-    COALESCE(NULLIF($23::text, ''), 'scheduled')
+    COALESCE(NULLIF($23::text, ''), 'scheduled'), $24
 )
 ON CONFLICT DO NOTHING
-RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind
+RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind, audit_ref_id
 `
 
 type CreateDreamRunParams struct {
@@ -320,6 +393,7 @@ type CreateDreamRunParams struct {
 	IdempotencyKey     string             `json:"idempotency_key"`
 	OrgVersion         int64              `json:"org_version"`
 	OperationKind      string             `json:"operation_kind"`
+	AuditRefID         pgtype.Text        `json:"audit_ref_id"`
 }
 
 func (q *Queries) CreateDreamRun(ctx context.Context, arg CreateDreamRunParams) (DreamRun, error) {
@@ -347,6 +421,7 @@ func (q *Queries) CreateDreamRun(ctx context.Context, arg CreateDreamRunParams) 
 		arg.IdempotencyKey,
 		arg.OrgVersion,
 		arg.OperationKind,
+		arg.AuditRefID,
 	)
 	var i DreamRun
 	err := row.Scan(
@@ -380,6 +455,7 @@ func (q *Queries) CreateDreamRun(ctx context.Context, arg CreateDreamRunParams) 
 		&i.ExecutionLeaseExpiresAt,
 		&i.OrgVersion,
 		&i.OperationKind,
+		&i.AuditRefID,
 	)
 	return i, err
 }
@@ -470,19 +546,19 @@ func (q *Queries) CreateDreamSummary(ctx context.Context, arg CreateDreamSummary
 
 const decideDreamPolicyIfRevision = `-- name: DecideDreamPolicyIfRevision :one
 WITH changed AS (
-  UPDATE dream_policies SET status=CASE WHEN $1::text='approve' THEN 'approved' ELSE 'rejected' END,
+  UPDATE dream_policies SET review_state=CASE WHEN $1::text='approve' THEN 'approved' ELSE 'rejected' END,
       decision=$1, audit_ref_id=$2, updated_at=now()
   WHERE dream_policies.enterprise_id=$3 AND dream_policies.id=$4
-    AND dream_policies.revision=$5 AND dream_policies.status='review_pending'
-    AND ((dream_policies.risk_level='high' AND dream_policies.reviewer_user_id=$6 AND dream_policies.requester_user_id<>$6)
+    AND dream_policies.revision=$5 AND dream_policies.review_state='pending'
+    AND ((dream_policies.review_mode='upward_review' AND dream_policies.reviewer_user_id=$6 AND dream_policies.requester_user_id<>$6)
       OR (dream_policies.risk_level='low' AND dream_policies.requester_user_id=$6 AND dream_policies.review_mode='single_confirmation'))
-  RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
+  RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, pending_action, review_state, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
 ), audit AS (
-  INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,audit_ref_id,actor_user_id)
-  SELECT enterprise_id,id,revision,'decision:'||$1,$2,$6 FROM changed
+  INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
+  SELECT enterprise_id,id,revision,'decision:'||pending_action||':'||$1,$7,$2,$6 FROM changed
   RETURNING policy_id
 )
-SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id
+SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.pending_action, changed.review_state, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id
 `
 
 type DecideDreamPolicyIfRevisionParams struct {
@@ -492,6 +568,7 @@ type DecideDreamPolicyIfRevisionParams struct {
 	TargetID           string      `json:"target_id"`
 	ExpectedRevision   int32       `json:"expected_revision"`
 	ActorUserID        pgtype.Text `json:"actor_user_id"`
+	OperationKey       string      `json:"operation_key"`
 }
 
 type DecideDreamPolicyIfRevisionRow struct {
@@ -505,6 +582,8 @@ type DecideDreamPolicyIfRevisionRow struct {
 	Revision        int32              `json:"revision"`
 	RequesterUserID string             `json:"requester_user_id"`
 	PermissionMode  string             `json:"permission_mode"`
+	PendingAction   string             `json:"pending_action"`
+	ReviewState     string             `json:"review_state"`
 	RiskLevel       string             `json:"risk_level"`
 	RiskReasons     []byte             `json:"risk_reasons"`
 	ReviewMode      string             `json:"review_mode"`
@@ -523,6 +602,7 @@ func (q *Queries) DecideDreamPolicyIfRevision(ctx context.Context, arg DecideDre
 		arg.TargetID,
 		arg.ExpectedRevision,
 		arg.ActorUserID,
+		arg.OperationKey,
 	)
 	var i DecideDreamPolicyIfRevisionRow
 	err := row.Scan(
@@ -536,6 +616,8 @@ func (q *Queries) DecideDreamPolicyIfRevision(ctx context.Context, arg DecideDre
 		&i.Revision,
 		&i.RequesterUserID,
 		&i.PermissionMode,
+		&i.PendingAction,
+		&i.ReviewState,
 		&i.RiskLevel,
 		&i.RiskReasons,
 		&i.ReviewMode,
@@ -550,16 +632,16 @@ func (q *Queries) DecideDreamPolicyIfRevision(ctx context.Context, arg DecideDre
 
 const disableDreamPolicyIfRevision = `-- name: DisableDreamPolicyIfRevision :one
 WITH changed AS (
-  UPDATE dream_policies SET status='disabled', revision=revision+1, audit_ref_id=$1, updated_at=now()
+  UPDATE dream_policies SET status='disabled', revision=revision+1,pending_action='',review_state='',audit_ref_id=$1, updated_at=now()
   WHERE dream_policies.enterprise_id=$2 AND dream_policies.id=$3
-    AND dream_policies.revision=$4 AND dream_policies.status='published' AND dream_policies.permission_mode='direct_edit'
-  RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
+    AND dream_policies.revision=$4 AND dream_policies.status='published' AND dream_policies.review_state='approved' AND dream_policies.pending_action='disable' AND dream_policies.permission_mode='direct_edit'
+  RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, pending_action, review_state, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
 ), audit AS (
-  INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,audit_ref_id,actor_user_id)
-  SELECT enterprise_id,id,revision,'disable',$1,$5 FROM changed
+  INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
+  SELECT enterprise_id,id,revision,'disable',$5,$1,$6 FROM changed
   RETURNING policy_id
 )
-SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id
+SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.pending_action, changed.review_state, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id
 `
 
 type DisableDreamPolicyIfRevisionParams struct {
@@ -567,6 +649,7 @@ type DisableDreamPolicyIfRevisionParams struct {
 	TargetEnterpriseID string `json:"target_enterprise_id"`
 	TargetID           string `json:"target_id"`
 	ExpectedRevision   int32  `json:"expected_revision"`
+	OperationKey       string `json:"operation_key"`
 	ActorUserID        string `json:"actor_user_id"`
 }
 
@@ -581,6 +664,8 @@ type DisableDreamPolicyIfRevisionRow struct {
 	Revision        int32              `json:"revision"`
 	RequesterUserID string             `json:"requester_user_id"`
 	PermissionMode  string             `json:"permission_mode"`
+	PendingAction   string             `json:"pending_action"`
+	ReviewState     string             `json:"review_state"`
 	RiskLevel       string             `json:"risk_level"`
 	RiskReasons     []byte             `json:"risk_reasons"`
 	ReviewMode      string             `json:"review_mode"`
@@ -597,6 +682,7 @@ func (q *Queries) DisableDreamPolicyIfRevision(ctx context.Context, arg DisableD
 		arg.TargetEnterpriseID,
 		arg.TargetID,
 		arg.ExpectedRevision,
+		arg.OperationKey,
 		arg.ActorUserID,
 	)
 	var i DisableDreamPolicyIfRevisionRow
@@ -611,6 +697,8 @@ func (q *Queries) DisableDreamPolicyIfRevision(ctx context.Context, arg DisableD
 		&i.Revision,
 		&i.RequesterUserID,
 		&i.PermissionMode,
+		&i.PendingAction,
+		&i.ReviewState,
 		&i.RiskLevel,
 		&i.RiskReasons,
 		&i.ReviewMode,
@@ -628,7 +716,7 @@ UPDATE dream_runs SET status='failed', error=$1, finished_at=COALESCE(finished_a
     execution_owner=NULL, execution_lease_expires_at=NULL
 WHERE enterprise_id=$2 AND workflow_run_id=$3
   AND status IN ('running','waiting_confirmation','pending','failed')
-RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind
+RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind, audit_ref_id
 `
 
 type FailDreamRunAfterWorkflowParams struct {
@@ -671,6 +759,7 @@ func (q *Queries) FailDreamRunAfterWorkflow(ctx context.Context, arg FailDreamRu
 		&i.ExecutionLeaseExpiresAt,
 		&i.OrgVersion,
 		&i.OperationKind,
+		&i.AuditRefID,
 	)
 	return i, err
 }
@@ -708,7 +797,7 @@ func (q *Queries) GetDreamOrgTreeVersion(ctx context.Context, enterpriseID strin
 }
 
 const getDreamPolicy = `-- name: GetDreamPolicy :one
-SELECT id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id FROM dream_policies WHERE id = $1
+SELECT id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, pending_action, review_state, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id FROM dream_policies WHERE id = $1
 `
 
 func (q *Queries) GetDreamPolicy(ctx context.Context, id string) (DreamPolicy, error) {
@@ -725,6 +814,8 @@ func (q *Queries) GetDreamPolicy(ctx context.Context, id string) (DreamPolicy, e
 		&i.Revision,
 		&i.RequesterUserID,
 		&i.PermissionMode,
+		&i.PendingAction,
+		&i.ReviewState,
 		&i.RiskLevel,
 		&i.RiskReasons,
 		&i.ReviewMode,
@@ -733,6 +824,37 @@ func (q *Queries) GetDreamPolicy(ctx context.Context, id string) (DreamPolicy, e
 		&i.ReviewQueue,
 		&i.Decision,
 		&i.AuditRefID,
+	)
+	return i, err
+}
+
+const getDreamPolicyOperation = `-- name: GetDreamPolicyOperation :one
+SELECT enterprise_id, operation_key, operation_kind, policy_id, actor_user_id, request_hash, facts_nonce, facts_issued_at, facts_expires_at, audit_ref_id, status, result, created_at, updated_at FROM dream_policy_operations WHERE enterprise_id=$1 AND operation_key=$2
+`
+
+type GetDreamPolicyOperationParams struct {
+	EnterpriseID string `json:"enterprise_id"`
+	OperationKey string `json:"operation_key"`
+}
+
+func (q *Queries) GetDreamPolicyOperation(ctx context.Context, arg GetDreamPolicyOperationParams) (DreamPolicyOperation, error) {
+	row := q.db.QueryRow(ctx, getDreamPolicyOperation, arg.EnterpriseID, arg.OperationKey)
+	var i DreamPolicyOperation
+	err := row.Scan(
+		&i.EnterpriseID,
+		&i.OperationKey,
+		&i.OperationKind,
+		&i.PolicyID,
+		&i.ActorUserID,
+		&i.RequestHash,
+		&i.FactsNonce,
+		&i.FactsIssuedAt,
+		&i.FactsExpiresAt,
+		&i.AuditRefID,
+		&i.Status,
+		&i.Result,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -759,7 +881,7 @@ func (q *Queries) GetDreamPolicyVersion(ctx context.Context, arg GetDreamPolicyV
 }
 
 const getDreamRun = `-- name: GetDreamRun :one
-SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind FROM dream_runs WHERE id = $1
+SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind, audit_ref_id FROM dream_runs WHERE id = $1
 `
 
 func (q *Queries) GetDreamRun(ctx context.Context, id string) (DreamRun, error) {
@@ -796,12 +918,13 @@ func (q *Queries) GetDreamRun(ctx context.Context, id string) (DreamRun, error) 
 		&i.ExecutionLeaseExpiresAt,
 		&i.OrgVersion,
 		&i.OperationKind,
+		&i.AuditRefID,
 	)
 	return i, err
 }
 
 const getDreamRunByIdempotencyKey = `-- name: GetDreamRunByIdempotencyKey :one
-SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind FROM dream_runs
+SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind, audit_ref_id FROM dream_runs
 WHERE enterprise_id = $1
   AND idempotency_key = $2
 `
@@ -845,12 +968,13 @@ func (q *Queries) GetDreamRunByIdempotencyKey(ctx context.Context, arg GetDreamR
 		&i.ExecutionLeaseExpiresAt,
 		&i.OrgVersion,
 		&i.OperationKind,
+		&i.AuditRefID,
 	)
 	return i, err
 }
 
 const getDreamRunByWorkflowRun = `-- name: GetDreamRunByWorkflowRun :one
-SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind FROM dream_runs WHERE enterprise_id = $1 AND workflow_run_id = $2
+SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind, audit_ref_id FROM dream_runs WHERE enterprise_id = $1 AND workflow_run_id = $2
 `
 
 type GetDreamRunByWorkflowRunParams struct {
@@ -892,12 +1016,13 @@ func (q *Queries) GetDreamRunByWorkflowRun(ctx context.Context, arg GetDreamRunB
 		&i.ExecutionLeaseExpiresAt,
 		&i.OrgVersion,
 		&i.OperationKind,
+		&i.AuditRefID,
 	)
 	return i, err
 }
 
 const getDreamRunView = `-- name: GetDreamRunView :one
-SELECT runs.id, runs.policy_id, runs.version, runs.enterprise_id, runs.status, runs.window_start, runs.window_end, runs.error, runs.created_at, runs.finished_at, runs.org_unit_id, runs.policy_version, runs.workflow_id, runs.workflow_version, runs.timezone, runs.input_snapshot, runs.visibility_snapshot, runs.model_route, runs.model_version, runs.attempt, runs.rerun_of_run_id, runs.coverage, runs.missing_inputs, runs.idempotency_key, runs.workflow_run_id, runs.output_hash, runs.execution_owner, runs.execution_lease_expires_at, runs.org_version, runs.operation_kind,
+SELECT runs.id, runs.policy_id, runs.version, runs.enterprise_id, runs.status, runs.window_start, runs.window_end, runs.error, runs.created_at, runs.finished_at, runs.org_unit_id, runs.policy_version, runs.workflow_id, runs.workflow_version, runs.timezone, runs.input_snapshot, runs.visibility_snapshot, runs.model_route, runs.model_version, runs.attempt, runs.rerun_of_run_id, runs.coverage, runs.missing_inputs, runs.idempotency_key, runs.workflow_run_id, runs.output_hash, runs.execution_owner, runs.execution_lease_expires_at, runs.org_version, runs.operation_kind, runs.audit_ref_id,
        ARRAY(
            SELECT lineage.parent_run_id
            FROM dream_run_lineage AS lineage
@@ -973,6 +1098,7 @@ type GetDreamRunViewRow struct {
 	ExecutionLeaseExpiresAt pgtype.Timestamptz `json:"execution_lease_expires_at"`
 	OrgVersion              int64              `json:"org_version"`
 	OperationKind           string             `json:"operation_kind"`
+	AuditRefID              pgtype.Text        `json:"audit_ref_id"`
 	ParentRunIds            []string           `json:"parent_run_ids"`
 	InputCount              int64              `json:"input_count"`
 	DisplaySummary          string             `json:"display_summary"`
@@ -1018,6 +1144,7 @@ func (q *Queries) GetDreamRunView(ctx context.Context, arg GetDreamRunViewParams
 		&i.ExecutionLeaseExpiresAt,
 		&i.OrgVersion,
 		&i.OperationKind,
+		&i.AuditRefID,
 		&i.ParentRunIds,
 		&i.InputCount,
 		&i.DisplaySummary,
@@ -1102,7 +1229,7 @@ func (q *Queries) GetDreamSummaryForRunLayer(ctx context.Context, arg GetDreamSu
 }
 
 const getEnterpriseDreamPolicy = `-- name: GetEnterpriseDreamPolicy :one
-SELECT id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id FROM dream_policies WHERE enterprise_id = $1 AND id = $2
+SELECT id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, pending_action, review_state, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id FROM dream_policies WHERE enterprise_id = $1 AND id = $2
 `
 
 type GetEnterpriseDreamPolicyParams struct {
@@ -1124,6 +1251,8 @@ func (q *Queries) GetEnterpriseDreamPolicy(ctx context.Context, arg GetEnterpris
 		&i.Revision,
 		&i.RequesterUserID,
 		&i.PermissionMode,
+		&i.PendingAction,
+		&i.ReviewState,
 		&i.RiskLevel,
 		&i.RiskReasons,
 		&i.ReviewMode,
@@ -1153,7 +1282,7 @@ func (q *Queries) GetLatestDreamPolicyVersion(ctx context.Context, policyID stri
 }
 
 const getLatestDreamRunForPolicy = `-- name: GetLatestDreamRunForPolicy :one
-SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind FROM dream_runs
+SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind, audit_ref_id FROM dream_runs
 WHERE policy_id = $1 AND rerun_of_run_id IS NULL
   AND operation_kind IN ('scheduled','automatic_retry')
 ORDER BY window_end DESC, attempt DESC, created_at DESC, id DESC
@@ -1194,12 +1323,13 @@ func (q *Queries) GetLatestDreamRunForPolicy(ctx context.Context, policyID strin
 		&i.ExecutionLeaseExpiresAt,
 		&i.OrgVersion,
 		&i.OperationKind,
+		&i.AuditRefID,
 	)
 	return i, err
 }
 
 const getLatestDreamRunForPolicyVersion = `-- name: GetLatestDreamRunForPolicyVersion :one
-SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind FROM dream_runs
+SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind, audit_ref_id FROM dream_runs
 WHERE policy_id = $1
   AND policy_version = $2
   AND rerun_of_run_id IS NULL
@@ -1247,6 +1377,7 @@ func (q *Queries) GetLatestDreamRunForPolicyVersion(ctx context.Context, arg Get
 		&i.ExecutionLeaseExpiresAt,
 		&i.OrgVersion,
 		&i.OperationKind,
+		&i.AuditRefID,
 	)
 	return i, err
 }
@@ -1338,7 +1469,7 @@ func (q *Queries) ListChildSpaces(ctx context.Context, arg ListChildSpacesParams
 }
 
 const listCompletedChildDreamRuns = `-- name: ListCompletedChildDreamRuns :many
-SELECT runs.id, runs.policy_id, runs.version, runs.enterprise_id, runs.status, runs.window_start, runs.window_end, runs.error, runs.created_at, runs.finished_at, runs.org_unit_id, runs.policy_version, runs.workflow_id, runs.workflow_version, runs.timezone, runs.input_snapshot, runs.visibility_snapshot, runs.model_route, runs.model_version, runs.attempt, runs.rerun_of_run_id, runs.coverage, runs.missing_inputs, runs.idempotency_key, runs.workflow_run_id, runs.output_hash, runs.execution_owner, runs.execution_lease_expires_at, runs.org_version, runs.operation_kind
+SELECT runs.id, runs.policy_id, runs.version, runs.enterprise_id, runs.status, runs.window_start, runs.window_end, runs.error, runs.created_at, runs.finished_at, runs.org_unit_id, runs.policy_version, runs.workflow_id, runs.workflow_version, runs.timezone, runs.input_snapshot, runs.visibility_snapshot, runs.model_route, runs.model_version, runs.attempt, runs.rerun_of_run_id, runs.coverage, runs.missing_inputs, runs.idempotency_key, runs.workflow_run_id, runs.output_hash, runs.execution_owner, runs.execution_lease_expires_at, runs.org_version, runs.operation_kind, runs.audit_ref_id
 FROM dream_runs AS runs
 JOIN org_scope_bindings AS bindings
   ON bindings.enterprise_id = runs.enterprise_id
@@ -1416,6 +1547,7 @@ func (q *Queries) ListCompletedChildDreamRuns(ctx context.Context, arg ListCompl
 			&i.ExecutionLeaseExpiresAt,
 			&i.OrgVersion,
 			&i.OperationKind,
+			&i.AuditRefID,
 		); err != nil {
 			return nil, err
 		}
@@ -1428,7 +1560,7 @@ func (q *Queries) ListCompletedChildDreamRuns(ctx context.Context, arg ListCompl
 }
 
 const listDreamCompletedChildRuns = `-- name: ListDreamCompletedChildRuns :many
-SELECT DISTINCT runs.id, runs.policy_id, runs.version, runs.enterprise_id, runs.status, runs.window_start, runs.window_end, runs.error, runs.created_at, runs.finished_at, runs.org_unit_id, runs.policy_version, runs.workflow_id, runs.workflow_version, runs.timezone, runs.input_snapshot, runs.visibility_snapshot, runs.model_route, runs.model_version, runs.attempt, runs.rerun_of_run_id, runs.coverage, runs.missing_inputs, runs.idempotency_key, runs.workflow_run_id, runs.output_hash, runs.execution_owner, runs.execution_lease_expires_at, runs.org_version, runs.operation_kind,
+SELECT DISTINCT runs.id, runs.policy_id, runs.version, runs.enterprise_id, runs.status, runs.window_start, runs.window_end, runs.error, runs.created_at, runs.finished_at, runs.org_unit_id, runs.policy_version, runs.workflow_id, runs.workflow_version, runs.timezone, runs.input_snapshot, runs.visibility_snapshot, runs.model_route, runs.model_version, runs.attempt, runs.rerun_of_run_id, runs.coverage, runs.missing_inputs, runs.idempotency_key, runs.workflow_run_id, runs.output_hash, runs.execution_owner, runs.execution_lease_expires_at, runs.org_version, runs.operation_kind, runs.audit_ref_id,
        child_space.id::text AS child_space_id,
        child_space.org_scope::text AS child_org_scope,
        parent_space.id::text AS parent_space_id,
@@ -1500,6 +1632,7 @@ type ListDreamCompletedChildRunsRow struct {
 	ExecutionLeaseExpiresAt pgtype.Timestamptz `json:"execution_lease_expires_at"`
 	OrgVersion              int64              `json:"org_version"`
 	OperationKind           string             `json:"operation_kind"`
+	AuditRefID              pgtype.Text        `json:"audit_ref_id"`
 	ChildSpaceID            string             `json:"child_space_id"`
 	ChildOrgScope           string             `json:"child_org_scope"`
 	ParentSpaceID           string             `json:"parent_space_id"`
@@ -1555,6 +1688,7 @@ func (q *Queries) ListDreamCompletedChildRuns(ctx context.Context, arg ListDream
 			&i.ExecutionLeaseExpiresAt,
 			&i.OrgVersion,
 			&i.OperationKind,
+			&i.AuditRefID,
 			&i.ChildSpaceID,
 			&i.ChildOrgScope,
 			&i.ParentSpaceID,
@@ -1688,7 +1822,7 @@ func (q *Queries) ListDreamInputsForRun(ctx context.Context, runID string) ([]Dr
 }
 
 const listDreamRunsByOrg = `-- name: ListDreamRunsByOrg :many
-SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind
+SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind, audit_ref_id
 FROM dream_runs
 WHERE enterprise_id = $1
   AND org_unit_id = $2
@@ -1742,6 +1876,7 @@ func (q *Queries) ListDreamRunsByOrg(ctx context.Context, arg ListDreamRunsByOrg
 			&i.ExecutionLeaseExpiresAt,
 			&i.OrgVersion,
 			&i.OperationKind,
+			&i.AuditRefID,
 		); err != nil {
 			return nil, err
 		}
@@ -1865,7 +2000,7 @@ func (q *Queries) ListPendingDreamWorkflowLifecycle(ctx context.Context, resultL
 }
 
 const listPublishedDreamPolicies = `-- name: ListPublishedDreamPolicies :many
-SELECT id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id FROM dream_policies WHERE enterprise_id = $1 AND status = 'published' ORDER BY id
+SELECT id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, pending_action, review_state, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id FROM dream_policies WHERE enterprise_id = $1 AND status = 'published' ORDER BY id
 `
 
 func (q *Queries) ListPublishedDreamPolicies(ctx context.Context, enterpriseID string) ([]DreamPolicy, error) {
@@ -1888,6 +2023,58 @@ func (q *Queries) ListPublishedDreamPolicies(ctx context.Context, enterpriseID s
 			&i.Revision,
 			&i.RequesterUserID,
 			&i.PermissionMode,
+			&i.PendingAction,
+			&i.ReviewState,
+			&i.RiskLevel,
+			&i.RiskReasons,
+			&i.ReviewMode,
+			&i.ReviewerUserID,
+			&i.ReviewOrgPath,
+			&i.ReviewQueue,
+			&i.Decision,
+			&i.AuditRefID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPublishedDreamPoliciesBounded = `-- name: ListPublishedDreamPoliciesBounded :many
+SELECT id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, pending_action, review_state, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id FROM dream_policies WHERE enterprise_id=$1 AND status='published' ORDER BY id LIMIT $2
+`
+
+type ListPublishedDreamPoliciesBoundedParams struct {
+	EnterpriseID string `json:"enterprise_id"`
+	ResultLimit  int32  `json:"result_limit"`
+}
+
+func (q *Queries) ListPublishedDreamPoliciesBounded(ctx context.Context, arg ListPublishedDreamPoliciesBoundedParams) ([]DreamPolicy, error) {
+	rows, err := q.db.Query(ctx, listPublishedDreamPoliciesBounded, arg.EnterpriseID, arg.ResultLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DreamPolicy
+	for rows.Next() {
+		var i DreamPolicy
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnterpriseID,
+			&i.OrgScope,
+			&i.Status,
+			&i.Draft,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Revision,
+			&i.RequesterUserID,
+			&i.PermissionMode,
+			&i.PendingAction,
+			&i.ReviewState,
 			&i.RiskLevel,
 			&i.RiskReasons,
 			&i.ReviewMode,
@@ -1909,17 +2096,17 @@ func (q *Queries) ListPublishedDreamPolicies(ctx context.Context, enterpriseID s
 
 const publishDreamPolicyGoverned = `-- name: PublishDreamPolicyGoverned :one
 WITH changed AS (
-  UPDATE dream_policies SET status='published', revision=revision+1, audit_ref_id=$1, updated_at=now()
+  UPDATE dream_policies SET status='published', revision=revision+1, pending_action='',review_state='',audit_ref_id=$1, updated_at=now()
   WHERE dream_policies.enterprise_id=$2 AND dream_policies.id=$3
-    AND dream_policies.revision=$4 AND dream_policies.status='approved' AND dream_policies.permission_mode='direct_edit'
-  RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
+    AND dream_policies.revision=$4 AND dream_policies.status='draft' AND dream_policies.review_state='approved' AND dream_policies.pending_action='publish' AND dream_policies.permission_mode='direct_edit'
+  RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, pending_action, review_state, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
 ), inserted AS (
   INSERT INTO dream_policy_versions(policy_id,version,definition)
   SELECT id, COALESCE((SELECT max(version)+1 FROM dream_policy_versions WHERE policy_id=id),1), draft FROM changed
   RETURNING policy_id, version, definition, published_at
 ), audit AS (
-  INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,audit_ref_id,actor_user_id)
-  SELECT enterprise_id,id,revision,'publish',$1,$5 FROM changed
+  INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
+  SELECT enterprise_id,id,revision,'publish',$5,$1,$6 FROM changed
   RETURNING policy_id
 )
 SELECT inserted.policy_id, inserted.version, inserted.definition, inserted.published_at FROM inserted JOIN audit ON audit.policy_id=inserted.policy_id
@@ -1930,6 +2117,7 @@ type PublishDreamPolicyGovernedParams struct {
 	TargetEnterpriseID string `json:"target_enterprise_id"`
 	TargetID           string `json:"target_id"`
 	ExpectedRevision   int32  `json:"expected_revision"`
+	OperationKey       string `json:"operation_key"`
 	ActorUserID        string `json:"actor_user_id"`
 }
 
@@ -1946,6 +2134,7 @@ func (q *Queries) PublishDreamPolicyGoverned(ctx context.Context, arg PublishDre
 		arg.TargetEnterpriseID,
 		arg.TargetID,
 		arg.ExpectedRevision,
+		arg.OperationKey,
 		arg.ActorUserID,
 	)
 	var i PublishDreamPolicyGovernedRow
@@ -1987,7 +2176,7 @@ UPDATE dream_runs SET workflow_run_id=$1, status='waiting_confirmation', error='
     execution_owner=NULL, execution_lease_expires_at=NULL
 WHERE enterprise_id=$2 AND id=$3
   AND status IN ('running','waiting_confirmation') AND (workflow_run_id IS NULL OR workflow_run_id=$1)
-RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind
+RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind, audit_ref_id
 `
 
 type PublishDreamWorkflowWaitParams struct {
@@ -2030,6 +2219,42 @@ func (q *Queries) PublishDreamWorkflowWait(ctx context.Context, arg PublishDream
 		&i.ExecutionLeaseExpiresAt,
 		&i.OrgVersion,
 		&i.OperationKind,
+		&i.AuditRefID,
+	)
+	return i, err
+}
+
+const recordDreamPolicyOperationAudit = `-- name: RecordDreamPolicyOperationAudit :one
+UPDATE dream_policy_operations SET audit_ref_id=$1,updated_at=now()
+WHERE enterprise_id=$2 AND operation_key=$3
+  AND status='pending' AND (audit_ref_id IS NULL OR audit_ref_id=$1)
+RETURNING enterprise_id, operation_key, operation_kind, policy_id, actor_user_id, request_hash, facts_nonce, facts_issued_at, facts_expires_at, audit_ref_id, status, result, created_at, updated_at
+`
+
+type RecordDreamPolicyOperationAuditParams struct {
+	AuditRefID   pgtype.Text `json:"audit_ref_id"`
+	EnterpriseID string      `json:"enterprise_id"`
+	OperationKey string      `json:"operation_key"`
+}
+
+func (q *Queries) RecordDreamPolicyOperationAudit(ctx context.Context, arg RecordDreamPolicyOperationAuditParams) (DreamPolicyOperation, error) {
+	row := q.db.QueryRow(ctx, recordDreamPolicyOperationAudit, arg.AuditRefID, arg.EnterpriseID, arg.OperationKey)
+	var i DreamPolicyOperation
+	err := row.Scan(
+		&i.EnterpriseID,
+		&i.OperationKey,
+		&i.OperationKind,
+		&i.PolicyID,
+		&i.ActorUserID,
+		&i.RequestHash,
+		&i.FactsNonce,
+		&i.FactsIssuedAt,
+		&i.FactsExpiresAt,
+		&i.AuditRefID,
+		&i.Status,
+		&i.Result,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -2055,7 +2280,7 @@ UPDATE dream_runs
 SET status='pending', error='', execution_owner=NULL, execution_lease_expires_at=NULL
 WHERE enterprise_id=$1 AND workflow_run_id=$2
   AND status='running' AND (execution_lease_expires_at IS NULL OR execution_lease_expires_at <= now())
-RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind
+RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind, audit_ref_id
 `
 
 type RecoverExpiredDreamRunAfterWorkflowParams struct {
@@ -2097,6 +2322,7 @@ func (q *Queries) RecoverExpiredDreamRunAfterWorkflow(ctx context.Context, arg R
 		&i.ExecutionLeaseExpiresAt,
 		&i.OrgVersion,
 		&i.OperationKind,
+		&i.AuditRefID,
 	)
 	return i, err
 }
@@ -2135,6 +2361,64 @@ func (q *Queries) RecoverExpiredUnboundDreamRuns(ctx context.Context, resultLimi
 	return items, nil
 }
 
+const refreshDreamPolicyReviewRoute = `-- name: RefreshDreamPolicyReviewRoute :one
+UPDATE dream_policies SET risk_level=$1,risk_reasons=$2,review_mode=$3,
+  reviewer_user_id=$4,review_org_path=$5,review_queue=$6,updated_at=now()
+WHERE enterprise_id=$7 AND id=$8
+  AND revision=$9 AND review_state='pending' AND review_mode='enterprise_knowledge_admin_queue'
+RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, pending_action, review_state, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
+`
+
+type RefreshDreamPolicyReviewRouteParams struct {
+	RiskLevel          string      `json:"risk_level"`
+	RiskReasons        []byte      `json:"risk_reasons"`
+	ReviewMode         string      `json:"review_mode"`
+	ReviewerUserID     pgtype.Text `json:"reviewer_user_id"`
+	ReviewOrgPath      []byte      `json:"review_org_path"`
+	ReviewQueue        pgtype.Text `json:"review_queue"`
+	TargetEnterpriseID string      `json:"target_enterprise_id"`
+	TargetID           string      `json:"target_id"`
+	ExpectedRevision   int32       `json:"expected_revision"`
+}
+
+func (q *Queries) RefreshDreamPolicyReviewRoute(ctx context.Context, arg RefreshDreamPolicyReviewRouteParams) (DreamPolicy, error) {
+	row := q.db.QueryRow(ctx, refreshDreamPolicyReviewRoute,
+		arg.RiskLevel,
+		arg.RiskReasons,
+		arg.ReviewMode,
+		arg.ReviewerUserID,
+		arg.ReviewOrgPath,
+		arg.ReviewQueue,
+		arg.TargetEnterpriseID,
+		arg.TargetID,
+		arg.ExpectedRevision,
+	)
+	var i DreamPolicy
+	err := row.Scan(
+		&i.ID,
+		&i.EnterpriseID,
+		&i.OrgScope,
+		&i.Status,
+		&i.Draft,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Revision,
+		&i.RequesterUserID,
+		&i.PermissionMode,
+		&i.PendingAction,
+		&i.ReviewState,
+		&i.RiskLevel,
+		&i.RiskReasons,
+		&i.ReviewMode,
+		&i.ReviewerUserID,
+		&i.ReviewOrgPath,
+		&i.ReviewQueue,
+		&i.Decision,
+		&i.AuditRefID,
+	)
+	return i, err
+}
+
 const renewDreamRunLease = `-- name: RenewDreamRunLease :execrows
 UPDATE dream_runs
 SET execution_lease_expires_at=now()+interval '2 minutes'
@@ -2158,7 +2442,7 @@ const requeueDreamRunAfterWorkflow = `-- name: RequeueDreamRunAfterWorkflow :one
 UPDATE dream_runs SET status = 'pending', error = '', execution_owner=NULL, execution_lease_expires_at=NULL
 WHERE enterprise_id = $1 AND workflow_run_id = $2
   AND status IN ('waiting_confirmation','pending')
-RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind
+RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind, audit_ref_id
 `
 
 type RequeueDreamRunAfterWorkflowParams struct {
@@ -2200,6 +2484,7 @@ func (q *Queries) RequeueDreamRunAfterWorkflow(ctx context.Context, arg RequeueD
 		&i.ExecutionLeaseExpiresAt,
 		&i.OrgVersion,
 		&i.OperationKind,
+		&i.AuditRefID,
 	)
 	return i, err
 }
@@ -2208,7 +2493,7 @@ const reserveDreamOutputHash = `-- name: ReserveDreamOutputHash :one
 UPDATE dream_runs SET output_hash=$1
 WHERE enterprise_id=$2 AND id=$3
   AND (output_hash IS NULL OR output_hash=$1)
-RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind
+RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind, audit_ref_id
 `
 
 type ReserveDreamOutputHashParams struct {
@@ -2251,6 +2536,7 @@ func (q *Queries) ReserveDreamOutputHash(ctx context.Context, arg ReserveDreamOu
 		&i.ExecutionLeaseExpiresAt,
 		&i.OrgVersion,
 		&i.OperationKind,
+		&i.AuditRefID,
 	)
 	return i, err
 }
@@ -2260,7 +2546,7 @@ UPDATE dream_runs SET output_hash=$1
 WHERE enterprise_id=$2 AND id=$3
   AND execution_owner=$4 AND execution_lease_expires_at > now()
   AND status='running' AND (output_hash IS NULL OR output_hash=$1)
-RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind
+RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind, audit_ref_id
 `
 
 type ReserveDreamOutputHashOwnedParams struct {
@@ -2309,28 +2595,83 @@ func (q *Queries) ReserveDreamOutputHashOwned(ctx context.Context, arg ReserveDr
 		&i.ExecutionLeaseExpiresAt,
 		&i.OrgVersion,
 		&i.OperationKind,
+		&i.AuditRefID,
+	)
+	return i, err
+}
+
+const reserveDreamPolicyOperation = `-- name: ReserveDreamPolicyOperation :one
+INSERT INTO dream_policy_operations(enterprise_id,operation_key,operation_kind,policy_id,actor_user_id,request_hash,facts_nonce)
+VALUES($1,$2,$3,$4,$5,$6,$7)
+ON CONFLICT (enterprise_id,operation_key) DO UPDATE SET operation_key=EXCLUDED.operation_key
+WHERE dream_policy_operations.operation_kind=EXCLUDED.operation_kind
+  AND dream_policy_operations.policy_id=EXCLUDED.policy_id
+  AND dream_policy_operations.actor_user_id=EXCLUDED.actor_user_id
+  AND dream_policy_operations.request_hash=EXCLUDED.request_hash
+RETURNING enterprise_id, operation_key, operation_kind, policy_id, actor_user_id, request_hash, facts_nonce, facts_issued_at, facts_expires_at, audit_ref_id, status, result, created_at, updated_at
+`
+
+type ReserveDreamPolicyOperationParams struct {
+	EnterpriseID  string `json:"enterprise_id"`
+	OperationKey  string `json:"operation_key"`
+	OperationKind string `json:"operation_kind"`
+	PolicyID      string `json:"policy_id"`
+	ActorUserID   string `json:"actor_user_id"`
+	RequestHash   string `json:"request_hash"`
+	FactsNonce    string `json:"facts_nonce"`
+}
+
+func (q *Queries) ReserveDreamPolicyOperation(ctx context.Context, arg ReserveDreamPolicyOperationParams) (DreamPolicyOperation, error) {
+	row := q.db.QueryRow(ctx, reserveDreamPolicyOperation,
+		arg.EnterpriseID,
+		arg.OperationKey,
+		arg.OperationKind,
+		arg.PolicyID,
+		arg.ActorUserID,
+		arg.RequestHash,
+		arg.FactsNonce,
+	)
+	var i DreamPolicyOperation
+	err := row.Scan(
+		&i.EnterpriseID,
+		&i.OperationKey,
+		&i.OperationKind,
+		&i.PolicyID,
+		&i.ActorUserID,
+		&i.RequestHash,
+		&i.FactsNonce,
+		&i.FactsIssuedAt,
+		&i.FactsExpiresAt,
+		&i.AuditRefID,
+		&i.Status,
+		&i.Result,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const submitDreamPolicyReviewIfRevision = `-- name: SubmitDreamPolicyReviewIfRevision :one
 WITH changed AS (
-  UPDATE dream_policies SET status='review_pending', risk_level=$1,
-      risk_reasons=$2, review_mode=$3,
-      reviewer_user_id=$4, review_org_path=$5,
-      review_queue=$6, decision='', audit_ref_id=$7, updated_at=now()
-  WHERE dream_policies.enterprise_id=$8 AND dream_policies.id=$9
-    AND dream_policies.revision=$10 AND dream_policies.status='draft' AND dream_policies.permission_mode='direct_edit'
-  RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
+  UPDATE dream_policies SET pending_action=$1,review_state='pending', risk_level=$2,
+      risk_reasons=$3, review_mode=$4,
+      reviewer_user_id=$5, review_org_path=$6,
+      review_queue=$7, decision='', audit_ref_id=$8, updated_at=now()
+  WHERE dream_policies.enterprise_id=$9 AND dream_policies.id=$10
+    AND dream_policies.revision=$11 AND dream_policies.permission_mode='direct_edit'
+    AND (($1::text='publish' AND dream_policies.status='draft') OR ($1::text='disable' AND dream_policies.status='published'))
+    AND dream_policies.review_state IN ('','rejected')
+  RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, pending_action, review_state, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
 ), audit AS (
-  INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,audit_ref_id,actor_user_id)
-  SELECT enterprise_id,id,revision,'review',$7,$11 FROM changed
+  INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
+  SELECT enterprise_id,id,revision,'review:'||pending_action,$12,$8,$13 FROM changed
   RETURNING policy_id
 )
-SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id
+SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.pending_action, changed.review_state, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id
 `
 
 type SubmitDreamPolicyReviewIfRevisionParams struct {
+	PendingAction      string      `json:"pending_action"`
 	RiskLevel          string      `json:"risk_level"`
 	RiskReasons        []byte      `json:"risk_reasons"`
 	ReviewMode         string      `json:"review_mode"`
@@ -2341,6 +2682,7 @@ type SubmitDreamPolicyReviewIfRevisionParams struct {
 	TargetEnterpriseID string      `json:"target_enterprise_id"`
 	TargetID           string      `json:"target_id"`
 	ExpectedRevision   int32       `json:"expected_revision"`
+	OperationKey       string      `json:"operation_key"`
 	ActorUserID        string      `json:"actor_user_id"`
 }
 
@@ -2355,6 +2697,8 @@ type SubmitDreamPolicyReviewIfRevisionRow struct {
 	Revision        int32              `json:"revision"`
 	RequesterUserID string             `json:"requester_user_id"`
 	PermissionMode  string             `json:"permission_mode"`
+	PendingAction   string             `json:"pending_action"`
+	ReviewState     string             `json:"review_state"`
 	RiskLevel       string             `json:"risk_level"`
 	RiskReasons     []byte             `json:"risk_reasons"`
 	ReviewMode      string             `json:"review_mode"`
@@ -2367,6 +2711,7 @@ type SubmitDreamPolicyReviewIfRevisionRow struct {
 
 func (q *Queries) SubmitDreamPolicyReviewIfRevision(ctx context.Context, arg SubmitDreamPolicyReviewIfRevisionParams) (SubmitDreamPolicyReviewIfRevisionRow, error) {
 	row := q.db.QueryRow(ctx, submitDreamPolicyReviewIfRevision,
+		arg.PendingAction,
 		arg.RiskLevel,
 		arg.RiskReasons,
 		arg.ReviewMode,
@@ -2377,6 +2722,7 @@ func (q *Queries) SubmitDreamPolicyReviewIfRevision(ctx context.Context, arg Sub
 		arg.TargetEnterpriseID,
 		arg.TargetID,
 		arg.ExpectedRevision,
+		arg.OperationKey,
 		arg.ActorUserID,
 	)
 	var i SubmitDreamPolicyReviewIfRevisionRow
@@ -2391,6 +2737,8 @@ func (q *Queries) SubmitDreamPolicyReviewIfRevision(ctx context.Context, arg Sub
 		&i.Revision,
 		&i.RequesterUserID,
 		&i.PermissionMode,
+		&i.PendingAction,
+		&i.ReviewState,
 		&i.RiskLevel,
 		&i.RiskReasons,
 		&i.ReviewMode,
@@ -2406,28 +2754,30 @@ func (q *Queries) SubmitDreamPolicyReviewIfRevision(ctx context.Context, arg Sub
 const updateDreamPolicyDraftIfRevision = `-- name: UpdateDreamPolicyDraftIfRevision :one
 WITH changed AS (
   UPDATE dream_policies SET org_scope=$1, draft=$2, revision=revision+1,
-      status='draft', risk_level='', risk_reasons='[]', review_mode='', reviewer_user_id=NULL,
-      review_org_path='[]', review_queue=NULL, decision='', audit_ref_id=$3, updated_at=now()
-  WHERE dream_policies.enterprise_id=$4 AND dream_policies.id=$5
-    AND dream_policies.revision=$6 AND dream_policies.status IN ('draft','rejected','published','disabled')
+      status='draft', requester_user_id=CASE WHEN requester_user_id='' THEN $3 ELSE requester_user_id END,
+      pending_action='',review_state='',risk_level='', risk_reasons='[]', review_mode='', reviewer_user_id=NULL,
+      review_org_path='[]', review_queue=NULL, decision='', audit_ref_id=$4, updated_at=now()
+  WHERE dream_policies.enterprise_id=$5 AND dream_policies.id=$6
+    AND dream_policies.revision=$7 AND dream_policies.status IN ('draft','rejected','published','disabled')
     AND dream_policies.permission_mode='direct_edit'
-  RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
+  RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, pending_action, review_state, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
 ), audit AS (
-  INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,audit_ref_id,actor_user_id)
-  SELECT enterprise_id,id,revision,'update',$3,$7 FROM changed
+  INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
+  SELECT enterprise_id,id,revision,'update',$8,$4,$3 FROM changed
   RETURNING policy_id
 )
-SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id
+SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.pending_action, changed.review_state, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id
 `
 
 type UpdateDreamPolicyDraftIfRevisionParams struct {
 	OrgScope           string `json:"org_scope"`
 	Draft              []byte `json:"draft"`
+	ActorUserID        string `json:"actor_user_id"`
 	AuditRefID         string `json:"audit_ref_id"`
 	TargetEnterpriseID string `json:"target_enterprise_id"`
 	TargetID           string `json:"target_id"`
 	ExpectedRevision   int32  `json:"expected_revision"`
-	ActorUserID        string `json:"actor_user_id"`
+	OperationKey       string `json:"operation_key"`
 }
 
 type UpdateDreamPolicyDraftIfRevisionRow struct {
@@ -2441,6 +2791,8 @@ type UpdateDreamPolicyDraftIfRevisionRow struct {
 	Revision        int32              `json:"revision"`
 	RequesterUserID string             `json:"requester_user_id"`
 	PermissionMode  string             `json:"permission_mode"`
+	PendingAction   string             `json:"pending_action"`
+	ReviewState     string             `json:"review_state"`
 	RiskLevel       string             `json:"risk_level"`
 	RiskReasons     []byte             `json:"risk_reasons"`
 	ReviewMode      string             `json:"review_mode"`
@@ -2455,11 +2807,12 @@ func (q *Queries) UpdateDreamPolicyDraftIfRevision(ctx context.Context, arg Upda
 	row := q.db.QueryRow(ctx, updateDreamPolicyDraftIfRevision,
 		arg.OrgScope,
 		arg.Draft,
+		arg.ActorUserID,
 		arg.AuditRefID,
 		arg.TargetEnterpriseID,
 		arg.TargetID,
 		arg.ExpectedRevision,
-		arg.ActorUserID,
+		arg.OperationKey,
 	)
 	var i UpdateDreamPolicyDraftIfRevisionRow
 	err := row.Scan(
@@ -2473,6 +2826,8 @@ func (q *Queries) UpdateDreamPolicyDraftIfRevision(ctx context.Context, arg Upda
 		&i.Revision,
 		&i.RequesterUserID,
 		&i.PermissionMode,
+		&i.PendingAction,
+		&i.ReviewState,
 		&i.RiskLevel,
 		&i.RiskReasons,
 		&i.ReviewMode,

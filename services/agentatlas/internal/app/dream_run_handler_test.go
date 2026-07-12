@@ -52,11 +52,28 @@ type evidenceNexus struct {
 	audits     []nexus.AppendAuditEvidenceRequest
 }
 
-type fakeDreamRerunner struct{ calls int }
+type fakeDreamRerunner struct {
+	calls      int
+	sourceRun  string
+	key        string
+	runID      string
+	auditRefID string
+}
 
-func (f *fakeDreamRerunner) Rerun(context.Context, string, string, string) (string, error) {
+func (f *fakeDreamRerunner) Rerun(_ context.Context, _, sourceRun, key, auditRefID string) (string, error) {
 	f.calls++
-	return "rerun-1", nil
+	f.sourceRun, f.key, f.auditRefID = sourceRun, key, auditRefID
+	f.runID = "rerun-1"
+	return f.runID, nil
+}
+func (f *fakeDreamRerunner) LookupRerun(_ context.Context, _, sourceRun, key string) (string, bool, error) {
+	if f.key == "" || f.key != key {
+		return "", false, nil
+	}
+	if f.sourceRun != sourceRun {
+		return "", false, errors.New("idempotency key is bound to another rerun")
+	}
+	return f.runID, true, nil
 }
 
 func (n *evidenceNexus) VerifyTicket(context.Context, nexus.VerifyTicketRequest) (nexus.VerifyTicketResponse, error) {

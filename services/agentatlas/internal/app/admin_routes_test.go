@@ -128,12 +128,13 @@ func (f *fakeWorkflowStore) ListWorkflowRunEvents(context.Context, string) ([]db
 
 // fakePolicyStore backs dream.PolicyService in memory.
 type fakePolicyStore struct {
-	policies map[string]db.DreamPolicy
-	versions map[string]db.DreamPolicyVersion
+	policies   map[string]db.DreamPolicy
+	versions   map[string]db.DreamPolicyVersion
+	operations map[string]db.DreamPolicyOperation
 }
 
 func newFakePolicyStore() *fakePolicyStore {
-	return &fakePolicyStore{policies: map[string]db.DreamPolicy{}, versions: map[string]db.DreamPolicyVersion{}}
+	return &fakePolicyStore{policies: map[string]db.DreamPolicy{}, versions: map[string]db.DreamPolicyVersion{}, operations: map[string]db.DreamPolicyOperation{}}
 }
 
 func (f *fakePolicyStore) CreateDreamPolicy(_ context.Context, arg db.CreateDreamPolicyParams) (db.DreamPolicy, error) {
@@ -142,10 +143,14 @@ func (f *fakePolicyStore) CreateDreamPolicy(_ context.Context, arg db.CreateDrea
 	return p, nil
 }
 
-func (f *fakePolicyStore) CreateDreamPolicyLifecycle(_ context.Context, arg db.CreateDreamPolicyLifecycleParams) (db.DreamPolicy, error) {
-	p := db.DreamPolicy{ID: arg.ID, EnterpriseID: arg.EnterpriseID, OrgScope: arg.OrgScope, Status: "draft", Draft: arg.Draft, RequesterUserID: arg.RequesterUserID, PermissionMode: arg.PermissionMode, RiskReasons: []byte(`[]`), ReviewOrgPath: []byte(`[]`), AuditRefID: arg.AuditRefID}
+func (f *fakePolicyStore) CreateDreamPolicyLifecycle(_ context.Context, arg db.CreateDreamPolicyLifecycleParams) (db.CreateDreamPolicyLifecycleRow, error) {
+	op, ok := f.operations[arg.EnterpriseID+"\x00"+arg.OperationKey]
+	if !ok || !op.AuditRefID.Valid {
+		return db.CreateDreamPolicyLifecycleRow{}, pgx.ErrNoRows
+	}
+	p := db.DreamPolicy{ID: arg.ID, EnterpriseID: arg.EnterpriseID, OrgScope: arg.OrgScope, Status: "draft", Draft: arg.Draft, RequesterUserID: arg.RequesterUserID, PermissionMode: arg.PermissionMode, RiskReasons: []byte(`[]`), ReviewOrgPath: []byte(`[]`), AuditRefID: op.AuditRefID.String}
 	f.policies[p.ID] = p
-	return p, nil
+	return db.CreateDreamPolicyLifecycleRow{ID: p.ID, EnterpriseID: p.EnterpriseID, OrgScope: p.OrgScope, Status: p.Status, Draft: p.Draft, Revision: p.Revision, RequesterUserID: p.RequesterUserID, PermissionMode: p.PermissionMode, RiskReasons: p.RiskReasons, ReviewOrgPath: p.ReviewOrgPath, AuditRefID: p.AuditRefID}, nil
 }
 func (f *fakePolicyStore) GetEnterpriseDreamPolicy(_ context.Context, arg db.GetEnterpriseDreamPolicyParams) (db.DreamPolicy, error) {
 	p, ok := f.policies[arg.ID]
@@ -157,28 +162,74 @@ func (f *fakePolicyStore) GetEnterpriseDreamPolicy(_ context.Context, arg db.Get
 func (f *fakePolicyStore) GetDreamOrgTreeVersion(context.Context, string) (int64, error) {
 	return 1, nil
 }
+func (f *fakePolicyStore) ReserveDreamPolicyOperation(_ context.Context, a db.ReserveDreamPolicyOperationParams) (db.DreamPolicyOperation, error) {
+	key := a.EnterpriseID + "\x00" + a.OperationKey
+	if old, ok := f.operations[key]; ok {
+		if old.OperationKind != a.OperationKind || old.PolicyID != a.PolicyID || old.ActorUserID != a.ActorUserID || old.RequestHash != a.RequestHash {
+			return db.DreamPolicyOperation{}, pgx.ErrNoRows
+		}
+		return old, nil
+	}
+	now := time.Now().UTC()
+	op := db.DreamPolicyOperation{EnterpriseID: a.EnterpriseID, OperationKey: a.OperationKey, OperationKind: a.OperationKind, PolicyID: a.PolicyID, ActorUserID: a.ActorUserID, RequestHash: a.RequestHash, FactsNonce: a.FactsNonce, FactsIssuedAt: pgtype.Timestamptz{Time: now, Valid: true}, FactsExpiresAt: pgtype.Timestamptz{Time: now.Add(5 * time.Minute), Valid: true}, Status: "pending"}
+	f.operations[key] = op
+	return op, nil
+}
+func (f *fakePolicyStore) GetDreamPolicyOperation(_ context.Context, a db.GetDreamPolicyOperationParams) (db.DreamPolicyOperation, error) {
+	op, ok := f.operations[a.EnterpriseID+"\x00"+a.OperationKey]
+	if !ok {
+		return db.DreamPolicyOperation{}, pgx.ErrNoRows
+	}
+	return op, nil
+}
+func (f *fakePolicyStore) RecordDreamPolicyOperationAudit(_ context.Context, a db.RecordDreamPolicyOperationAuditParams) (db.DreamPolicyOperation, error) {
+	key := a.EnterpriseID + "\x00" + a.OperationKey
+	op, ok := f.operations[key]
+	if !ok || op.Status != "pending" {
+		return db.DreamPolicyOperation{}, pgx.ErrNoRows
+	}
+	op.AuditRefID = a.AuditRefID
+	f.operations[key] = op
+	return op, nil
+}
+func (f *fakePolicyStore) CompleteDreamPolicyOperation(_ context.Context, a db.CompleteDreamPolicyOperationParams) (db.DreamPolicyOperation, error) {
+	key := a.EnterpriseID + "\x00" + a.OperationKey
+	op, ok := f.operations[key]
+	if !ok || !op.AuditRefID.Valid {
+		return db.DreamPolicyOperation{}, pgx.ErrNoRows
+	}
+	op.Status = "completed"
+	op.Result = a.Result
+	f.operations[key] = op
+	return op, nil
+}
 
 func updateRow(p db.DreamPolicy) db.UpdateDreamPolicyDraftIfRevisionRow {
-	return db.UpdateDreamPolicyDraftIfRevisionRow{ID: p.ID, EnterpriseID: p.EnterpriseID, OrgScope: p.OrgScope, Status: p.Status, Draft: p.Draft, Revision: p.Revision, RequesterUserID: p.RequesterUserID, PermissionMode: p.PermissionMode, RiskLevel: p.RiskLevel, RiskReasons: p.RiskReasons, ReviewMode: p.ReviewMode, ReviewerUserID: p.ReviewerUserID, ReviewOrgPath: p.ReviewOrgPath, ReviewQueue: p.ReviewQueue, Decision: p.Decision, AuditRefID: p.AuditRefID}
+	return db.UpdateDreamPolicyDraftIfRevisionRow{ID: p.ID, EnterpriseID: p.EnterpriseID, OrgScope: p.OrgScope, Status: p.Status, Draft: p.Draft, Revision: p.Revision, RequesterUserID: p.RequesterUserID, PermissionMode: p.PermissionMode, PendingAction: p.PendingAction, ReviewState: p.ReviewState, RiskLevel: p.RiskLevel, RiskReasons: p.RiskReasons, ReviewMode: p.ReviewMode, ReviewerUserID: p.ReviewerUserID, ReviewOrgPath: p.ReviewOrgPath, ReviewQueue: p.ReviewQueue, Decision: p.Decision, AuditRefID: p.AuditRefID}
 }
 func submitRow(p db.DreamPolicy) db.SubmitDreamPolicyReviewIfRevisionRow {
-	return db.SubmitDreamPolicyReviewIfRevisionRow{ID: p.ID, EnterpriseID: p.EnterpriseID, OrgScope: p.OrgScope, Status: p.Status, Draft: p.Draft, Revision: p.Revision, RequesterUserID: p.RequesterUserID, PermissionMode: p.PermissionMode, RiskLevel: p.RiskLevel, RiskReasons: p.RiskReasons, ReviewMode: p.ReviewMode, ReviewerUserID: p.ReviewerUserID, ReviewOrgPath: p.ReviewOrgPath, ReviewQueue: p.ReviewQueue, Decision: p.Decision, AuditRefID: p.AuditRefID}
+	return db.SubmitDreamPolicyReviewIfRevisionRow{ID: p.ID, EnterpriseID: p.EnterpriseID, OrgScope: p.OrgScope, Status: p.Status, Draft: p.Draft, Revision: p.Revision, RequesterUserID: p.RequesterUserID, PermissionMode: p.PermissionMode, PendingAction: p.PendingAction, ReviewState: p.ReviewState, RiskLevel: p.RiskLevel, RiskReasons: p.RiskReasons, ReviewMode: p.ReviewMode, ReviewerUserID: p.ReviewerUserID, ReviewOrgPath: p.ReviewOrgPath, ReviewQueue: p.ReviewQueue, Decision: p.Decision, AuditRefID: p.AuditRefID}
 }
 func decisionRow(p db.DreamPolicy) db.DecideDreamPolicyIfRevisionRow {
-	return db.DecideDreamPolicyIfRevisionRow{ID: p.ID, EnterpriseID: p.EnterpriseID, OrgScope: p.OrgScope, Status: p.Status, Draft: p.Draft, Revision: p.Revision, RequesterUserID: p.RequesterUserID, PermissionMode: p.PermissionMode, RiskLevel: p.RiskLevel, RiskReasons: p.RiskReasons, ReviewMode: p.ReviewMode, ReviewerUserID: p.ReviewerUserID, ReviewOrgPath: p.ReviewOrgPath, ReviewQueue: p.ReviewQueue, Decision: p.Decision, AuditRefID: p.AuditRefID}
+	return db.DecideDreamPolicyIfRevisionRow{ID: p.ID, EnterpriseID: p.EnterpriseID, OrgScope: p.OrgScope, Status: p.Status, Draft: p.Draft, Revision: p.Revision, RequesterUserID: p.RequesterUserID, PermissionMode: p.PermissionMode, PendingAction: p.PendingAction, ReviewState: p.ReviewState, RiskLevel: p.RiskLevel, RiskReasons: p.RiskReasons, ReviewMode: p.ReviewMode, ReviewerUserID: p.ReviewerUserID, ReviewOrgPath: p.ReviewOrgPath, ReviewQueue: p.ReviewQueue, Decision: p.Decision, AuditRefID: p.AuditRefID}
 }
 func disableRow(p db.DreamPolicy) db.DisableDreamPolicyIfRevisionRow {
-	return db.DisableDreamPolicyIfRevisionRow{ID: p.ID, EnterpriseID: p.EnterpriseID, OrgScope: p.OrgScope, Status: p.Status, Draft: p.Draft, Revision: p.Revision, RequesterUserID: p.RequesterUserID, PermissionMode: p.PermissionMode, RiskLevel: p.RiskLevel, RiskReasons: p.RiskReasons, ReviewMode: p.ReviewMode, ReviewerUserID: p.ReviewerUserID, ReviewOrgPath: p.ReviewOrgPath, ReviewQueue: p.ReviewQueue, Decision: p.Decision, AuditRefID: p.AuditRefID}
+	return db.DisableDreamPolicyIfRevisionRow{ID: p.ID, EnterpriseID: p.EnterpriseID, OrgScope: p.OrgScope, Status: p.Status, Draft: p.Draft, Revision: p.Revision, RequesterUserID: p.RequesterUserID, PermissionMode: p.PermissionMode, PendingAction: p.PendingAction, ReviewState: p.ReviewState, RiskLevel: p.RiskLevel, RiskReasons: p.RiskReasons, ReviewMode: p.ReviewMode, ReviewerUserID: p.ReviewerUserID, ReviewOrgPath: p.ReviewOrgPath, ReviewQueue: p.ReviewQueue, Decision: p.Decision, AuditRefID: p.AuditRefID}
 }
 func (f *fakePolicyStore) UpdateDreamPolicyDraftIfRevision(_ context.Context, a db.UpdateDreamPolicyDraftIfRevisionParams) (db.UpdateDreamPolicyDraftIfRevisionRow, error) {
 	p, ok := f.policies[a.TargetID]
-	if !ok || p.EnterpriseID != a.TargetEnterpriseID || p.Revision != a.ExpectedRevision || p.PermissionMode != "direct_edit" || (p.Status != "draft" && p.Status != "rejected" && p.Status != "published" && p.Status != "disabled") {
+	if !ok || p.EnterpriseID != a.TargetEnterpriseID || p.Revision != a.ExpectedRevision || p.PermissionMode != "direct_edit" || (p.Status != "draft" && p.Status != "published" && p.Status != "disabled") {
 		return db.UpdateDreamPolicyDraftIfRevisionRow{}, pgx.ErrNoRows
 	}
 	p.OrgScope = a.OrgScope
 	p.Draft = a.Draft
 	p.Revision++
 	p.Status = "draft"
+	if p.RequesterUserID == "" {
+		p.RequesterUserID = a.ActorUserID
+	}
+	p.PendingAction = ""
+	p.ReviewState = ""
 	p.RiskLevel = ""
 	p.RiskReasons = []byte(`[]`)
 	p.ReviewMode = ""
@@ -192,10 +243,12 @@ func (f *fakePolicyStore) UpdateDreamPolicyDraftIfRevision(_ context.Context, a 
 }
 func (f *fakePolicyStore) SubmitDreamPolicyReviewIfRevision(_ context.Context, a db.SubmitDreamPolicyReviewIfRevisionParams) (db.SubmitDreamPolicyReviewIfRevisionRow, error) {
 	p, ok := f.policies[a.TargetID]
-	if !ok || p.EnterpriseID != a.TargetEnterpriseID || p.Revision != a.ExpectedRevision || p.Status != "draft" || p.PermissionMode != "direct_edit" {
+	validState := (a.PendingAction == "publish" && p.Status == "draft") || (a.PendingAction == "disable" && p.Status == "published")
+	if !ok || p.EnterpriseID != a.TargetEnterpriseID || p.Revision != a.ExpectedRevision || !validState || p.PermissionMode != "direct_edit" || (p.ReviewState != "" && p.ReviewState != "rejected") {
 		return db.SubmitDreamPolicyReviewIfRevisionRow{}, pgx.ErrNoRows
 	}
-	p.Status = "review_pending"
+	p.PendingAction = a.PendingAction
+	p.ReviewState = "pending"
 	p.RiskLevel = a.RiskLevel
 	p.RiskReasons = a.RiskReasons
 	p.ReviewMode = a.ReviewMode
@@ -206,17 +259,32 @@ func (f *fakePolicyStore) SubmitDreamPolicyReviewIfRevision(_ context.Context, a
 	f.policies[p.ID] = p
 	return submitRow(p), nil
 }
+func (f *fakePolicyStore) RefreshDreamPolicyReviewRoute(_ context.Context, a db.RefreshDreamPolicyReviewRouteParams) (db.DreamPolicy, error) {
+	p, ok := f.policies[a.TargetID]
+	if !ok || p.ReviewState != "pending" || p.ReviewMode != "enterprise_knowledge_admin_queue" || p.Revision != a.ExpectedRevision {
+		return db.DreamPolicy{}, pgx.ErrNoRows
+	}
+	p.RiskLevel = a.RiskLevel
+	p.RiskReasons = a.RiskReasons
+	p.ReviewMode = a.ReviewMode
+	p.ReviewerUserID = a.ReviewerUserID
+	p.ReviewOrgPath = a.ReviewOrgPath
+	p.ReviewQueue = a.ReviewQueue
+	f.policies[p.ID] = p
+	return p, nil
+}
 func (f *fakePolicyStore) DecideDreamPolicyIfRevision(_ context.Context, a db.DecideDreamPolicyIfRevisionParams) (db.DecideDreamPolicyIfRevisionRow, error) {
 	p, ok := f.policies[a.TargetID]
 	actor := a.ActorUserID.String
-	if !ok || p.EnterpriseID != a.TargetEnterpriseID || p.Revision != a.ExpectedRevision || p.Status != "review_pending" || ((p.RiskLevel == "high" && (!p.ReviewerUserID.Valid || p.ReviewerUserID.String != actor || p.RequesterUserID == actor)) || (p.RiskLevel == "low" && (p.RequesterUserID != actor || p.ReviewMode != "single_confirmation"))) {
+	validActor := (p.ReviewMode == "upward_review" && p.ReviewerUserID.Valid && p.ReviewerUserID.String == actor && p.RequesterUserID != actor) || (p.RiskLevel == "low" && p.ReviewMode == "single_confirmation" && p.RequesterUserID == actor)
+	if !ok || p.EnterpriseID != a.TargetEnterpriseID || p.Revision != a.ExpectedRevision || p.ReviewState != "pending" || !validActor {
 		return db.DecideDreamPolicyIfRevisionRow{}, pgx.ErrNoRows
 	}
 	p.Decision = a.Decision
 	if a.Decision == "approve" {
-		p.Status = "approved"
+		p.ReviewState = "approved"
 	} else {
-		p.Status = "rejected"
+		p.ReviewState = "rejected"
 	}
 	p.AuditRefID = a.AuditRefID
 	f.policies[p.ID] = p
@@ -224,7 +292,7 @@ func (f *fakePolicyStore) DecideDreamPolicyIfRevision(_ context.Context, a db.De
 }
 func (f *fakePolicyStore) PublishDreamPolicyGoverned(_ context.Context, a db.PublishDreamPolicyGovernedParams) (db.PublishDreamPolicyGovernedRow, error) {
 	p, ok := f.policies[a.TargetID]
-	if !ok || p.EnterpriseID != a.TargetEnterpriseID || p.Revision != a.ExpectedRevision || p.Status != "approved" || p.PermissionMode != "direct_edit" {
+	if !ok || p.EnterpriseID != a.TargetEnterpriseID || p.Revision != a.ExpectedRevision || p.Status != "draft" || p.ReviewState != "approved" || p.PendingAction != "publish" || p.PermissionMode != "direct_edit" {
 		return db.PublishDreamPolicyGovernedRow{}, pgx.ErrNoRows
 	}
 	v := int32(1)
@@ -234,6 +302,8 @@ func (f *fakePolicyStore) PublishDreamPolicyGoverned(_ context.Context, a db.Pub
 		}
 	}
 	p.Status = "published"
+	p.PendingAction = ""
+	p.ReviewState = ""
 	p.Revision++
 	p.AuditRefID = a.AuditRefID
 	f.policies[p.ID] = p
@@ -243,10 +313,12 @@ func (f *fakePolicyStore) PublishDreamPolicyGoverned(_ context.Context, a db.Pub
 }
 func (f *fakePolicyStore) DisableDreamPolicyIfRevision(_ context.Context, a db.DisableDreamPolicyIfRevisionParams) (db.DisableDreamPolicyIfRevisionRow, error) {
 	p, ok := f.policies[a.TargetID]
-	if !ok || p.EnterpriseID != a.TargetEnterpriseID || p.Revision != a.ExpectedRevision || p.Status != "published" {
+	if !ok || p.EnterpriseID != a.TargetEnterpriseID || p.Revision != a.ExpectedRevision || p.Status != "published" || p.ReviewState != "approved" || p.PendingAction != "disable" {
 		return db.DisableDreamPolicyIfRevisionRow{}, pgx.ErrNoRows
 	}
 	p.Status = "disabled"
+	p.PendingAction = ""
+	p.ReviewState = ""
 	p.Revision++
 	p.AuditRefID = a.AuditRefID
 	f.policies[p.ID] = p
@@ -299,6 +371,13 @@ func (f *fakePolicyStore) ListPublishedDreamPolicies(_ context.Context, enterpri
 		}
 	}
 	return out, nil
+}
+func (f *fakePolicyStore) ListPublishedDreamPoliciesBounded(ctx context.Context, a db.ListPublishedDreamPoliciesBoundedParams) ([]db.DreamPolicy, error) {
+	rows, err := f.ListPublishedDreamPolicies(ctx, a.EnterpriseID)
+	if int32(len(rows)) > a.ResultLimit {
+		return rows[:a.ResultLimit], err
+	}
+	return rows, err
 }
 
 func (f *fakePolicyStore) GetWorkflow(_ context.Context, id string) (db.Workflow, error) {
@@ -511,6 +590,7 @@ func postJSONReq(t *testing.T, url, ticket string, body any) *http.Response {
 	raw, _ := json.Marshal(body)
 	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(raw))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "test-operation-default-key")
 	if ticket != "" {
 		req.Header.Set("X-Nexus-Ticket", ticket)
 	}
@@ -712,7 +792,7 @@ func TestDreamPolicyRouteCreatesCanonicalDraftWithoutPublishing(t *testing.T) {
 	if auditID != policyID {
 		t.Fatalf("audit id %v != response id %s", auditID, policyID)
 	}
-	if phase := mock.AuditLog[len(mock.AuditLog)-1].Details["phase"]; phase != "create_requested" {
+	if phase := mock.AuditLog[len(mock.AuditLog)-1].Details["phase"]; phase != "create_attempt" {
 		t.Fatalf("audit phase = %v", phase)
 	}
 }

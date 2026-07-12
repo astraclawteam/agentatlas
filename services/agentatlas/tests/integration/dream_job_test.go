@@ -358,7 +358,8 @@ func TestDreamJob(t *testing.T) {
 
 	// policy: draft -> publish
 	policySvc := dream.NewPolicyService(q)
-	policyID, err := policySvc.CreateDraft(ctx, entID, dream.Policy(sdkdream.DreamPolicyDefinition{
+	fixturePolicies := dream.NewPolicyFixtureService(q)
+	policyID, err := fixturePolicies.CreateDraft(ctx, entID, dream.Policy(sdkdream.DreamPolicyDefinition{
 		OrgUnitID: "project_group:pg1", Timezone: "UTC", Schedule: "0 22 * * *",
 		InputSources:      []sdkdream.Source{sdkdream.SourceWorkBrief},
 		Workflow:          sdkdream.WorkflowRef{ID: dreamWorkflowID, Version: 1},
@@ -372,7 +373,7 @@ func TestDreamJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("policy draft: %v", err)
 	}
-	if _, err := policySvc.Publish(ctx, policyID); err != nil {
+	if _, err := fixturePolicies.Publish(ctx, policyID); err != nil {
 		t.Fatalf("policy publish: %v", err)
 	}
 

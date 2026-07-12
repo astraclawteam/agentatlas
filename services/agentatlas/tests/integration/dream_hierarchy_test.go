@@ -112,11 +112,12 @@ func TestDreamHierarchy(t *testing.T) {
 	}
 
 	policySvc := dream.NewPolicyService(q)
-	policyID, err := policySvc.CreateDraft(ctx, ent, dream.Policy(sdkdream.DreamPolicyDefinition{OrgUnitID: "department:parent", Timezone: "UTC", Schedule: "0 14 * * *", InputSources: []sdkdream.Source{sdkdream.SourceChildDreamSummary}, Workflow: sdkdream.WorkflowRef{ID: wfID, Version: 1}, OutputSpaceID: parentSpace, VisibilityLevel: sdkdream.VisibilityManagers, EvidenceRetention: sdkdream.EvidencePointerPlusDisplaySummary, ConfirmationMode: sdkdream.ConfirmationNever, MaxAttempts: 3}))
+	fixturePolicies := dream.NewPolicyFixtureService(q)
+	policyID, err := fixturePolicies.CreateDraft(ctx, ent, dream.Policy(sdkdream.DreamPolicyDefinition{OrgUnitID: "department:parent", Timezone: "UTC", Schedule: "0 14 * * *", InputSources: []sdkdream.Source{sdkdream.SourceChildDreamSummary}, Workflow: sdkdream.WorkflowRef{ID: wfID, Version: 1}, OutputSpaceID: parentSpace, VisibilityLevel: sdkdream.VisibilityManagers, EvidenceRetention: sdkdream.EvidencePointerPlusDisplaySummary, ConfirmationMode: sdkdream.ConfirmationNever, MaxAttempts: 3}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := policySvc.Publish(ctx, policyID); err != nil {
+	if _, err := fixturePolicies.Publish(ctx, policyID); err != nil {
 		t.Fatal(err)
 	}
 	parentRun := newID("run-parent")

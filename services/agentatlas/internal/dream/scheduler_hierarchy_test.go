@@ -333,7 +333,7 @@ func TestSchedulerHierarchyManualRerunIsImmutableAndIdempotent(t *testing.T) {
 	}
 	originalID := runIDFor("child-a", 1, now, 0)
 	store.setStatus(originalID, "succeeded")
-	runID, err := scheduler.Rerun(context.Background(), "ent-1", originalID, "manual-rerun-1")
+	runID, err := scheduler.Rerun(context.Background(), "ent-1", originalID, "manual-rerun-1", "audit-rerun-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +341,7 @@ func TestSchedulerHierarchyManualRerunIsImmutableAndIdempotent(t *testing.T) {
 	if !rerun.RerunOfRunID.Valid || rerun.RerunOfRunID.String != originalID || rerun.Attempt != 1 || rerun.IdempotencyKey != "manual-rerun-1" || rerun.ID == originalID {
 		t.Fatalf("rerun=%+v", rerun)
 	}
-	again, err := scheduler.Rerun(context.Background(), "ent-1", originalID, "manual-rerun-1")
+	again, err := scheduler.Rerun(context.Background(), "ent-1", originalID, "manual-rerun-1", "audit-rerun-1")
 	if err != nil || again != runID {
 		t.Fatalf("duplicate rerun=%s err=%v", again, err)
 	}
@@ -358,15 +358,15 @@ func TestSchedulerHierarchyBackfillRequiresBoundsAndSuccessfulOverlapLineage(t *
 	scheduler := NewScheduler(store, NewPolicyService(store), runner)
 	start := time.Date(2026, 7, 9, 14, 0, 0, 0, time.UTC)
 	end := start.Add(24 * time.Hour)
-	first, err := scheduler.Backfill(context.Background(), BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child-a", WindowStart: start, WindowEnd: end, IdempotencyKey: "backfill-1"})
+	first, err := scheduler.Backfill(context.Background(), BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child-a", WindowStart: start, WindowEnd: end, IdempotencyKey: "backfill-1", AuditRefID: "audit-backfill-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	store.setStatus(first, "succeeded")
-	if _, err := scheduler.Backfill(context.Background(), BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child-a", WindowStart: start.Add(time.Hour), WindowEnd: end.Add(time.Hour), IdempotencyKey: "backfill-overlap"}); err == nil {
+	if _, err := scheduler.Backfill(context.Background(), BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child-a", WindowStart: start.Add(time.Hour), WindowEnd: end.Add(time.Hour), IdempotencyKey: "backfill-overlap", AuditRefID: "audit-backfill-overlap"}); err == nil {
 		t.Fatal("successful overlap accepted without rerun lineage")
 	}
-	lineaged, err := scheduler.Backfill(context.Background(), BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child-a", WindowStart: start, WindowEnd: end, RerunOfRunID: first, IdempotencyKey: "backfill-rerun"})
+	lineaged, err := scheduler.Backfill(context.Background(), BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child-a", WindowStart: start, WindowEnd: end, RerunOfRunID: first, IdempotencyKey: "backfill-rerun", AuditRefID: "audit-backfill-rerun"})
 	if err != nil || !store.run(lineaged).RerunOfRunID.Valid {
 		t.Fatalf("lineaged=%s run=%+v err=%v", lineaged, store.run(lineaged), err)
 	}
@@ -386,7 +386,7 @@ func TestSchedulerHierarchyExplicitIdempotencyBindsCanonicalRequest(t *testing.T
 	clock := func() time.Time { return time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC) }
 	scheduler := NewScheduler(store, NewPolicyService(store), runner, WithSchedulerClock(clock))
 	start := time.Date(2026, 7, 9, 14, 0, 0, 0, time.UTC)
-	req := BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child-a", WindowStart: start, WindowEnd: start.Add(24 * time.Hour), IdempotencyKey: "explicit-key"}
+	req := BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child-a", WindowStart: start, WindowEnd: start.Add(24 * time.Hour), IdempotencyKey: "explicit-key", AuditRefID: "audit-explicit-key"}
 	first, err := scheduler.Backfill(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -417,22 +417,22 @@ func TestSchedulerHierarchyBackfillRejectsFutureAndUnrelatedLineageWithoutMoving
 	runner.AllowEnqueue(JobTypeDream)
 	now := time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)
 	scheduler := NewScheduler(store, NewPolicyService(store), runner, WithSchedulerClock(func() time.Time { return now }))
-	if _, err := scheduler.Backfill(context.Background(), BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child", WindowStart: now, WindowEnd: now.Add(time.Hour), IdempotencyKey: "future"}); err == nil {
+	if _, err := scheduler.Backfill(context.Background(), BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child", WindowStart: now, WindowEnd: now.Add(time.Hour), IdempotencyKey: "future", AuditRefID: "audit-future"}); err == nil {
 		t.Fatal("future backfill accepted")
 	}
 	start := time.Date(2026, 7, 9, 14, 0, 0, 0, time.UTC)
-	successful, err := scheduler.Backfill(context.Background(), BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child", WindowStart: start, WindowEnd: start.Add(24 * time.Hour), IdempotencyKey: "success"})
+	successful, err := scheduler.Backfill(context.Background(), BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child", WindowStart: start, WindowEnd: start.Add(24 * time.Hour), IdempotencyKey: "success", AuditRefID: "audit-success"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	store.setStatus(successful, "succeeded")
 	unrelatedStart := start.Add(-48 * time.Hour)
-	unrelated, err := scheduler.Backfill(context.Background(), BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child", WindowStart: unrelatedStart, WindowEnd: unrelatedStart.Add(24 * time.Hour), IdempotencyKey: "unrelated"})
+	unrelated, err := scheduler.Backfill(context.Background(), BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child", WindowStart: unrelatedStart, WindowEnd: unrelatedStart.Add(24 * time.Hour), IdempotencyKey: "unrelated", AuditRefID: "audit-unrelated"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	store.setStatus(unrelated, "failed")
-	if _, err := scheduler.Backfill(context.Background(), BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child", WindowStart: start, WindowEnd: start.Add(24 * time.Hour), RerunOfRunID: unrelated, IdempotencyKey: "bad-lineage"}); err == nil {
+	if _, err := scheduler.Backfill(context.Background(), BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child", WindowStart: start, WindowEnd: start.Add(24 * time.Hour), RerunOfRunID: unrelated, IdempotencyKey: "bad-lineage", AuditRefID: "audit-bad-lineage"}); err == nil {
 		t.Fatal("unrelated failed lineage bypassed overlap")
 	}
 	// Historical explicit runs never become the automatic schedule cursor.
@@ -696,7 +696,7 @@ func (s *schedulerHierarchyStore) CreateDreamRun(_ context.Context, arg db.Creat
 			return db.DreamRun{}, &pgconn.PgError{Code: "23505"}
 		}
 	}
-	row := db.DreamRun{ID: arg.ID, PolicyID: arg.PolicyID, Version: arg.Version, EnterpriseID: arg.EnterpriseID, Status: arg.Status, WindowStart: arg.WindowStart, WindowEnd: arg.WindowEnd, OrgUnitID: arg.OrgUnitID, PolicyVersion: arg.PolicyVersion, WorkflowID: pgtype.Text{String: arg.WorkflowID, Valid: true}, WorkflowVersion: pgtype.Int4{Int32: arg.WorkflowVersion, Valid: true}, Timezone: arg.Timezone, InputSnapshot: arg.InputSnapshot, VisibilitySnapshot: arg.VisibilitySnapshot, ModelRoute: arg.ModelRoute, ModelVersion: arg.ModelVersion, Attempt: arg.Attempt, RerunOfRunID: arg.RerunOfRunID, Coverage: arg.Coverage, MissingInputs: arg.MissingInputs, IdempotencyKey: arg.IdempotencyKey, OrgVersion: arg.OrgVersion, OperationKind: arg.OperationKind}
+	row := db.DreamRun{ID: arg.ID, PolicyID: arg.PolicyID, Version: arg.Version, EnterpriseID: arg.EnterpriseID, Status: arg.Status, WindowStart: arg.WindowStart, WindowEnd: arg.WindowEnd, OrgUnitID: arg.OrgUnitID, PolicyVersion: arg.PolicyVersion, WorkflowID: pgtype.Text{String: arg.WorkflowID, Valid: true}, WorkflowVersion: pgtype.Int4{Int32: arg.WorkflowVersion, Valid: true}, Timezone: arg.Timezone, InputSnapshot: arg.InputSnapshot, VisibilitySnapshot: arg.VisibilitySnapshot, ModelRoute: arg.ModelRoute, ModelVersion: arg.ModelVersion, Attempt: arg.Attempt, RerunOfRunID: arg.RerunOfRunID, Coverage: arg.Coverage, MissingInputs: arg.MissingInputs, IdempotencyKey: arg.IdempotencyKey, OrgVersion: arg.OrgVersion, OperationKind: arg.OperationKind, AuditRefID: arg.AuditRefID}
 	s.runs[row.ID] = row
 	return row, nil
 }

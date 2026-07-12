@@ -189,6 +189,8 @@ type DreamPolicy struct {
 	Revision        int32              `json:"revision"`
 	RequesterUserID string             `json:"requester_user_id"`
 	PermissionMode  string             `json:"permission_mode"`
+	PendingAction   string             `json:"pending_action"`
+	ReviewState     string             `json:"review_state"`
 	RiskLevel       string             `json:"risk_level"`
 	RiskReasons     []byte             `json:"risk_reasons"`
 	ReviewMode      string             `json:"review_mode"`
@@ -199,11 +201,29 @@ type DreamPolicy struct {
 	AuditRefID      string             `json:"audit_ref_id"`
 }
 
+type DreamPolicyOperation struct {
+	EnterpriseID   string             `json:"enterprise_id"`
+	OperationKey   string             `json:"operation_key"`
+	OperationKind  string             `json:"operation_kind"`
+	PolicyID       string             `json:"policy_id"`
+	ActorUserID    string             `json:"actor_user_id"`
+	RequestHash    string             `json:"request_hash"`
+	FactsNonce     string             `json:"facts_nonce"`
+	FactsIssuedAt  pgtype.Timestamptz `json:"facts_issued_at"`
+	FactsExpiresAt pgtype.Timestamptz `json:"facts_expires_at"`
+	AuditRefID     pgtype.Text        `json:"audit_ref_id"`
+	Status         string             `json:"status"`
+	Result         []byte             `json:"result"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type DreamPolicyTransitionAudit struct {
 	EnterpriseID string             `json:"enterprise_id"`
 	PolicyID     string             `json:"policy_id"`
 	Revision     int32              `json:"revision"`
 	Transition   string             `json:"transition"`
+	OperationKey string             `json:"operation_key"`
 	AuditRefID   string             `json:"audit_ref_id"`
 	ActorUserID  string             `json:"actor_user_id"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
@@ -247,6 +267,7 @@ type DreamRun struct {
 	ExecutionLeaseExpiresAt pgtype.Timestamptz `json:"execution_lease_expires_at"`
 	OrgVersion              int64              `json:"org_version"`
 	OperationKind           string             `json:"operation_kind"`
+	AuditRefID              pgtype.Text        `json:"audit_ref_id"`
 }
 
 type DreamRunAnnotation struct {

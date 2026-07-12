@@ -26,7 +26,8 @@ type dreamRunStore interface {
 }
 
 type dreamRerunner interface {
-	Rerun(context.Context, string, string, string) (string, error)
+	Rerun(context.Context, string, string, string, string) (string, error)
+	LookupRerun(context.Context, string, string, string) (string, bool, error)
 }
 
 type dreamRunHandler struct {
@@ -161,7 +162,14 @@ func (h *dreamRunHandler) rerunRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "bounded Idempotency-Key is required")
 		return
 	}
-	audit, err := h.nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, Action: nexus.AuditDreamJobRun, ResourceType: "dream_run", ResourceID: view.RunID, Details: map[string]any{"org_unit_id": view.OrgUnitID, "idempotency_key": key, "phase": "manual_rerun"}})
+	if id, found, err := h.rerun.LookupRerun(r.Context(), actor.Ticket.EnterpriseID, chi.URLParam(r, "id"), key); err != nil {
+		writeError(w, http.StatusConflict, "rerun_failed", err.Error())
+		return
+	} else if found {
+		writeJSON(w, http.StatusAccepted, map[string]string{"run_id": id})
+		return
+	}
+	audit, err := h.nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, Action: nexus.AuditDreamJobRun, ResourceType: "dream_run", ResourceID: view.RunID, Details: map[string]any{"org_unit_id": view.OrgUnitID, "idempotency_key": key, "phase": "manual_rerun_attempt"}})
 	if err != nil || strings.TrimSpace(audit.AuditRefID) == "" {
 		if err == nil {
 			err = fmt.Errorf("AgentNexus returned no durable audit reference")
@@ -169,7 +177,7 @@ func (h *dreamRunHandler) rerunRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "audit_failed", err.Error())
 		return
 	}
-	id, err := h.rerun.Rerun(r.Context(), actor.Ticket.EnterpriseID, chi.URLParam(r, "id"), key)
+	id, err := h.rerun.Rerun(r.Context(), actor.Ticket.EnterpriseID, chi.URLParam(r, "id"), key, audit.AuditRefID)
 	if err != nil {
 		writeError(w, http.StatusConflict, "rerun_failed", err.Error())
 		return

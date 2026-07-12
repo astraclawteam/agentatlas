@@ -45,6 +45,7 @@ type BackfillRequest struct {
 	WindowEnd      time.Time
 	RerunOfRunID   string
 	IdempotencyKey string
+	AuditRefID     string
 }
 
 // Scheduler turns published policies into due dream runs. Run ids are
@@ -382,11 +383,11 @@ func hasDreamSource(sources []sdkdream.Source, wanted sdkdream.Source) bool {
 
 // Rerun creates a new immutable run pinned to the original policy/workflow
 // version and exact window. The original row is never mutated.
-func (s *Scheduler) Rerun(ctx context.Context, enterpriseID, runID, idempotencyKey string) (string, error) {
+func (s *Scheduler) Rerun(ctx context.Context, enterpriseID, runID, idempotencyKey, auditRefID string) (string, error) {
 	var id string
 	if ids, handled, err := s.inOrgSnapshot(ctx, func(txScheduler *Scheduler) error {
 		var err error
-		id, err = txScheduler.Rerun(ctx, enterpriseID, runID, idempotencyKey)
+		id, err = txScheduler.Rerun(ctx, enterpriseID, runID, idempotencyKey, auditRefID)
 		return err
 	}); handled {
 		if err != nil {
@@ -408,7 +409,21 @@ func (s *Scheduler) Rerun(ctx context.Context, enterpriseID, runID, idempotencyK
 	if err != nil {
 		return "", err
 	}
-	return s.createExplicitRun(ctx, BackfillRequest{EnterpriseID: enterpriseID, PolicyID: original.PolicyID, WindowStart: original.WindowStart.Time, WindowEnd: original.WindowEnd.Time, RerunOfRunID: original.ID, IdempotencyKey: idempotencyKey}, policy, original.PolicyVersion, "manual_rerun")
+	return s.createExplicitRun(ctx, BackfillRequest{EnterpriseID: enterpriseID, PolicyID: original.PolicyID, WindowStart: original.WindowStart.Time, WindowEnd: original.WindowEnd.Time, RerunOfRunID: original.ID, IdempotencyKey: idempotencyKey, AuditRefID: auditRefID}, policy, original.PolicyVersion, "manual_rerun")
+}
+
+func (s *Scheduler) LookupRerun(ctx context.Context, enterpriseID, sourceRunID, key string) (string, bool, error) {
+	row, err := s.store.GetDreamRunByIdempotencyKey(ctx, db.GetDreamRunByIdempotencyKeyParams{EnterpriseID: enterpriseID, IdempotencyKey: key})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if row.EnterpriseID != enterpriseID || row.OperationKind != "manual_rerun" || !row.RerunOfRunID.Valid || row.RerunOfRunID.String != sourceRunID {
+		return "", false, fmt.Errorf("Dream idempotency key is already bound to a different canonical request")
+	}
+	return row.ID, true, nil
 }
 
 // Backfill schedules exactly one caller-bounded historical window.
@@ -427,7 +442,7 @@ func (s *Scheduler) Backfill(ctx context.Context, req BackfillRequest) (string, 
 		}
 		return id, nil
 	}
-	if req.EnterpriseID == "" || req.PolicyID == "" || req.IdempotencyKey == "" {
+	if req.EnterpriseID == "" || req.PolicyID == "" || req.IdempotencyKey == "" || req.AuditRefID == "" {
 		return "", fmt.Errorf("Dream backfill requires enterprise, policy, and idempotency key")
 	}
 	if req.WindowEnd.After(s.clock()) {
@@ -462,6 +477,21 @@ func (s *Scheduler) Backfill(ctx context.Context, req BackfillRequest) (string, 
 		}
 	}
 	return s.createExplicitRun(ctx, req, policy, version, "backfill")
+}
+
+func (s *Scheduler) LookupBackfill(ctx context.Context, req BackfillRequest) (string, bool, error) {
+	row, err := s.store.GetDreamRunByIdempotencyKey(ctx, db.GetDreamRunByIdempotencyKeyParams{EnterpriseID: req.EnterpriseID, IdempotencyKey: req.IdempotencyKey})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	rerunMatches := row.RerunOfRunID.Valid == (req.RerunOfRunID != "") && (!row.RerunOfRunID.Valid || row.RerunOfRunID.String == req.RerunOfRunID)
+	if row.EnterpriseID != req.EnterpriseID || row.PolicyID != req.PolicyID || row.OperationKind != "backfill" || !row.WindowStart.Valid || !row.WindowEnd.Valid || !row.WindowStart.Time.Equal(req.WindowStart) || !row.WindowEnd.Time.Equal(req.WindowEnd) || !rerunMatches {
+		return "", false, fmt.Errorf("Dream idempotency key is already bound to a different canonical request")
+	}
+	return row.ID, true, nil
 }
 
 func (s *Scheduler) createExplicitRun(ctx context.Context, req BackfillRequest, p Policy, version int32, operationKind string) (string, error) {
@@ -518,7 +548,7 @@ func (s *Scheduler) createExplicitRun(ctx context.Context, req BackfillRequest, 
 	for collision := int32(0); collision < 20; collision++ {
 		candidateSequence := sequence + collision
 		id := runIDFor(req.PolicyID, version, req.WindowEnd, candidateSequence)
-		_, err := s.store.CreateDreamRun(ctx, db.CreateDreamRunParams{ID: id, PolicyID: req.PolicyID, Version: version, EnterpriseID: req.EnterpriseID, Status: "pending", WindowStart: pgtype.Timestamptz{Time: req.WindowStart, Valid: true}, WindowEnd: pgtype.Timestamptz{Time: req.WindowEnd, Valid: true}, OrgUnitID: p.OrgUnitID, PolicyVersion: version, WorkflowID: p.Workflow.ID, WorkflowVersion: p.Workflow.Version, Timezone: p.Timezone, InputSnapshot: inputSnapshot, VisibilitySnapshot: visibilitySnapshot, ModelRoute: "workflow/" + p.Workflow.ID, ModelVersion: fmt.Sprintf("v%d", p.Workflow.Version), Attempt: 1, RerunOfRunID: rerun, Coverage: coverageJSON, MissingInputs: missingJSON, IdempotencyKey: req.IdempotencyKey, OrgVersion: orgVersion, OperationKind: operationKind})
+		_, err := s.store.CreateDreamRun(ctx, db.CreateDreamRunParams{ID: id, PolicyID: req.PolicyID, Version: version, EnterpriseID: req.EnterpriseID, Status: "pending", WindowStart: pgtype.Timestamptz{Time: req.WindowStart, Valid: true}, WindowEnd: pgtype.Timestamptz{Time: req.WindowEnd, Valid: true}, OrgUnitID: p.OrgUnitID, PolicyVersion: version, WorkflowID: p.Workflow.ID, WorkflowVersion: p.Workflow.Version, Timezone: p.Timezone, InputSnapshot: inputSnapshot, VisibilitySnapshot: visibilitySnapshot, ModelRoute: "workflow/" + p.Workflow.ID, ModelVersion: fmt.Sprintf("v%d", p.Workflow.Version), Attempt: 1, RerunOfRunID: rerun, Coverage: coverageJSON, MissingInputs: missingJSON, IdempotencyKey: req.IdempotencyKey, OrgVersion: orgVersion, OperationKind: operationKind, AuditRefID: pgtype.Text{String: req.AuditRefID, Valid: true}})
 		if err == nil {
 			if err := s.dispatch(ctx, id); err != nil {
 				return id, fmt.Errorf("dispatch explicit Dream run: %w", err)
@@ -706,7 +736,7 @@ func schedulerSnapshots(p Policy) ([]byte, []byte, error) {
 
 func validateExplicitIdempotency(existing db.DreamRun, req BackfillRequest, p Policy, version int32, operationKind string) (string, error) {
 	rerunMatches := existing.RerunOfRunID.Valid == (req.RerunOfRunID != "") && (!existing.RerunOfRunID.Valid || existing.RerunOfRunID.String == req.RerunOfRunID)
-	if existing.EnterpriseID != req.EnterpriseID || existing.PolicyID != req.PolicyID || existing.PolicyVersion != version || existing.Version != version || existing.OrgUnitID != p.OrgUnitID || existing.OperationKind != operationKind || !existing.WindowStart.Valid || !existing.WindowEnd.Valid || !existing.WindowStart.Time.Equal(req.WindowStart) || !existing.WindowEnd.Time.Equal(req.WindowEnd) || !rerunMatches {
+	if existing.EnterpriseID != req.EnterpriseID || existing.PolicyID != req.PolicyID || existing.PolicyVersion != version || existing.Version != version || existing.OrgUnitID != p.OrgUnitID || existing.OperationKind != operationKind || !existing.WindowStart.Valid || !existing.WindowEnd.Valid || !existing.WindowStart.Time.Equal(req.WindowStart) || !existing.WindowEnd.Time.Equal(req.WindowEnd) || !rerunMatches || !existing.AuditRefID.Valid || existing.AuditRefID.String != req.AuditRefID {
 		return "", fmt.Errorf("Dream idempotency key is already bound to a different canonical request")
 	}
 	return existing.ID, nil

@@ -189,12 +189,12 @@ func (r ReviewRoute) Validate() error {
 			return fmt.Errorf("single confirmation is low risk and has no reviewer or queue")
 		}
 	case ReviewUpward:
-		if r.RiskLevel != RiskHigh || r.ReviewerUserID == "" || len(r.OrgPath) == 0 || r.Queue != "" {
-			return fmt.Errorf("upward review requires high risk, reviewer, and org path")
+		if (r.RiskLevel != RiskLow && r.RiskLevel != RiskHigh) || r.ReviewerUserID == "" || len(r.OrgPath) == 0 || r.Queue != "" {
+			return fmt.Errorf("upward review requires low/high risk, reviewer, and org path")
 		}
 	case ReviewAdminQueue:
-		if r.RiskLevel != RiskHigh || r.Queue == "" || r.ReviewerUserID != "" {
-			return fmt.Errorf("admin queue requires high risk and queue")
+		if (r.RiskLevel != RiskLow && r.RiskLevel != RiskHigh) || r.Queue == "" || r.ReviewerUserID != "" {
+			return fmt.Errorf("admin queue requires low/high risk and queue")
 		}
 	default:
 		return fmt.Errorf("unknown review mode")

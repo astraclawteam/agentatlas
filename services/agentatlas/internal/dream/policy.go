@@ -7,6 +7,7 @@ package dream
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -126,13 +127,18 @@ type PolicyStore interface {
 }
 
 type policyLifecycleStore interface {
-	CreateDreamPolicyLifecycle(context.Context, db.CreateDreamPolicyLifecycleParams) (db.DreamPolicy, error)
+	CreateDreamPolicyLifecycle(context.Context, db.CreateDreamPolicyLifecycleParams) (db.CreateDreamPolicyLifecycleRow, error)
 	GetEnterpriseDreamPolicy(context.Context, db.GetEnterpriseDreamPolicyParams) (db.DreamPolicy, error)
 	UpdateDreamPolicyDraftIfRevision(context.Context, db.UpdateDreamPolicyDraftIfRevisionParams) (db.UpdateDreamPolicyDraftIfRevisionRow, error)
 	SubmitDreamPolicyReviewIfRevision(context.Context, db.SubmitDreamPolicyReviewIfRevisionParams) (db.SubmitDreamPolicyReviewIfRevisionRow, error)
 	DecideDreamPolicyIfRevision(context.Context, db.DecideDreamPolicyIfRevisionParams) (db.DecideDreamPolicyIfRevisionRow, error)
 	PublishDreamPolicyGoverned(context.Context, db.PublishDreamPolicyGovernedParams) (db.PublishDreamPolicyGovernedRow, error)
 	DisableDreamPolicyIfRevision(context.Context, db.DisableDreamPolicyIfRevisionParams) (db.DisableDreamPolicyIfRevisionRow, error)
+	RefreshDreamPolicyReviewRoute(context.Context, db.RefreshDreamPolicyReviewRouteParams) (db.DreamPolicy, error)
+	ReserveDreamPolicyOperation(context.Context, db.ReserveDreamPolicyOperationParams) (db.DreamPolicyOperation, error)
+	GetDreamPolicyOperation(context.Context, db.GetDreamPolicyOperationParams) (db.DreamPolicyOperation, error)
+	RecordDreamPolicyOperationAudit(context.Context, db.RecordDreamPolicyOperationAuditParams) (db.DreamPolicyOperation, error)
+	CompleteDreamPolicyOperation(context.Context, db.CompleteDreamPolicyOperationParams) (db.DreamPolicyOperation, error)
 }
 
 type LifecycleView struct {
@@ -148,6 +154,8 @@ type LifecycleView struct {
 	ReviewerUserID  string                    `json:"reviewer_user_id,omitempty"`
 	OrgPath         []string                  `json:"org_path"`
 	Queue           string                    `json:"queue,omitempty"`
+	PendingAction   string                    `json:"pending_action,omitempty"`
+	ReviewState     string                    `json:"review_state,omitempty"`
 	Policy          Policy                    `json:"policy"`
 }
 
@@ -173,10 +181,62 @@ func lifecycleView(row db.DreamPolicy, version int32) (LifecycleView, error) {
 	if path == nil {
 		path = []string{}
 	}
-	return LifecycleView{ID: row.ID, Status: row.Status, Revision: row.Revision, Version: version,
+	status := row.Status
+	switch row.ReviewState {
+	case "pending":
+		status = "review_pending"
+	case "approved":
+		status = "approved"
+	case "rejected":
+		status = "rejected"
+	}
+	return LifecycleView{ID: row.ID, Status: status, Revision: row.Revision, Version: version,
 		RequesterUserID: row.RequesterUserID, PermissionMode: governance.PermissionMode(row.PermissionMode),
 		RiskLevel: governance.RiskLevel(row.RiskLevel), RiskReasons: reasons, ReviewMode: governance.ReviewMode(row.ReviewMode),
-		ReviewerUserID: row.ReviewerUserID.String, OrgPath: path, Queue: row.ReviewQueue.String, Policy: p}, nil
+		ReviewerUserID: row.ReviewerUserID.String, OrgPath: path, Queue: row.ReviewQueue.String, PendingAction: row.PendingAction, ReviewState: row.ReviewState, Policy: p}, nil
+}
+
+type Operation struct {
+	Row    db.DreamPolicyOperation
+	Replay *LifecycleView
+}
+
+func (s *PolicyService) BeginOperation(ctx context.Context, enterpriseID, key, kind, policyID, actor, requestHash string) (Operation, error) {
+	if len(key) < 16 || len(key) > 128 || len(requestHash) != 64 || actor == "" || policyID == "" {
+		return Operation{}, fmt.Errorf("invalid lifecycle operation")
+	}
+	ls, ok := s.store.(policyLifecycleStore)
+	if !ok {
+		return Operation{}, fmt.Errorf("policy store does not support governed lifecycle")
+	}
+	sum := sha256.Sum256([]byte(enterpriseID + "\x00" + key))
+	nonce := "facts_" + hex.EncodeToString(sum[:16])
+	row, err := ls.ReserveDreamPolicyOperation(ctx, db.ReserveDreamPolicyOperationParams{EnterpriseID: enterpriseID, OperationKey: key, OperationKind: kind, PolicyID: policyID, ActorUserID: actor, RequestHash: requestHash, FactsNonce: nonce})
+	if err != nil {
+		return Operation{}, fmt.Errorf("operation key conflict: %w", err)
+	}
+	op := Operation{Row: row}
+	if row.Status == "completed" {
+		var view LifecycleView
+		if err := json.Unmarshal(row.Result, &view); err != nil {
+			return Operation{}, err
+		}
+		op.Replay = &view
+	}
+	return op, nil
+}
+func (s *PolicyService) RecordOperationAudit(ctx context.Context, enterpriseID, key, auditRef string) (db.DreamPolicyOperation, error) {
+	ls := s.store.(policyLifecycleStore)
+	return ls.RecordDreamPolicyOperationAudit(ctx, db.RecordDreamPolicyOperationAuditParams{AuditRefID: text(auditRef), EnterpriseID: enterpriseID, OperationKey: key})
+}
+func (s *PolicyService) CompleteOperation(ctx context.Context, enterpriseID, key string, view LifecycleView) (LifecycleView, error) {
+	raw, err := json.Marshal(view)
+	if err != nil {
+		return LifecycleView{}, err
+	}
+	ls := s.store.(policyLifecycleStore)
+	_, err = ls.CompleteDreamPolicyOperation(ctx, db.CompleteDreamPolicyOperationParams{Result: raw, EnterpriseID: enterpriseID, OperationKey: key})
+	return view, err
 }
 
 // LoadVersion returns exactly one immutable published policy version.
@@ -212,12 +272,18 @@ func newID(prefix string) string {
 
 func NewPolicyID() string { return newID("pol") }
 
-// CreateDraft validates and stores a draft policy.
-func (s *PolicyService) CreateDraft(ctx context.Context, enterpriseID string, p Policy) (string, error) {
+// PolicyFixtureService is an explicit test/bootstrap-only surface. Production
+// composition receives PolicyService, which has no direct publish bypass.
+type PolicyFixtureService struct{ *PolicyService }
+
+func NewPolicyFixtureService(store PolicyStore) *PolicyFixtureService {
+	return &PolicyFixtureService{NewPolicyService(store)}
+}
+func (s *PolicyFixtureService) CreateDraft(ctx context.Context, enterpriseID string, p Policy) (string, error) {
 	return s.CreateDraftWithID(ctx, enterpriseID, NewPolicyID(), p)
 }
 
-func (s *PolicyService) CreateDraftWithID(ctx context.Context, enterpriseID, policyID string, p Policy) (string, error) {
+func (s *PolicyFixtureService) CreateDraftWithID(ctx context.Context, enterpriseID, policyID string, p Policy) (string, error) {
 	p = withPolicyDefaults(p)
 	if err := p.Validate(); err != nil {
 		return "", err
@@ -239,12 +305,12 @@ func (s *PolicyService) CreateDraftWithID(ctx context.Context, enterpriseID, pol
 // CreateGovernedDraft stores the requester and permission mode alongside the
 // version-zero draft. The audit reference must already have been durably
 // appended by AgentNexus.
-func (s *PolicyService) CreateGovernedDraft(ctx context.Context, enterpriseID, policyID, requester string, mode governance.PermissionMode, auditRef string, p Policy) (LifecycleView, error) {
+func (s *PolicyService) CreateGovernedDraft(ctx context.Context, enterpriseID, policyID, requester string, mode governance.PermissionMode, operationKey string, p Policy) (LifecycleView, error) {
 	p = withPolicyDefaults(p)
 	if err := p.Validate(); err != nil {
 		return LifecycleView{}, err
 	}
-	if requester == "" || auditRef == "" || (mode != governance.PermissionDirectEdit && mode != governance.PermissionSuggestionOnly) {
+	if requester == "" || operationKey == "" || (mode != governance.PermissionDirectEdit && mode != governance.PermissionSuggestionOnly) {
 		return LifecycleView{}, fmt.Errorf("governed Dream draft requires requester, permission mode, and audit reference")
 	}
 	raw, err := json.Marshal(p)
@@ -255,11 +321,11 @@ func (s *PolicyService) CreateGovernedDraft(ctx context.Context, enterpriseID, p
 	if !ok {
 		return LifecycleView{}, fmt.Errorf("policy store does not support governed lifecycle")
 	}
-	row, err := ls.CreateDreamPolicyLifecycle(ctx, db.CreateDreamPolicyLifecycleParams{ID: policyID, EnterpriseID: enterpriseID, OrgScope: p.OrgUnitID, Draft: raw, RequesterUserID: requester, PermissionMode: string(mode), AuditRefID: auditRef})
+	row, err := ls.CreateDreamPolicyLifecycle(ctx, db.CreateDreamPolicyLifecycleParams{ID: policyID, EnterpriseID: enterpriseID, OrgScope: p.OrgUnitID, Draft: raw, RequesterUserID: requester, PermissionMode: string(mode), OperationKey: operationKey})
 	if err != nil {
 		return LifecycleView{}, fmt.Errorf("store governed policy draft: %w", err)
 	}
-	return lifecycleView(row, 0)
+	return lifecycleView(db.DreamPolicy{ID: row.ID, EnterpriseID: row.EnterpriseID, OrgScope: row.OrgScope, Status: row.Status, Draft: row.Draft, Revision: row.Revision, RequesterUserID: row.RequesterUserID, PermissionMode: row.PermissionMode, PendingAction: row.PendingAction, ReviewState: row.ReviewState, RiskLevel: row.RiskLevel, RiskReasons: row.RiskReasons, ReviewMode: row.ReviewMode, ReviewerUserID: row.ReviewerUserID, ReviewOrgPath: row.ReviewOrgPath, ReviewQueue: row.ReviewQueue, Decision: row.Decision, AuditRefID: row.AuditRefID}, 0)
 }
 
 func (s *PolicyService) GetLifecycle(ctx context.Context, enterpriseID, policyID string) (LifecycleView, error) {
@@ -295,7 +361,7 @@ func (s *PolicyService) OrgVersion(ctx context.Context, enterpriseID string) (in
 	return version, nil
 }
 
-func (s *PolicyService) UpdateGovernedDraft(ctx context.Context, enterpriseID, policyID, actor, auditRef string, revision int32, p Policy) (LifecycleView, error) {
+func (s *PolicyService) UpdateGovernedDraft(ctx context.Context, enterpriseID, policyID, actor, auditRef, operationKey string, revision int32, p Policy) (LifecycleView, error) {
 	p = withPolicyDefaults(p)
 	if err := p.Validate(); err != nil {
 		return LifecycleView{}, err
@@ -311,7 +377,7 @@ func (s *PolicyService) UpdateGovernedDraft(ctx context.Context, enterpriseID, p
 	if !ok {
 		return LifecycleView{}, fmt.Errorf("policy store does not support governed lifecycle")
 	}
-	row, err := ls.UpdateDreamPolicyDraftIfRevision(ctx, db.UpdateDreamPolicyDraftIfRevisionParams{OrgScope: p.OrgUnitID, Draft: raw, AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor})
+	row, err := ls.UpdateDreamPolicyDraftIfRevision(ctx, db.UpdateDreamPolicyDraftIfRevisionParams{OrgScope: p.OrgUnitID, Draft: raw, AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor, OperationKey: operationKey})
 	if err != nil {
 		return LifecycleView{}, fmt.Errorf("update Dream policy revision: %w", err)
 	}
@@ -379,7 +445,7 @@ func (s *PolicyService) Assess(ctx context.Context, enterpriseID, policyID strin
 	return governance.RiskAssessment{RiskLevel: level, RiskReasons: reasons}, changed, view, nil
 }
 
-func (s *PolicyService) SubmitReview(ctx context.Context, enterpriseID, policyID, actor, auditRef string, revision int32, route governance.ReviewRoute, reasons []string) (LifecycleView, error) {
+func (s *PolicyService) SubmitReview(ctx context.Context, enterpriseID, policyID, actor, auditRef, operationKey, action string, revision int32, route governance.ReviewRoute, reasons []string) (LifecycleView, error) {
 	if err := route.Validate(); err != nil {
 		return LifecycleView{}, err
 	}
@@ -392,15 +458,23 @@ func (s *PolicyService) SubmitReview(ctx context.Context, enterpriseID, policyID
 	if !ok {
 		return LifecycleView{}, fmt.Errorf("policy store does not support governed lifecycle")
 	}
-	row, err := ls.SubmitDreamPolicyReviewIfRevision(ctx, db.SubmitDreamPolicyReviewIfRevisionParams{RiskLevel: string(route.RiskLevel), RiskReasons: reasonsJSON, ReviewMode: string(route.Mode), ReviewerUserID: text(route.ReviewerUserID), ReviewOrgPath: pathJSON, ReviewQueue: text(route.Queue), AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor})
-	if err != nil {
-		return LifecycleView{}, fmt.Errorf("submit Dream policy review: %w", err)
+	if action != "publish" && action != "disable" {
+		return LifecycleView{}, fmt.Errorf("invalid pending action")
 	}
-	_ = row
+	_, err := ls.SubmitDreamPolicyReviewIfRevision(ctx, db.SubmitDreamPolicyReviewIfRevisionParams{PendingAction: action, RiskLevel: string(route.RiskLevel), RiskReasons: reasonsJSON, ReviewMode: string(route.Mode), ReviewerUserID: text(route.ReviewerUserID), ReviewOrgPath: pathJSON, ReviewQueue: text(route.Queue), AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor, OperationKey: operationKey})
+	if err != nil {
+		current, currentErr := s.GetLifecycle(ctx, enterpriseID, policyID)
+		if currentErr == nil && current.ReviewMode == governance.ReviewAdminQueue {
+			_, err = ls.RefreshDreamPolicyReviewRoute(ctx, db.RefreshDreamPolicyReviewRouteParams{RiskLevel: string(route.RiskLevel), RiskReasons: reasonsJSON, ReviewMode: string(route.Mode), ReviewerUserID: text(route.ReviewerUserID), ReviewOrgPath: pathJSON, ReviewQueue: text(route.Queue), TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision})
+		}
+		if err != nil {
+			return LifecycleView{}, fmt.Errorf("submit Dream policy review: %w", err)
+		}
+	}
 	return s.GetLifecycle(ctx, enterpriseID, policyID)
 }
 
-func (s *PolicyService) Decide(ctx context.Context, enterpriseID, policyID, actor, auditRef, decision string, revision int32) (LifecycleView, error) {
+func (s *PolicyService) Decide(ctx context.Context, enterpriseID, policyID, actor, auditRef, operationKey, decision string, revision int32) (LifecycleView, error) {
 	if decision != "approve" && decision != "reject" {
 		return LifecycleView{}, fmt.Errorf("decision must be approve or reject")
 	}
@@ -408,7 +482,7 @@ func (s *PolicyService) Decide(ctx context.Context, enterpriseID, policyID, acto
 	if !ok {
 		return LifecycleView{}, fmt.Errorf("policy store does not support governed lifecycle")
 	}
-	row, err := ls.DecideDreamPolicyIfRevision(ctx, db.DecideDreamPolicyIfRevisionParams{Decision: decision, AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: text(actor)})
+	row, err := ls.DecideDreamPolicyIfRevision(ctx, db.DecideDreamPolicyIfRevisionParams{Decision: decision, AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: text(actor), OperationKey: operationKey})
 	if err != nil {
 		return LifecycleView{}, fmt.Errorf("decide Dream policy: %w", err)
 	}
@@ -416,12 +490,12 @@ func (s *PolicyService) Decide(ctx context.Context, enterpriseID, policyID, acto
 	return s.GetLifecycle(ctx, enterpriseID, policyID)
 }
 
-func (s *PolicyService) PublishGoverned(ctx context.Context, enterpriseID, policyID, actor, auditRef string, revision int32) (LifecycleView, error) {
+func (s *PolicyService) PublishGoverned(ctx context.Context, enterpriseID, policyID, actor, auditRef, operationKey string, revision int32) (LifecycleView, error) {
 	view, err := s.GetLifecycle(ctx, enterpriseID, policyID)
 	if err != nil {
 		return LifecycleView{}, err
 	}
-	if view.Status != "approved" || view.Revision != revision || view.PermissionMode != governance.PermissionDirectEdit {
+	if view.ReviewState != "approved" || view.PendingAction != "publish" || view.Revision != revision || view.PermissionMode != governance.PermissionDirectEdit {
 		return LifecycleView{}, fmt.Errorf("Dream policy is not an approved current revision")
 	}
 	wfStore, ok := s.store.(interface {
@@ -443,7 +517,7 @@ func (s *PolicyService) PublishGoverned(ctx context.Context, enterpriseID, polic
 		return LifecycleView{}, err
 	}
 	ls := s.store.(policyLifecycleStore)
-	published, err := ls.PublishDreamPolicyGoverned(ctx, db.PublishDreamPolicyGovernedParams{AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor})
+	published, err := ls.PublishDreamPolicyGoverned(ctx, db.PublishDreamPolicyGovernedParams{AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor, OperationKey: operationKey})
 	if err != nil {
 		return LifecycleView{}, fmt.Errorf("publish governed Dream policy: %w", err)
 	}
@@ -455,12 +529,12 @@ func (s *PolicyService) PublishGoverned(ctx context.Context, enterpriseID, polic
 	return view, nil
 }
 
-func (s *PolicyService) Disable(ctx context.Context, enterpriseID, policyID, actor, auditRef string, revision int32) (LifecycleView, error) {
+func (s *PolicyService) Disable(ctx context.Context, enterpriseID, policyID, actor, auditRef, operationKey string, revision int32) (LifecycleView, error) {
 	ls, ok := s.store.(policyLifecycleStore)
 	if !ok {
 		return LifecycleView{}, fmt.Errorf("policy store does not support governed lifecycle")
 	}
-	row, err := ls.DisableDreamPolicyIfRevision(ctx, db.DisableDreamPolicyIfRevisionParams{AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor})
+	row, err := ls.DisableDreamPolicyIfRevision(ctx, db.DisableDreamPolicyIfRevisionParams{AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor, OperationKey: operationKey})
 	if err != nil {
 		return LifecycleView{}, fmt.Errorf("disable Dream policy: %w", err)
 	}
@@ -471,7 +545,7 @@ func (s *PolicyService) Disable(ctx context.Context, enterpriseID, policyID, act
 func text(v string) pgtype.Text { return pgtype.Text{String: v, Valid: v != ""} }
 
 // Publish freezes the draft as the next immutable version (admin-confirmed).
-func (s *PolicyService) Publish(ctx context.Context, policyID string) (int32, error) {
+func (s *PolicyFixtureService) Publish(ctx context.Context, policyID string) (int32, error) {
 	row, err := s.store.GetDreamPolicy(ctx, policyID)
 	if err != nil {
 		return 0, fmt.Errorf("load policy: %w", err)
@@ -603,6 +677,28 @@ func (s *PolicyService) ListPublished(ctx context.Context, enterpriseID string) 
 		p, err := decodePolicy(row.Draft)
 		if err != nil {
 			return nil, fmt.Errorf("decode policy %s: %w", row.ID, err)
+		}
+		out = append(out, PublishedPolicy{ID: row.ID, OrgScope: row.OrgScope, Status: row.Status, Policy: p})
+	}
+	return out, nil
+}
+
+func (s *PolicyService) ListPublishedBounded(ctx context.Context, enterpriseID string, limit int32) ([]PublishedPolicy, error) {
+	store, ok := s.store.(interface {
+		ListPublishedDreamPoliciesBounded(context.Context, db.ListPublishedDreamPoliciesBoundedParams) ([]db.DreamPolicy, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("bounded policy listing unavailable")
+	}
+	rows, err := store.ListPublishedDreamPoliciesBounded(ctx, db.ListPublishedDreamPoliciesBoundedParams{EnterpriseID: enterpriseID, ResultLimit: limit})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PublishedPolicy, 0, len(rows))
+	for _, row := range rows {
+		p, err := decodePolicy(row.Draft)
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, PublishedPolicy{ID: row.ID, OrgScope: row.OrgScope, Status: row.Status, Policy: p})
 	}
