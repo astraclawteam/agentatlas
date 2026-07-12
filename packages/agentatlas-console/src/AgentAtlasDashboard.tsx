@@ -1,7 +1,7 @@
 // Console 壳：常驻 Atlas Agent 对话（主入口）+ 五个证据视图。
 // 数据全部来自真实后端（atlas-api / atlas-agent），票据在头部粘贴一次即可。
 import { useCallback, useEffect, useState } from "react";
-import { ClawButton, ClawInput } from "@agentatlas/claw-runtime-ui";
+import { LegacyButton as ClawButton, LegacyInput as ClawInput } from "./app/runtime-ui-adapters";
 import { KnowledgeMap } from "./KnowledgeMap";
 import { DreamTimeline } from "./DreamTimeline";
 import { WorkflowStudio } from "./WorkflowStudio";

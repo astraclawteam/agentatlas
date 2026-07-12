@@ -2,7 +2,7 @@
 // 左侧节点面板（16 种内置节点，中文名 + 一句人话说明）点击即追加；
 // 步骤列表可删除；画布实时预览；保存草稿 / 发布走真实控制面 API。
 import { useMemo, useState } from "react";
-import { ClawButton, ClawInput } from "@agentatlas/claw-runtime-ui";
+import { LegacyButton as ClawButton, LegacyInput as ClawInput } from "./app/runtime-ui-adapters";
 import { AtlasWorkflowCanvas } from "./AtlasWorkflowCanvas";
 import { createWorkflow, publishWorkflow } from "./api";
 import type { AtlasNodeType, AtlasWorkflow, AtlasWorkflowNode } from "./types";

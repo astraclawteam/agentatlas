@@ -1,0 +1,220 @@
+.console-root {
+  min-height: 100vh;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+}
+
+.console-header {
+  position: sticky;
+  z-index: 10;
+  top: 0;
+  display: flex;
+  min-height: 72px;
+  align-items: center;
+  gap: 24px;
+  padding: 0 28px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+}
+
+.console-brand {
+  flex: 0 0 auto;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.console-primary-nav {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.console-nav-link,
+.console-org-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: var(--radius-field);
+  color: var(--color-muted-foreground);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.console-nav-link {
+  min-height: 44px;
+  padding: 0 14px;
+}
+
+.console-nav-link[aria-current="page"] {
+  background: var(--chip-bg);
+  color: var(--color-foreground);
+}
+
+.console-user-actions,
+.console-user-group {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.console-user-actions {
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.console-agent-button,
+.console-user-group {
+  height: 48px;
+}
+
+.console-agent-button {
+  width: 48px;
+  min-height: 48px;
+  padding: 0;
+}
+
+.console-user-group {
+  gap: 12px;
+  padding: 0 4px 0 8px;
+}
+
+.console-user-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.console-advanced-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-muted-foreground);
+  font-size: 13px;
+}
+
+.console-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 224px) minmax(0, 1fr);
+  min-height: calc(100vh - 72px);
+}
+
+.console-layout[data-assistant-open="true"] {
+  grid-template-columns: minmax(180px, 224px) minmax(0, 1fr) minmax(320px, 384px);
+}
+
+.console-org-nav {
+  border-right: 1px solid var(--color-border);
+  padding: 28px 20px;
+  background: var(--color-sidebar-background);
+}
+
+.console-org-heading,
+.console-route-kicker {
+  margin: 0 0 14px;
+  color: var(--color-muted-foreground);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .08em;
+}
+
+.console-org-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.console-org-list .console-org-list {
+  padding-left: 16px;
+}
+
+.console-org-link {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+}
+
+.console-main {
+  min-width: 0;
+  padding: 36px clamp(24px, 4vw, 64px);
+}
+
+.console-route-intro {
+  max-width: 760px;
+}
+
+.console-route-intro h1 {
+  margin: 0 0 12px;
+  font-size: clamp(32px, 5vw, 48px);
+}
+
+.console-route-intro > p:not(.console-route-kicker) {
+  color: var(--color-muted-foreground);
+  font-size: 17px;
+  line-height: 1.7;
+}
+
+.console-next-step {
+  display: flex;
+  gap: 14px;
+  margin-top: 28px;
+  padding: 18px 20px;
+  border-radius: var(--radius-card);
+}
+
+.console-assistant-dock {
+  min-height: calc(100vh - 104px);
+  margin: 16px 16px 16px 0;
+}
+
+.console-assistant-copy {
+  display: grid;
+  align-content: space-between;
+  min-height: 240px;
+  color: var(--color-muted-foreground);
+}
+
+.console-assistant-close {
+  justify-self: start;
+}
+
+.console-session-state {
+  display: grid;
+  min-height: 100vh;
+  place-content: center;
+  padding: 32px;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .console-header {
+    gap: 12px;
+    padding: 0 16px;
+  }
+  .console-nav-link span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+  }
+  .console-layout,
+  .console-layout[data-assistant-open="true"] {
+    grid-template-columns: 1fr;
+  }
+  .console-org-nav {
+    display: none;
+  }
+  .console-assistant-dock {
+    display: none;
+  }
+}

@@ -1,7 +1,7 @@
 // 梦境策略面板：真连 atlas-agent 控制面（GET/POST /v1/dream-policies）。
 // 票据取自头部的全局票据（api.getTicket）；控件复用 claw-runtime-ui 原语。
 import { useCallback, useEffect, useState } from "react";
-import { ClawButton, ClawInput } from "@agentatlas/claw-runtime-ui";
+import { LegacyButton as ClawButton, LegacyInput as ClawInput } from "./app/runtime-ui-adapters";
 import { createDreamPolicy, getTicket, listDreamPolicies } from "./api";
 
 interface PublishedPolicy {

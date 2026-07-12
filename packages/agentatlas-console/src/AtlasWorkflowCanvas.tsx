@@ -9,7 +9,7 @@ import {
   type FreeLayoutPluginContext,
   type WorkflowJSON,
 } from "@flowgram.ai/free-layout-editor";
-import { ClawButton } from "@agentatlas/claw-runtime-ui";
+import { LegacyButton as ClawButton } from "./app/runtime-ui-adapters";
 import type { AtlasWorkflow, AtlasWorkflowNode } from "./types";
 
 const NODE_TYPES: string[] = [
