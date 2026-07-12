@@ -48,18 +48,24 @@ components:
         - answer_trace_created
         - sensitive_artifact_parsed
         - visibility_rule_changed
+        - governance_change_decided
     AuditEvidenceRequest:
       type: object
       additionalProperties: false
       required: [enterprise_id, action, resource_type, resource_id]
       properties:
-        ticket_id: {type: string, minLength: 0, maxLength: 4096, description: Required for service Basic authentication; omitted for browserAccessToken actors.}
+        ticket_id: {type: string, minLength: 0, maxLength: 4096, description: Required and verified for AgentAtlas service Basic authentication; omit or send an empty string for a browserAccessToken actor. A non-empty Bearer ticket must resolve to the same enterprise user.}
         enterprise_id: {type: string, minLength: 1, maxLength: 128}
         action: {$ref: '#/components/schemas/AuditEvidenceAction'}
         resource_type: {type: string, minLength: 1, maxLength: 64}
         resource_id: {type: string, minLength: 1, maxLength: 128, description: Preallocated resource identifier bound into the audit lineage.}
         trace_id: {type: string, maxLength: 128}
         details: {type: object, maxProperties: 100, additionalProperties: true, description: Keys are at most 128 Unicode code points; string values at most 1024; arrays/maps at most 100 entries; nesting depth at most 4.}
+        org_version: {type: integer, minimum: 1, description: Required when binding a scoped CaseTicket operation.}
+        org_unit_id: {type: string}
+        authorized_action: {type: string, description: Exact permission action authorized by the scoped ticket.}
+        review_mode: {type: string, enum: [enterprise_knowledge_admin_queue]}
+        queue: {type: string, enum: [enterprise_knowledge_admin]}
       oneOf:
         - properties:
             action: {type: string, enum: [dream_policy_create_requested]}
@@ -68,6 +74,9 @@ components:
             action:
               type: string
               enum: [workflow_draft_created, workflow_version_published, dream_policy_created, dream_job_run, retrieval_plan_created, evidence_located, evidence_read, answer_trace_created, sensitive_artifact_parsed, visibility_rule_changed]
+        - required: [org_version, org_unit_id, authorized_action, review_mode, queue, details]
+          properties:
+            action: {type: string, enum: [governance_change_decided]}
     AuditEvidenceResponse:
       type: object
       additionalProperties: false

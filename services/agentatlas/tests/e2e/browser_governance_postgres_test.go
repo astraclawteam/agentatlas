@@ -59,7 +59,7 @@ func TestBrowserGovernancePostgres(t *testing.T) {
 		t.Fatal("login state reused")
 	}
 	token := "atlas-session-token-" + suffix
-	identity := browsersession.Identity{EnterpriseID: ent, UserID: "editor", DisplayName: "Editor", OrgVersion: 7, OrgUnitIDs: []string{"team"}, Permissions: []string{"edit", "publish_low_risk"}}
+	identity := browsersession.Identity{EnterpriseID: ent, UserID: "editor", DisplayName: "Editor", OrgVersion: 7, OrgUnitIDs: []string{"team"}, Permissions: []string{"workflow_edit", "publish_low_risk"}}
 	if err = sessionStore.CreateSession(ctx, token, identity, "upstream-access-token-123456", 8*time.Hour, 24*time.Hour); err != nil {
 		t.Fatal(err)
 	}

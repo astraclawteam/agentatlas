@@ -648,13 +648,34 @@ func adminMock() *nexusclient.Mock {
 	mock := nexusclient.NewMock()
 	mock.Tickets["tick_admin"] = nexus.VerifyTicketResponse{
 		Valid: true, EnterpriseID: "ent_1", ActorUserID: "admin",
-		Scopes: []string{"admin"}, ExpiresAt: time.Now().Add(time.Hour),
+		Scopes: []string{"admin"}, OrgVersion: 1, OrgUnitIDs: []string{"team", "company"}, ExpiresAt: time.Now().Add(time.Hour),
 	}
 	mock.Tickets["tick_other"] = nexus.VerifyTicketResponse{
 		Valid: true, EnterpriseID: "ent_1", ActorUserID: "u_li",
 		Scopes: []string{"space.read"}, ExpiresAt: time.Now().Add(time.Hour),
 	}
 	return mock
+}
+
+func TestTicketPermissionsRemainResourceSpecific(t *testing.T) {
+	permissions := ticketPermissions([]string{"edit", "workflow_edit", "publish_low_risk", "approve_high_risk"})
+	for _, want := range []string{"edit", "workflow_edit", "publish_low_risk", "approve_high_risk"} {
+		if !containsString(permissions, want) {
+			t.Fatalf("permissions=%v missing %q", permissions, want)
+		}
+	}
+	if got := ticketPermissions([]string{"edit"}); containsString(got, "workflow_edit") {
+		t.Fatalf("generic edit escalated to workflow_edit: %v", got)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func postJSONReq(t *testing.T, url, ticket string, body any) *http.Response {
@@ -785,6 +806,33 @@ func TestWorkflowCreatePublishRoute(t *testing.T) {
 		if e.Action == nexus.AuditWorkflowVersionPublished {
 			t.Fatalf("workflow was audited/published before approval: %+v", e)
 		}
+	}
+}
+
+func TestWorkflowCompatibilityPublishRejectsChangeForDifferentWorkflow(t *testing.T) {
+	mock := adminMock()
+	srv, _ := newAgentTestServer(t, mock)
+	def := workflow.Definition{Kind: sdkworkflow.KindSOP, RiskLevel: sdkworkflow.RiskMedium, Nodes: []sdkworkflow.Node{{ID: "in", Type: sdkworkflow.NodeInputManual}}, Edges: []sdkworkflow.Edge{}}
+
+	create := func(name string) string {
+		resp := postJSONReq(t, srv.URL+"/v1/workflows", "tick_admin", map[string]any{"name": name, "definition": def})
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("create %s = %d", name, resp.StatusCode)
+		}
+		return decodeBody(t, resp)["workflow_id"].(string)
+	}
+	wfA, wfB := create("A"), create("B")
+	resp := postJSONReq(t, srv.URL+"/v1/workflows/"+wfA+"/publish", "tick_admin", map[string]any{"org_unit_id": "team"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("submit A = %d", resp.StatusCode)
+	}
+	pending := decodeBody(t, resp)
+	changeID := pending["change"].(map[string]any)["change_id"].(string)
+
+	resp = postJSONReq(t, srv.URL+"/v1/workflows/"+wfB+"/publish", "tick_admin", map[string]any{"org_unit_id": "team", "change_id": changeID})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("cross-workflow change accepted: %d", resp.StatusCode)
 	}
 }
 

@@ -15,11 +15,18 @@ type VerifyTicketRequest struct {
 }
 
 type VerifyTicketResponse struct {
-	Valid        bool      `json:"valid"`
-	EnterpriseID string    `json:"enterprise_id,omitempty"`
-	ActorUserID  string    `json:"actor_user_id,omitempty"`
-	Scopes       []string  `json:"scopes,omitempty"`
-	ExpiresAt    time.Time `json:"expires_at,omitempty"`
+	Valid          bool      `json:"valid"`
+	EnterpriseID   string    `json:"enterprise_id,omitempty"`
+	ActorUserID    string    `json:"actor_user_id,omitempty"`
+	Scopes         []string  `json:"scopes,omitempty"`
+	OrgVersion     int64     `json:"org_version,omitempty"`
+	OrgUnitIDs     []string  `json:"org_unit_ids,omitempty"`
+	ResourceType   string    `json:"resource_type,omitempty"`
+	ResourceID     string    `json:"resource_id,omitempty"`
+	AllowedActions []string  `json:"allowed_actions,omitempty"`
+	ReviewMode     string    `json:"review_mode,omitempty"`
+	Queue          string    `json:"queue,omitempty"`
+	ExpiresAt      time.Time `json:"expires_at,omitempty"`
 }
 
 type LocateEvidenceRequest struct {
@@ -67,17 +74,23 @@ const (
 	AuditAnswerTraceCreated         AuditAction = "answer_trace_created"
 	AuditSensitiveArtifactParsed    AuditAction = "sensitive_artifact_parsed"
 	AuditVisibilityRuleChanged      AuditAction = "visibility_rule_changed"
+	AuditGovernanceChangeDecided    AuditAction = "governance_change_decided"
 )
 
 type AppendAuditEvidenceRequest struct {
-	IdempotencyKey string         `json:"-"`
-	TicketID       string         `json:"ticket_id,omitempty"`
-	EnterpriseID   string         `json:"enterprise_id"`
-	Action         AuditAction    `json:"action"`
-	ResourceType   string         `json:"resource_type"`
-	ResourceID     string         `json:"resource_id"`
-	TraceID        string         `json:"trace_id,omitempty"`
-	Details        map[string]any `json:"details,omitempty"`
+	IdempotencyKey   string         `json:"-"`
+	TicketID         string         `json:"ticket_id,omitempty"`
+	EnterpriseID     string         `json:"enterprise_id"`
+	Action           AuditAction    `json:"action"`
+	ResourceType     string         `json:"resource_type"`
+	ResourceID       string         `json:"resource_id"`
+	TraceID          string         `json:"trace_id,omitempty"`
+	Details          map[string]any `json:"details,omitempty"`
+	OrgVersion       int64          `json:"org_version,omitempty"`
+	OrgUnitID        string         `json:"org_unit_id,omitempty"`
+	AuthorizedAction string         `json:"authorized_action,omitempty"`
+	ReviewMode       string         `json:"review_mode,omitempty"`
+	Queue            string         `json:"queue,omitempty"`
 }
 
 type AppendAuditEvidenceResponse struct {
@@ -150,12 +163,41 @@ type ApprovalClient interface {
 	ResolveApprovalRoute(ctx context.Context, req ApprovalResolveRequest) (ApprovalRoute, error)
 }
 
-type BrowserAuthorizationRequest struct { OrgUnitID string `json:"org_unit_id"`; OrgVersion int64 `json:"org_version"`; ResourceType string `json:"resource_type"`; ResourceID string `json:"resource_id"`; Action string `json:"action"` }
-type BrowserAuthorizationDecision struct { Decision string `json:"decision"`; Permissions []string `json:"permissions"`; OrgVersion int64 `json:"org_version"`; OrgUnitIDs []string `json:"org_unit_ids"`; RiskLevel string `json:"risk_level"` }
+type BrowserAuthorizationRequest struct {
+	TicketID     string `json:"ticket_id,omitempty"`
+	OrgUnitID    string `json:"org_unit_id"`
+	OrgVersion   int64  `json:"org_version"`
+	ResourceType string `json:"resource_type"`
+	ResourceID   string `json:"resource_id"`
+	Action       string `json:"action"`
+	ReviewMode   string `json:"review_mode,omitempty"`
+	Queue        string `json:"queue,omitempty"`
+}
+type BrowserAuthorizationDecision struct {
+	Decision    string   `json:"decision"`
+	Permissions []string `json:"permissions"`
+	OrgVersion  int64    `json:"org_version"`
+	OrgUnitIDs  []string `json:"org_unit_ids"`
+	RiskLevel   string   `json:"risk_level"`
+}
 type BrowserBFFClient interface {
-	AuthorizeBrowserOperation(context.Context,string,BrowserAuthorizationRequest)(BrowserAuthorizationDecision,error)
-	ResolveApprovalRouteWithBearer(context.Context,string,ApprovalResolveRequest)(ApprovalRoute,error)
-	AppendAuditEvidenceWithBearer(context.Context,string,AppendAuditEvidenceRequest)(AppendAuditEvidenceResponse,error)
+	AuthorizeBrowserOperation(context.Context, string, BrowserAuthorizationRequest) (BrowserAuthorizationDecision, error)
+	ResolveApprovalRouteWithBearer(context.Context, string, ApprovalResolveRequest) (ApprovalRoute, error)
+	AppendAuditEvidenceWithBearer(context.Context, string, AppendAuditEvidenceRequest) (AppendAuditEvidenceResponse, error)
+}
+
+// TicketGovernanceClient is the service-credential compatibility surface.
+// Every call carries the original verified CaseTicket; AgentNexus remains the
+// authority for its enterprise, actor, organization, resource and action scope.
+type TicketGovernanceClient interface {
+	AuthorizeTicketOperation(context.Context, string, BrowserAuthorizationRequest) (BrowserAuthorizationDecision, error)
+	ResolveApprovalRoute(context.Context, ApprovalResolveRequest) (ApprovalRoute, error)
+	AppendAuditEvidence(context.Context, AppendAuditEvidenceRequest) (AppendAuditEvidenceResponse, error)
+}
+
+type GovernanceClient interface {
+	BrowserBFFClient
+	TicketGovernanceClient
 }
 
 type ApprovalResolveRequest struct {

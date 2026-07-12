@@ -23,14 +23,17 @@ func contractServer(t *testing.T, serviceSecret string) *httptest.Server {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("POST /v1/tickets/verify", func(w http.ResponseWriter, r *http.Request) {
-		assertNoServiceAuthorization(t, r)
+		clientID, secret, ok := r.BasicAuth()
+		if !ok || clientID != "agentatlas" || secret != serviceSecret {
+			t.Errorf("ticket verify Basic credentials client=%q ok=%t", clientID, ok)
+		}
 		var req nexus.VerifyTicketRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		resp := nexus.VerifyTicketResponse{Valid: false}
 		if req.TicketID == "tick_ok" {
 			resp = nexus.VerifyTicketResponse{
 				Valid: true, EnterpriseID: "ent_1", ActorUserID: "u_zhang",
-				Scopes: []string{"space.read"}, ExpiresAt: time.Now().Add(time.Hour),
+				Scopes: []string{"space.read"}, OrgVersion: 7, OrgUnitIDs: []string{"team"}, ExpiresAt: time.Now().Add(time.Hour),
 			}
 		}
 		_ = json.NewEncoder(w).Encode(resp)

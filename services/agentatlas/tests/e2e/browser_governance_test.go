@@ -55,7 +55,7 @@ func TestBrowserGovernance(t *testing.T) {
 		t.Fatalf("suggestion-only actor updated draft: %v", err)
 	}
 
-	editor := governance.Actor{EnterpriseID: "ent-1", UserID: "editor", OrgUnitIDs: []string{"team"}, Permissions: []string{"suggest", "edit"}}
+	editor := governance.Actor{EnterpriseID: "ent-1", UserID: "editor", OrgUnitIDs: []string{"team"}, Permissions: []string{"suggest", "workflow_edit"}}
 	draft, err = svc.UpdateDraft(ctx, editor, draft.ChangeID, 1, json.RawMessage(`{"nodes":[{"id":"external-action"}]}`))
 	if err != nil || draft.Revision != 2 {
 		t.Fatalf("revisioned update: %+v %v", draft, err)

@@ -32,3 +32,26 @@ func TestBrowserBFFAuditUsesBearerAndOmitsCaseTicket(t *testing.T) {
 		t.Fatalf("out=%+v err=%v", out, err)
 	}
 }
+
+func TestTicketGovernanceAuthorizationUsesServiceCredentialsAndOriginalTicket(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, password, ok := r.BasicAuth()
+		if r.URL.Path != "/v1/authorization/decisions" || !ok || user != "agentatlas" || password != "service-secret" {
+			t.Fatalf("request path=%s basic=%v user=%q password=%q", r.URL.Path, ok, user, password)
+		}
+		var body nexus.BrowserAuthorizationRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.TicketID != "case-ticket" || body.ResourceType != "workflow" || body.ResourceID != "wf-1" || body.Action != "workflow.edit" {
+			t.Fatalf("unbound authorization: %+v", body)
+		}
+		_ = json.NewEncoder(w).Encode(nexus.BrowserAuthorizationDecision{Decision: "allow", OrgVersion: 7, OrgUnitIDs: []string{"team"}})
+	}))
+	defer server.Close()
+	client := &HTTPClient{baseURL: server.URL, http: server.Client(), serviceClientID: "agentatlas", serviceSecret: "service-secret"}
+	out, err := client.AuthorizeTicketOperation(context.Background(), "case-ticket", nexus.BrowserAuthorizationRequest{OrgUnitID: "team", OrgVersion: 7, ResourceType: "workflow", ResourceID: "wf-1", Action: "workflow.edit"})
+	if err != nil || out.Decision != "allow" {
+		t.Fatalf("out=%+v err=%v", out, err)
+	}
+}

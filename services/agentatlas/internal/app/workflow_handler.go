@@ -162,8 +162,13 @@ func (h *workflowHandler) publish(w http.ResponseWriter, r *http.Request) {
 		OrgUnitID string `json:"org_unit_id"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
-	gactor := governance.Actor{EnterpriseID: actor.Ticket.EnterpriseID, UserID: actor.Ticket.ActorUserID, OrgUnitIDs: []string{req.OrgUnitID}, Permissions: ticketPermissions(actor.Ticket.Scopes)}
+	gactor := governance.Actor{EnterpriseID: actor.Ticket.EnterpriseID, UserID: actor.Ticket.ActorUserID, UpstreamTicketID: actor.TicketID, OrgVersion: actor.Ticket.OrgVersion, OrgUnitIDs: append([]string(nil), actor.Ticket.OrgUnitIDs...), Permissions: ticketPermissions(actor.Ticket.Scopes)}
 	if req.ChangeID != "" {
+		rec, err := h.deps.Changes.Get(r.Context(), gactor, req.ChangeID)
+		if err != nil || rec.Draft.ResourceType != governancemodel.ResourceWorkflow || rec.Draft.ResourceID != workflowID {
+			writeError(w, http.StatusNotFound, "change_not_found", "workflow change not found")
+			return
+		}
 		result, err := h.deps.Changes.Publish(r.Context(), gactor, req.ChangeID, r.Header.Get("Idempotency-Key"))
 		if err != nil {
 			writeChangeResult(w, 0, nil, err)
@@ -199,8 +204,10 @@ func ticketPermissions(scopes []string) []string {
 	for _, scope := range scopes {
 		switch scope {
 		case "admin":
-			out = append(out, "edit", "publish_low_risk", "approve_high_risk")
-		case "edit", "workflow.edit":
+			out = append(out, "edit", "workflow_edit", "publish_low_risk", "approve_high_risk")
+		case "workflow_edit", "workflow.edit":
+			out = append(out, "workflow_edit")
+		case "edit", "knowledge.edit":
 			out = append(out, "edit")
 		case "publish_low_risk", "workflow.publish_low_risk":
 			out = append(out, "publish_low_risk")

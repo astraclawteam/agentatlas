@@ -10,13 +10,27 @@ info:
     AgentNexus contract snapshot. AgentAtlas ships a mock server implementing
     this client contract for local development and integration tests.
 paths:
+  /v1/authorization/decisions:
+    post:
+      operationId: authorizeGovernanceOperation
+      summary: Authorize a browser Bearer or original CaseTicket-bound governance operation.
+      security: [{agentAtlasServiceSecret: []}, {browserAccessToken: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/GovernanceAuthorizationRequest'}}}
+      responses:
+        '200': {description: Authoritative decision, content: {application/json: {schema: {$ref: '#/components/schemas/GovernanceAuthorizationDecision'}}}}
+        '401': {description: Invalid service, Bearer, or CaseTicket credential.}
+        '403': {description: Ticket or actor is not bound to the requested operation.}
   /v1/approvals/resolve:
     post:
       operationId: resolveApprovalRoute
       summary: Resolve and audit the approval route for a governed change.
+      security: [{agentAtlasServiceSecret: []}, {browserAccessToken: []}]
       parameters:
         - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
         - {name: X-Approval-Facts-Attestation, in: header, required: true, schema: {type: string}}
+        - {name: X-Case-Ticket, in: header, required: false, schema: {type: string}, description: Required with AgentAtlas service credentials and forbidden with browser Bearer authentication.}
       requestBody:
         required: true
         content: {application/json: {schema: {$ref: '#/components/schemas/ApprovalResolveRequest'}}}
@@ -26,6 +40,7 @@ paths:
     post:
       operationId: verifyTicket
       summary: Verify an access ticket and resolve its actor context
+      security: [{agentAtlasServiceSecret: []}]
       requestBody:
         required: true
         content:
@@ -50,6 +65,13 @@ paths:
                   scopes:
                     type: array
                     items: { type: string }
+                  org_version: {type: integer, minimum: 1}
+                  org_unit_ids: {type: array, items: {type: string}}
+                  resource_type: {type: string}
+                  resource_id: {type: string}
+                  allowed_actions: {type: array, items: {type: string}}
+                  review_mode: {type: string}
+                  queue: {type: string}
                   expires_at: { type: string, format: date-time }
   /v1/evidence/locate:
     post:
@@ -164,6 +186,28 @@ components:
       scheme: bearer
       description: Opaque AgentAtlas BFF token bound to client, audience, enterprise, user, and browser session.
   schemas:
+    GovernanceAuthorizationRequest:
+      type: object
+      additionalProperties: false
+      required: [org_unit_id, org_version, resource_type, resource_id, action]
+      properties:
+        ticket_id: {type: string, description: Required with AgentAtlas service credentials and omitted with browser Bearer authentication.}
+        org_unit_id: {type: string}
+        org_version: {type: integer, minimum: 1}
+        resource_type: {type: string, enum: [knowledge, workflow]}
+        resource_id: {type: string}
+        action: {type: string}
+        review_mode: {type: string, enum: [single_confirmation, upward_review, enterprise_knowledge_admin_queue]}
+        queue: {type: string}
+    GovernanceAuthorizationDecision:
+      type: object
+      required: [decision, permissions, org_version, org_unit_ids, risk_level]
+      properties:
+        decision: {type: string, enum: [allow, deny]}
+        permissions: {type: array, items: {type: string}}
+        org_version: {type: integer, minimum: 1}
+        org_unit_ids: {type: array, items: {type: string}}
+        risk_level: {type: string}
     ApprovalRoute:
       type: object
       required: [mode, risk_level, risk_reasons, requester_user_id, org_path, auto_publish]
@@ -210,18 +254,24 @@ components:
         - answer_trace_created
         - sensitive_artifact_parsed
         - visibility_rule_changed
+        - governance_change_decided
     AuditEvidenceRequest:
       type: object
       additionalProperties: false
       required: [enterprise_id, action, resource_type, resource_id]
       properties:
-        ticket_id: {type: string, minLength: 0, maxLength: 4096, description: Required for service Basic authentication; omitted for browserAccessToken actors.}
+        ticket_id: {type: string, minLength: 0, maxLength: 4096, description: Required and verified for AgentAtlas service Basic authentication; omit or send an empty string for a browserAccessToken actor. A non-empty Bearer ticket must resolve to the same enterprise user.}
         enterprise_id: {type: string, minLength: 1, maxLength: 128}
         action: {$ref: '#/components/schemas/AuditEvidenceAction'}
         resource_type: {type: string, minLength: 1, maxLength: 64}
         resource_id: {type: string, minLength: 1, maxLength: 128, description: Preallocated resource identifier bound into the audit lineage.}
         trace_id: {type: string, maxLength: 128}
         details: {type: object, maxProperties: 100, additionalProperties: true, description: Keys are at most 128 Unicode code points; string values at most 1024; arrays/maps at most 100 entries; nesting depth at most 4.}
+        org_version: {type: integer, minimum: 1, description: Required when binding a scoped CaseTicket operation.}
+        org_unit_id: {type: string}
+        authorized_action: {type: string, description: Exact permission action authorized by the scoped ticket.}
+        review_mode: {type: string, enum: [enterprise_knowledge_admin_queue]}
+        queue: {type: string, enum: [enterprise_knowledge_admin]}
       oneOf:
         - properties:
             action: {type: string, enum: [dream_policy_create_requested]}
@@ -230,6 +280,9 @@ components:
             action:
               type: string
               enum: [workflow_draft_created, workflow_version_published, dream_policy_created, dream_job_run, retrieval_plan_created, evidence_located, evidence_read, answer_trace_created, sensitive_artifact_parsed, visibility_rule_changed]
+        - required: [org_version, org_unit_id, authorized_action, review_mode, queue, details]
+          properties:
+            action: {type: string, enum: [governance_change_decided]}
     AuditEvidenceResponse:
       type: object
       additionalProperties: false

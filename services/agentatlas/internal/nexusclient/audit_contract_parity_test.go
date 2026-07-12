@@ -32,6 +32,7 @@ func TestAgentAtlasAuditClientMatchesPublishedAgentNexusSnapshot(t *testing.T) {
 		string(nexus.AuditDreamPolicyCreateRequested), string(nexus.AuditDreamJobRun), string(nexus.AuditRetrievalPlanCreated),
 		string(nexus.AuditEvidenceLocated), string(nexus.AuditEvidenceRead), string(nexus.AuditAnswerTraceCreated),
 		string(nexus.AuditSensitiveArtifactParsed), string(nexus.AuditVisibilityRuleChanged),
+		string(nexus.AuditGovernanceChangeDecided),
 	}
 	if !reflect.DeepEqual(sdkActions, publishedActions) {
 		t.Fatalf("SDK audit actions=%v published=%v", sdkActions, publishedActions)

@@ -48,6 +48,7 @@ func (c *HTTPClient) ConfigureApprovalFactsSecret(path string) error {
 var _ nexus.Client = (*HTTPClient)(nil)
 var _ nexus.ApprovalClient = (*HTTPClient)(nil)
 var _ nexus.BrowserBFFClient = (*HTTPClient)(nil)
+var _ nexus.GovernanceClient = (*HTTPClient)(nil)
 
 func (c *HTTPClient) String() string {
 	if c == nil {
@@ -99,7 +100,7 @@ func (c *HTTPClient) doPost(ctx context.Context, path string, in, out any) error
 		return fmt.Errorf("nexus %s: %w", path, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if path == "/v1/audit/evidence" {
+	if path == "/v1/audit/evidence" || path == "/v1/authorization/decisions" || path == "/v1/tickets/verify" {
 		req.SetBasicAuth(c.serviceClientID, c.serviceSecret)
 		if auditReq, ok := in.(nexus.AppendAuditEvidenceRequest); ok && auditReq.IdempotencyKey != "" {
 			req.Header.Set("Idempotency-Key", auditReq.IdempotencyKey)
@@ -209,6 +210,7 @@ func (c *HTTPClient) ResolveApprovalRoute(ctx context.Context, input nexus.Appro
 	req.Header.Set("X-Case-Ticket", input.TicketID)
 	req.Header.Set("Idempotency-Key", input.IdempotencyKey)
 	req.Header.Set("X-Approval-Facts-Attestation", attestation)
+	req.SetBasicAuth(c.serviceClientID, c.serviceSecret)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return out, fmt.Errorf("nexus approval: %w", err)
@@ -231,6 +233,17 @@ func (c *HTTPClient) AuthorizeBrowserOperation(ctx context.Context, accessToken 
 	var out nexus.BrowserAuthorizationDecision
 	err := c.bearerPost(ctx, "/v1/authorization/decisions", accessToken, "", input, &out, nil)
 	return out, err
+}
+func (c *HTTPClient) AuthorizeTicketOperation(ctx context.Context, ticketID string, input nexus.BrowserAuthorizationRequest) (nexus.BrowserAuthorizationDecision, error) {
+	var out nexus.BrowserAuthorizationDecision
+	if ticketID == "" {
+		return out, fmt.Errorf("nexus ticket authorization: missing CaseTicket")
+	}
+	input.TicketID = ticketID
+	if err := c.post(ctx, "/v1/authorization/decisions", input, &out); err != nil {
+		return out, err
+	}
+	return out, nil
 }
 func (c *HTTPClient) ResolveApprovalRouteWithBearer(ctx context.Context, accessToken string, input nexus.ApprovalResolveRequest) (nexus.ApprovalRoute, error) {
 	var out nexus.ApprovalRoute

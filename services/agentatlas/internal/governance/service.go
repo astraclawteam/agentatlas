@@ -22,9 +22,9 @@ var (
 )
 
 type Actor struct {
-	EnterpriseID, UserID, DisplayName, UpstreamAccessToken string
-	OrgVersion                                             int64
-	OrgUnitIDs, Permissions                                []string
+	EnterpriseID, UserID, DisplayName, UpstreamAccessToken, UpstreamTicketID string
+	OrgVersion                                                               int64
+	OrgUnitIDs, Permissions                                                  []string
 }
 type SuggestionInput struct {
 	OrgUnitID       string
@@ -91,6 +91,12 @@ type Publisher interface {
 type Authorizer interface {
 	Authorize(context.Context, Actor, string, model.ResourceType, string, string) error
 }
+type decisionAuthorizer interface {
+	AuthorizeDecision(context.Context, Actor, Record, DecisionInput) error
+}
+type decisionAuditAppender interface {
+	AppendDecision(context.Context, Actor, Record, DecisionInput) error
+}
 
 type Service struct {
 	store      Store
@@ -134,7 +140,7 @@ func (s *Service) Suggest(ctx context.Context, actor Actor, in SuggestionInput) 
 }
 
 func (s *Service) CreateDraft(ctx context.Context, actor Actor, in SuggestionInput) (model.ChangeDraft, error) {
-	if !actor.has("edit") || actor.EnterpriseID == "" || actor.UserID == "" || !actor.inOrg(in.OrgUnitID) || len(in.ProposedContent) == 0 || !json.Valid(in.ProposedContent) {
+	if !actor.canEdit(in.ResourceType) || actor.EnterpriseID == "" || actor.UserID == "" || !actor.inOrg(in.OrgUnitID) || len(in.ProposedContent) == 0 || !json.Valid(in.ProposedContent) {
 		return model.ChangeDraft{}, ErrForbidden
 	}
 	if err := s.authorize(ctx, actor, in.OrgUnitID, in.ResourceType, in.ResourceID, "edit"); err != nil {
@@ -151,14 +157,14 @@ func (s *Service) CreateDraft(ctx context.Context, actor Actor, in SuggestionInp
 }
 
 func (s *Service) UpdateDraft(ctx context.Context, actor Actor, id string, revision int64, content json.RawMessage) (model.ChangeDraft, error) {
-	if !actor.has("edit") || revision < 1 || len(content) == 0 || !json.Valid(content) {
+	if revision < 1 || len(content) == 0 || !json.Valid(content) {
 		return model.ChangeDraft{}, ErrForbidden
 	}
 	rec, err := s.store.Get(ctx, actor.EnterpriseID, id)
 	if err != nil {
 		return model.ChangeDraft{}, err
 	}
-	if !actor.inOrg(rec.Draft.OrgUnitID) || rec.Draft.State != model.ChangeDraftState {
+	if !actor.canEdit(rec.Draft.ResourceType) || !actor.inOrg(rec.Draft.OrgUnitID) || rec.Draft.State != model.ChangeDraftState {
 		return model.ChangeDraft{}, ErrForbidden
 	}
 	if err := s.authorize(ctx, actor, rec.Draft.OrgUnitID, rec.Draft.ResourceType, rec.Draft.ResourceID, "edit"); err != nil {
@@ -228,15 +234,15 @@ func (s *Service) Assess(ctx context.Context, actor Actor, id string) (model.Ris
 }
 
 func (s *Service) Submit(ctx context.Context, actor Actor, id string) (model.ReviewRoute, error) {
-	if !actor.has("edit") {
-		return model.ReviewRoute{}, ErrForbidden
-	}
 	rec, err := s.Get(ctx, actor, id)
 	if err != nil {
 		return model.ReviewRoute{}, err
 	}
 	if rec.Draft.State != model.ChangeDraftState {
 		return model.ReviewRoute{}, ErrInvalidState
+	}
+	if !actor.canEdit(rec.Draft.ResourceType) {
+		return model.ReviewRoute{}, ErrForbidden
 	}
 	if err := s.authorize(ctx, actor, rec.Draft.OrgUnitID, rec.Draft.ResourceType, rec.Draft.ResourceID, "submit"); err != nil {
 		return model.ReviewRoute{}, ErrForbidden
@@ -278,17 +284,37 @@ func (s *Service) Decide(ctx context.Context, actor Actor, id string, in Decisio
 	if rec.Draft.State != model.ChangeSubmitted || rec.Route.State != model.RoutePending {
 		return ErrInvalidState
 	}
-	if err := s.authorize(ctx, actor, rec.Draft.OrgUnitID, rec.Draft.ResourceType, rec.Draft.ResourceID, "decide"); err != nil {
+	var authErr error
+	if authorizer, ok := s.authorizer.(decisionAuthorizer); ok {
+		authErr = authorizer.AuthorizeDecision(ctx, actor, rec, in)
+	} else {
+		authErr = s.authorize(ctx, actor, rec.Draft.OrgUnitID, rec.Draft.ResourceType, rec.Draft.ResourceID, "decide")
+	}
+	if authErr != nil {
 		return ErrForbidden
 	}
-	if rec.Route.Mode == model.ReviewUpward {
+	switch rec.Route.Mode {
+	case model.ReviewUpward:
 		if actor.UserID == rec.Draft.RequesterUserID || actor.UserID != rec.Route.ReviewerUserID || !actor.has("approve_high_risk") {
 			return ErrForbidden
 		}
-	} else if actor.UserID != rec.Draft.RequesterUserID || !actor.has("publish_low_risk") {
+	case model.ReviewAdminQueue:
+		if actor.UserID == rec.Draft.RequesterUserID || rec.Route.Queue == "" || !actor.has("approve_high_risk") {
+			return ErrForbidden
+		}
+	case model.ReviewSingleConfirmation:
+		if actor.UserID != rec.Draft.RequesterUserID || !actor.has("publish_low_risk") {
+			return ErrForbidden
+		}
+	default:
 		return ErrForbidden
 	}
 	rec.Decision, rec.DecisionBy, rec.DecisionComment = in.Decision, actor.UserID, in.Comment
+	if auditor, ok := s.audit.(decisionAuditAppender); ok {
+		if err := auditor.AppendDecision(ctx, actor, rec, in); err != nil {
+			return err
+		}
+	}
 	if in.Decision == "approve" {
 		rec.Draft.State = model.ChangeApproved
 		rec.Route.State = model.RouteApproved
@@ -300,7 +326,7 @@ func (s *Service) Decide(ctx context.Context, actor Actor, id string, in Decisio
 }
 
 func (s *Service) Publish(ctx context.Context, actor Actor, id, key string) (PublishedVersion, error) {
-	if len(key) < 16 || len(key) > 128 || !actor.has("edit") {
+	if len(key) < 16 || len(key) > 128 {
 		return PublishedVersion{}, ErrForbidden
 	}
 	rec, err := s.Get(ctx, actor, id)
@@ -309,6 +335,9 @@ func (s *Service) Publish(ctx context.Context, actor Actor, id, key string) (Pub
 	}
 	if rec.Draft.State != model.ChangeApproved && rec.Draft.State != model.ChangePublished {
 		return PublishedVersion{}, ErrInvalidState
+	}
+	if !actor.canEdit(rec.Draft.ResourceType) {
+		return PublishedVersion{}, ErrForbidden
 	}
 	if err := s.authorize(ctx, actor, rec.Draft.OrgUnitID, rec.Draft.ResourceType, rec.Draft.ResourceID, "publish"); err != nil {
 		return PublishedVersion{}, ErrForbidden
@@ -348,6 +377,12 @@ func (a Actor) has(permission string) bool {
 		}
 	}
 	return false
+}
+func (a Actor) canEdit(resourceType model.ResourceType) bool {
+	if resourceType == model.ResourceWorkflow {
+		return a.has("workflow_edit")
+	}
+	return a.has("edit")
 }
 func (a Actor) inOrg(org string) bool {
 	for _, id := range a.OrgUnitIDs {
