@@ -28,7 +28,8 @@ INSERT INTO dream_runs (
     id, policy_id, version, enterprise_id, status, window_start, window_end,
     org_unit_id, policy_version, workflow_id, workflow_version, timezone,
     input_snapshot, visibility_snapshot, model_route, model_version, attempt,
-    rerun_of_run_id, coverage, missing_inputs, idempotency_key
+    rerun_of_run_id, coverage, missing_inputs, idempotency_key, org_version,
+    operation_kind
 )
 VALUES (
     sqlc.arg(id), sqlc.arg(policy_id), sqlc.arg(version), sqlc.arg(enterprise_id),
@@ -37,8 +38,11 @@ VALUES (
     sqlc.arg(workflow_version)::integer, sqlc.arg(timezone),
     sqlc.arg(input_snapshot), sqlc.arg(visibility_snapshot), sqlc.arg(model_route),
     sqlc.arg(model_version), sqlc.arg(attempt), sqlc.narg(rerun_of_run_id),
-    sqlc.arg(coverage), sqlc.arg(missing_inputs), sqlc.arg(idempotency_key)
+    sqlc.arg(coverage), sqlc.arg(missing_inputs), sqlc.arg(idempotency_key),
+    COALESCE(NULLIF(sqlc.arg(org_version)::bigint, 0), 1),
+    COALESCE(NULLIF(sqlc.arg(operation_kind)::text, ''), 'scheduled')
 )
+ON CONFLICT DO NOTHING
 RETURNING *;
 
 -- name: GetDreamRun :one
@@ -148,8 +152,28 @@ SELECT id FROM dream_runs WHERE status='pending' ORDER BY created_at LIMIT sqlc.
 -- name: GetLatestDreamRunForPolicy :one
 SELECT * FROM dream_runs
 WHERE policy_id = $1 AND rerun_of_run_id IS NULL
+  AND operation_kind IN ('scheduled','automatic_retry')
 ORDER BY window_end DESC, attempt DESC, created_at DESC, id DESC
 LIMIT 1;
+
+-- name: GetLatestDreamRunForPolicyVersion :one
+SELECT * FROM dream_runs
+WHERE policy_id = sqlc.arg(policy_id)
+  AND policy_version = sqlc.arg(policy_version)
+  AND rerun_of_run_id IS NULL
+  AND operation_kind IN ('scheduled','automatic_retry')
+ORDER BY window_end DESC, attempt DESC, created_at DESC, id DESC
+LIMIT 1;
+
+-- name: GetDreamRunByIdempotencyKey :one
+SELECT * FROM dream_runs
+WHERE enterprise_id = sqlc.arg(enterprise_id)
+  AND idempotency_key = sqlc.arg(idempotency_key);
+
+-- name: GetDreamOrgTreeVersion :one
+SELECT COALESCE(max(org_version), 0)::bigint
+FROM knowledge_spaces
+WHERE enterprise_id = sqlc.arg(enterprise_id);
 
 -- name: UpdateDreamRunStatus :execrows
 UPDATE dream_runs

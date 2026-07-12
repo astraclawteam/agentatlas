@@ -224,6 +224,8 @@ type DreamRun struct {
 	OutputHash              pgtype.Text        `json:"output_hash"`
 	ExecutionOwner          pgtype.Text        `json:"execution_owner"`
 	ExecutionLeaseExpiresAt pgtype.Timestamptz `json:"execution_lease_expires_at"`
+	OrgVersion              int64              `json:"org_version"`
+	OperationKind           string             `json:"operation_kind"`
 }
 
 type DreamRunAnnotation struct {

@@ -229,6 +229,44 @@ func TestSchedulerHierarchyTickCreatesBoundedImmutableRetry(t *testing.T) {
 	}
 }
 
+func TestSchedulerHierarchyPublishedVersionSupersedesFailedOldAttempt(t *testing.T) {
+	store := newSchedulerHierarchyStore(t)
+	v1 := policyFor("project_group:a", false)
+	v1.MaxAttempts = 3
+	store.addPolicy(t, "child", v1)
+	store.spaces[v1.OrgUnitID] = db.KnowledgeSpace{ID: "space", EnterpriseID: "ent-1", Kind: "project_group", OrgScope: v1.OrgUnitID, OrgVersion: 7}
+	bus := &recordingSchedulerBus{}
+	runner := tasks.NewRunner(bus)
+	runner.AllowEnqueue(JobTypeDream)
+	scheduler := NewScheduler(store, NewPolicyService(store), runner)
+	now := time.Date(2026, 7, 10, 14, 0, 0, 0, time.UTC)
+	if _, err := scheduler.Tick(context.Background(), "ent-1", now); err != nil {
+		t.Fatal(err)
+	}
+	v1ID := runIDFor("child", 1, now, 0)
+	store.setStatus(v1ID, "failed")
+	v2 := v1
+	v2.MaxAttempts = 2
+	raw, _ := json.Marshal(v2)
+	store.versions["child"] = db.DreamPolicyVersion{PolicyID: "child", Version: 2, Definition: raw}
+	store.policies[0].Draft = raw
+	if n, err := scheduler.Tick(context.Background(), "ent-1", now); err != nil || n != 1 {
+		t.Fatalf("v2 count=%d err=%v", n, err)
+	}
+	v2Run := store.run(runIDFor("child", 2, now, 0))
+	if v2Run.PolicyVersion != 2 || v2Run.Attempt != 1 || !v2Run.WindowStart.Time.Equal(store.run(v1ID).WindowStart.Time) || store.run(v1ID).Status != "failed" {
+		t.Fatalf("v1=%+v v2=%+v", store.run(v1ID), v2Run)
+	}
+	store.setStatus(v2Run.ID, "succeeded")
+	next := now.Add(24 * time.Hour)
+	if n, err := scheduler.Tick(context.Background(), "ent-1", next); err != nil || n != 1 {
+		t.Fatalf("next v2 count=%d err=%v", n, err)
+	}
+	if run := store.run(runIDFor("child", 2, next, 0)); run.PolicyVersion != 2 || !run.WindowStart.Time.Equal(now) {
+		t.Fatalf("next v2=%+v", run)
+	}
+}
+
 func TestSchedulerHierarchyTickPartialPolicyRecordsTerminalChildFailure(t *testing.T) {
 	store := newSchedulerHierarchyStore(t)
 	parent := policyFor("department:rd", true)
@@ -334,6 +372,121 @@ func TestSchedulerHierarchyBackfillRequiresBoundsAndSuccessfulOverlapLineage(t *
 	}
 }
 
+func TestSchedulerHierarchyExplicitIdempotencyBindsCanonicalRequest(t *testing.T) {
+	store := newSchedulerHierarchyStore(t)
+	p := policyFor("project_group:a", false)
+	store.addPolicy(t, "child-a", p)
+	store.spaces[p.OrgUnitID] = db.KnowledgeSpace{ID: "space-a", EnterpriseID: "ent-1", Kind: "project_group", OrgScope: p.OrgUnitID, OrgVersion: 1}
+	other := policyFor("project_group:b", false)
+	store.addPolicy(t, "child-b", other)
+	store.spaces[other.OrgUnitID] = db.KnowledgeSpace{ID: "space-b", EnterpriseID: "ent-1", Kind: "project_group", OrgScope: other.OrgUnitID, OrgVersion: 1}
+	bus := &recordingSchedulerBus{}
+	runner := tasks.NewRunner(bus)
+	runner.AllowEnqueue(JobTypeDream)
+	clock := func() time.Time { return time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC) }
+	scheduler := NewScheduler(store, NewPolicyService(store), runner, WithSchedulerClock(clock))
+	start := time.Date(2026, 7, 9, 14, 0, 0, 0, time.UTC)
+	req := BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child-a", WindowStart: start, WindowEnd: start.Add(24 * time.Hour), IdempotencyKey: "explicit-key"}
+	first, err := scheduler.Backfill(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := scheduler.Backfill(context.Background(), req)
+	if err != nil || again != first {
+		t.Fatalf("same request=%s err=%v", again, err)
+	}
+	changed := req
+	changed.WindowStart = changed.WindowStart.Add(-time.Hour)
+	if _, err := scheduler.Backfill(context.Background(), changed); err == nil {
+		t.Fatal("same key with changed window accepted")
+	}
+	otherReq := req
+	otherReq.PolicyID = "child-b"
+	if _, err := scheduler.Backfill(context.Background(), otherReq); err == nil {
+		t.Fatal("same enterprise key in another org accepted")
+	}
+}
+
+func TestSchedulerHierarchyBackfillRejectsFutureAndUnrelatedLineageWithoutMovingCursor(t *testing.T) {
+	store := newSchedulerHierarchyStore(t)
+	p := policyFor("project_group:a", false)
+	store.addPolicy(t, "child", p)
+	store.spaces[p.OrgUnitID] = db.KnowledgeSpace{ID: "space", EnterpriseID: "ent-1", Kind: "project_group", OrgScope: p.OrgUnitID, OrgVersion: 1}
+	bus := &recordingSchedulerBus{}
+	runner := tasks.NewRunner(bus)
+	runner.AllowEnqueue(JobTypeDream)
+	now := time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)
+	scheduler := NewScheduler(store, NewPolicyService(store), runner, WithSchedulerClock(func() time.Time { return now }))
+	if _, err := scheduler.Backfill(context.Background(), BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child", WindowStart: now, WindowEnd: now.Add(time.Hour), IdempotencyKey: "future"}); err == nil {
+		t.Fatal("future backfill accepted")
+	}
+	start := time.Date(2026, 7, 9, 14, 0, 0, 0, time.UTC)
+	successful, err := scheduler.Backfill(context.Background(), BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child", WindowStart: start, WindowEnd: start.Add(24 * time.Hour), IdempotencyKey: "success"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.setStatus(successful, "succeeded")
+	unrelatedStart := start.Add(-48 * time.Hour)
+	unrelated, err := scheduler.Backfill(context.Background(), BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child", WindowStart: unrelatedStart, WindowEnd: unrelatedStart.Add(24 * time.Hour), IdempotencyKey: "unrelated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.setStatus(unrelated, "failed")
+	if _, err := scheduler.Backfill(context.Background(), BackfillRequest{EnterpriseID: "ent-1", PolicyID: "child", WindowStart: start, WindowEnd: start.Add(24 * time.Hour), RerunOfRunID: unrelated, IdempotencyKey: "bad-lineage"}); err == nil {
+		t.Fatal("unrelated failed lineage bypassed overlap")
+	}
+	// Historical explicit runs never become the automatic schedule cursor.
+	tickNow := time.Date(2026, 7, 11, 14, 0, 0, 0, time.UTC)
+	if n, err := scheduler.Tick(context.Background(), "ent-1", tickNow); err != nil || n != 1 {
+		t.Fatalf("tick count=%d err=%v", n, err)
+	}
+	automatic := store.run(runIDFor("child", 1, tickNow, 0))
+	if !automatic.WindowStart.Time.Equal(time.Date(2026, 7, 10, 14, 0, 0, 0, time.UTC)) {
+		t.Fatalf("automatic cursor corrupted: %+v", automatic)
+	}
+}
+
+func TestSchedulerHierarchyRejectsMixedOrgTreeVersion(t *testing.T) {
+	store := newSchedulerHierarchyStore(t)
+	store.pinnedOrgVersion = 9
+	parent := policyFor("department:rd", true)
+	child := policyFor("project_group:a", false)
+	store.addPolicy(t, "parent", parent)
+	store.addPolicy(t, "child", child)
+	store.spaces[parent.OrgUnitID] = db.KnowledgeSpace{ID: "parent-space", EnterpriseID: "ent-1", Kind: "department", OrgScope: parent.OrgUnitID, OrgVersion: 9}
+	store.spaces[child.OrgUnitID] = db.KnowledgeSpace{ID: "child-space", EnterpriseID: "ent-1", Kind: "project_group", OrgScope: child.OrgUnitID, OrgVersion: 10}
+	store.children[parent.OrgUnitID] = []db.ListDreamImmediateChildrenRow{childRow(store.spaces[child.OrgUnitID], "parent-space", "department", "rd", parent.OrgUnitID)}
+	runner := tasks.NewRunner(&recordingSchedulerBus{})
+	runner.AllowEnqueue(JobTypeDream)
+	scheduler := NewScheduler(store, NewPolicyService(store), runner)
+	if _, err := scheduler.Tick(context.Background(), "ent-1", time.Date(2026, 7, 10, 14, 0, 0, 0, time.UTC)); err == nil {
+		t.Fatal("mixed-version tree accepted")
+	}
+}
+
+func TestSchedulerHierarchyRejectsConcurrentOrgUpdateAfterVersionPin(t *testing.T) {
+	store := newSchedulerHierarchyStore(t)
+	store.pinnedOrgVersion = 9
+	parent := policyFor("department:rd", true)
+	child := policyFor("project_group:a", false)
+	store.addPolicy(t, "parent", parent)
+	store.addPolicy(t, "child", child)
+	store.spaces[parent.OrgUnitID] = db.KnowledgeSpace{ID: "parent-space", EnterpriseID: "ent-1", Kind: "department", OrgScope: parent.OrgUnitID, OrgVersion: 9}
+	store.spaces[child.OrgUnitID] = db.KnowledgeSpace{ID: "child-space", EnterpriseID: "ent-1", Kind: "project_group", OrgScope: child.OrgUnitID, OrgVersion: 9}
+	store.children[parent.OrgUnitID] = []db.ListDreamImmediateChildrenRow{childRow(store.spaces[child.OrgUnitID], "parent-space", "department", "rd", parent.OrgUnitID)}
+	store.afterVersionPin = func() {
+		updated := store.spaces[child.OrgUnitID]
+		updated.OrgVersion = 10
+		store.spaces[child.OrgUnitID] = updated
+		store.children[parent.OrgUnitID] = []db.ListDreamImmediateChildrenRow{childRow(updated, "parent-space", "department", "rd", parent.OrgUnitID)}
+	}
+	runner := tasks.NewRunner(&recordingSchedulerBus{})
+	runner.AllowEnqueue(JobTypeDream)
+	if _, err := NewScheduler(store, NewPolicyService(store), runner).Tick(context.Background(), "ent-1", time.Date(2026, 7, 10, 14, 0, 0, 0, time.UTC)); err == nil {
+		t.Fatal("org update after version pin was mixed into decision")
+	}
+}
+
 func policyFor(org string, parent bool) Policy {
 	p := validPolicy()
 	p.OrgUnitID = org
@@ -373,12 +526,36 @@ func (b *recordingSchedulerBus) ids() []string {
 
 type schedulerHierarchyStore struct {
 	SchedulerStore
-	mu       sync.Mutex
-	policies []db.DreamPolicy
-	versions map[string]db.DreamPolicyVersion
-	spaces   map[string]db.KnowledgeSpace
-	children map[string][]db.ListDreamImmediateChildrenRow
-	runs     map[string]db.DreamRun
+	mu               sync.Mutex
+	policies         []db.DreamPolicy
+	versions         map[string]db.DreamPolicyVersion
+	spaces           map[string]db.KnowledgeSpace
+	children         map[string][]db.ListDreamImmediateChildrenRow
+	runs             map[string]db.DreamRun
+	pinnedOrgVersion int64
+	afterVersionPin  func()
+}
+
+func (s *schedulerHierarchyStore) GetDreamOrgTreeVersion(context.Context, string) (int64, error) {
+	if s.pinnedOrgVersion > 0 {
+		version := s.pinnedOrgVersion
+		if s.afterVersionPin != nil {
+			hook := s.afterVersionPin
+			s.afterVersionPin = nil
+			hook()
+		}
+		return version, nil
+	}
+	var max int64
+	for _, space := range s.spaces {
+		if space.OrgVersion > max {
+			max = space.OrgVersion
+		}
+	}
+	if max == 0 {
+		return 0, pgx.ErrNoRows
+	}
+	return max, nil
 }
 
 func newSchedulerHierarchyStore(t *testing.T) *schedulerHierarchyStore {
@@ -428,6 +605,16 @@ func (s *schedulerHierarchyStore) GetDreamRun(_ context.Context, id string) (db.
 	}
 	return row, nil
 }
+func (s *schedulerHierarchyStore) GetDreamRunByIdempotencyKey(_ context.Context, arg db.GetDreamRunByIdempotencyKeyParams) (db.DreamRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, row := range s.runs {
+		if row.EnterpriseID == arg.EnterpriseID && row.IdempotencyKey == arg.IdempotencyKey {
+			return row, nil
+		}
+	}
+	return db.DreamRun{}, pgx.ErrNoRows
+}
 func (s *schedulerHierarchyStore) GetKnowledgeSpaceByScope(_ context.Context, arg db.GetKnowledgeSpaceByScopeParams) (db.KnowledgeSpace, error) {
 	row, ok := s.spaces[arg.OrgScope]
 	if !ok || row.EnterpriseID != arg.EnterpriseID {
@@ -463,7 +650,27 @@ func (s *schedulerHierarchyStore) GetLatestDreamRunForPolicy(_ context.Context, 
 	defer s.mu.Unlock()
 	var rows []db.DreamRun
 	for _, row := range s.runs {
-		if row.PolicyID == id {
+		if row.PolicyID == id && (row.OperationKind == "" || row.OperationKind == "scheduled" || row.OperationKind == "automatic_retry") && !row.RerunOfRunID.Valid {
+			rows = append(rows, row)
+		}
+	}
+	if len(rows) == 0 {
+		return db.DreamRun{}, pgx.ErrNoRows
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if !rows[i].WindowEnd.Time.Equal(rows[j].WindowEnd.Time) {
+			return rows[i].WindowEnd.Time.After(rows[j].WindowEnd.Time)
+		}
+		return rows[i].Attempt > rows[j].Attempt
+	})
+	return rows[0], nil
+}
+func (s *schedulerHierarchyStore) GetLatestDreamRunForPolicyVersion(ctx context.Context, arg db.GetLatestDreamRunForPolicyVersionParams) (db.DreamRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var rows []db.DreamRun
+	for _, row := range s.runs {
+		if row.PolicyID == arg.PolicyID && row.PolicyVersion == arg.PolicyVersion && (row.OperationKind == "" || row.OperationKind == "scheduled" || row.OperationKind == "automatic_retry") && !row.RerunOfRunID.Valid {
 			rows = append(rows, row)
 		}
 	}
@@ -489,7 +696,7 @@ func (s *schedulerHierarchyStore) CreateDreamRun(_ context.Context, arg db.Creat
 			return db.DreamRun{}, &pgconn.PgError{Code: "23505"}
 		}
 	}
-	row := db.DreamRun{ID: arg.ID, PolicyID: arg.PolicyID, Version: arg.Version, EnterpriseID: arg.EnterpriseID, Status: arg.Status, WindowStart: arg.WindowStart, WindowEnd: arg.WindowEnd, OrgUnitID: arg.OrgUnitID, PolicyVersion: arg.PolicyVersion, WorkflowID: pgtype.Text{String: arg.WorkflowID, Valid: true}, WorkflowVersion: pgtype.Int4{Int32: arg.WorkflowVersion, Valid: true}, Timezone: arg.Timezone, InputSnapshot: arg.InputSnapshot, VisibilitySnapshot: arg.VisibilitySnapshot, ModelRoute: arg.ModelRoute, ModelVersion: arg.ModelVersion, Attempt: arg.Attempt, RerunOfRunID: arg.RerunOfRunID, Coverage: arg.Coverage, MissingInputs: arg.MissingInputs, IdempotencyKey: arg.IdempotencyKey}
+	row := db.DreamRun{ID: arg.ID, PolicyID: arg.PolicyID, Version: arg.Version, EnterpriseID: arg.EnterpriseID, Status: arg.Status, WindowStart: arg.WindowStart, WindowEnd: arg.WindowEnd, OrgUnitID: arg.OrgUnitID, PolicyVersion: arg.PolicyVersion, WorkflowID: pgtype.Text{String: arg.WorkflowID, Valid: true}, WorkflowVersion: pgtype.Int4{Int32: arg.WorkflowVersion, Valid: true}, Timezone: arg.Timezone, InputSnapshot: arg.InputSnapshot, VisibilitySnapshot: arg.VisibilitySnapshot, ModelRoute: arg.ModelRoute, ModelVersion: arg.ModelVersion, Attempt: arg.Attempt, RerunOfRunID: arg.RerunOfRunID, Coverage: arg.Coverage, MissingInputs: arg.MissingInputs, IdempotencyKey: arg.IdempotencyKey, OrgVersion: arg.OrgVersion, OperationKind: arg.OperationKind}
 	s.runs[row.ID] = row
 	return row, nil
 }

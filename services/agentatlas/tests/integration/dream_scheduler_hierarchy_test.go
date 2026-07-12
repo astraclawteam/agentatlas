@@ -14,6 +14,7 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/storage"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/tasks"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -78,7 +79,7 @@ func TestDreamSchedulerHierarchyPostgresConcurrentTicks(t *testing.T) {
 	bus := &schedulerIntegrationBus{}
 	runner := tasks.NewRunner(bus)
 	runner.AllowEnqueue(dream.JobTypeDream)
-	scheduler := dream.NewScheduler(q, dream.NewPolicyService(q), runner)
+	scheduler := dream.NewScheduler(q, dream.NewPolicyService(q), runner, dream.WithSchedulerClock(func() time.Time { return time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC) }))
 	now := time.Date(2026, 7, 10, 14, 0, 0, 0, time.UTC)
 	runConcurrentTicks(t, func() (int, error) { return scheduler.Tick(ctx, ent, now) })
 	childRuns, err := q.ListDreamRunsByOrg(ctx, db.ListDreamRunsByOrgParams{EnterpriseID: ent, OrgUnitID: "project_group:child-" + suffix, ResultLimit: 10})
@@ -103,6 +104,109 @@ func TestDreamSchedulerHierarchyPostgresConcurrentTicks(t *testing.T) {
 	}
 	if bus.count() != 2 {
 		t.Fatalf("duplicate concurrent publish count=%d", bus.count())
+	}
+
+	backfillStart := time.Date(2026, 7, 7, 14, 0, 0, 0, time.UTC)
+	request := dream.BackfillRequest{EnterpriseID: ent, PolicyID: childPolicy, WindowStart: backfillStart, WindowEnd: backfillStart.Add(24 * time.Hour), IdempotencyKey: "shared-explicit-key-" + suffix}
+	backfillID, err := scheduler.Backfill(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate, err := scheduler.Backfill(ctx, request); err != nil || duplicate != backfillID {
+		t.Fatalf("same explicit request=%s err=%v", duplicate, err)
+	}
+	changed := request
+	changed.WindowStart = changed.WindowStart.Add(-time.Hour)
+	if _, err := scheduler.Backfill(ctx, changed); err == nil {
+		t.Fatal("same key with different window accepted")
+	}
+	otherOrg := request
+	otherOrg.PolicyID = parentPolicy
+	if _, err := scheduler.Backfill(ctx, otherOrg); err == nil {
+		t.Fatal("same enterprise key with different org accepted")
+	}
+	if _, err := scheduler.Backfill(ctx, dream.BackfillRequest{EnterpriseID: ent, PolicyID: childPolicy, WindowStart: time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC), WindowEnd: time.Date(2026, 7, 20, 1, 0, 0, 0, time.UTC), IdempotencyKey: "future-" + suffix}); err == nil {
+		t.Fatal("future backfill accepted")
+	}
+	if _, err := q.UpdateDreamRunStatus(ctx, db.UpdateDreamRunStatusParams{ID: backfillID, Status: "failed", Error: "fixture"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scheduler.Backfill(ctx, dream.BackfillRequest{EnterpriseID: ent, PolicyID: childPolicy, WindowStart: childRuns[0].WindowStart.Time, WindowEnd: childRuns[0].WindowEnd.Time, RerunOfRunID: backfillID, IdempotencyKey: "bad-lineage-" + suffix}); err == nil {
+		t.Fatal("unrelated failed lineage accepted")
+	}
+	validLineage, err := scheduler.Backfill(ctx, dream.BackfillRequest{EnterpriseID: ent, PolicyID: childPolicy, WindowStart: childRuns[0].WindowStart.Time, WindowEnd: childRuns[0].WindowEnd.Time, RerunOfRunID: childRuns[0].ID, IdempotencyKey: "valid-lineage-" + suffix})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run, err := q.GetDreamRun(ctx, validLineage); err != nil || run.RerunOfRunID.String != childRuns[0].ID || run.OperationKind != "backfill" {
+		t.Fatalf("lineaged run=%+v err=%v", run, err)
+	}
+	if _, err := pool.Exec(ctx, `update dream_runs set operation_kind='scheduled' where id=$1`, validLineage); err == nil {
+		t.Fatal("scheduler operation identity was mutable")
+	}
+	if _, err := pool.Exec(ctx, `update dream_runs set org_version=org_version+1 where id=$1`, validLineage); err == nil {
+		t.Fatal("scheduler org snapshot was mutable")
+	}
+	cursor, err := q.GetLatestDreamRunForPolicyVersion(ctx, db.GetLatestDreamRunForPolicyVersionParams{PolicyID: childPolicy, PolicyVersion: 1})
+	if err != nil || cursor.ID != childRuns[0].ID {
+		t.Fatalf("automatic cursor=%+v err=%v", cursor, err)
+	}
+
+	// The database uniqueness scope is enterprise, so the same caller key is
+	// valid in another enterprise and resolves independently.
+	ent2, space2, wf2, policy2 := "ent-scheduler-2-"+suffix, "space-child-2-"+suffix, "wf-scheduler-2-"+suffix, "policy-child-2-"+suffix
+	if _, err := q.UpsertEnterprise(ctx, db.UpsertEnterpriseParams{ID: ent2, Name: "Dream scheduler integration 2"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.InsertKnowledgeSpace(ctx, db.InsertKnowledgeSpaceParams{ID: space2, EnterpriseID: ent2, Kind: "project_group", Name: "Child 2", OrgScope: "project_group:child-2-" + suffix, OrgVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.CreateWorkflowDraft(ctx, db.CreateWorkflowDraftParams{ID: wf2, EnterpriseID: ent2, Name: "Dream scheduler 2", Kind: "dream", CreatedBy: "integration", Draft: []byte(`{"nodes":[]}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.PublishWorkflowVersion(ctx, db.PublishWorkflowVersionParams{WorkflowID: wf2, Version: 1, Definition: []byte(`{"nodes":[]}`), RiskLevel: "low", PublishedBy: "integration"}); err != nil {
+		t.Fatal(err)
+	}
+	definition2 := sdkdream.DreamPolicyDefinition{OrgUnitID: "project_group:child-2-" + suffix, Timezone: "Asia/Shanghai", Schedule: "0 22 * * *", InputSources: []sdkdream.Source{sdkdream.SourceWorkBrief}, Workflow: sdkdream.WorkflowRef{ID: wf2, Version: 1}, OutputSpaceID: space2, VisibilityLevel: sdkdream.VisibilityMembers, ConfirmationMode: sdkdream.ConfirmationNever, MaxAttempts: 2}
+	raw2, _ := json.Marshal(definition2)
+	if _, err := q.CreateDreamPolicy(ctx, db.CreateDreamPolicyParams{ID: policy2, EnterpriseID: ent2, OrgScope: definition2.OrgUnitID, Status: "published", Draft: raw2}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.PublishDreamPolicyVersion(ctx, db.PublishDreamPolicyVersionParams{PolicyID: policy2, Version: 1, Definition: raw2}); err != nil {
+		t.Fatal(err)
+	}
+	cross := request
+	cross.EnterpriseID = ent2
+	cross.PolicyID = policy2
+	if crossID, err := scheduler.Backfill(ctx, cross); err != nil || crossID == backfillID {
+		t.Fatalf("cross-enterprise idempotency=%s err=%v", crossID, err)
+	}
+
+	// PostgreSQL repeatable-read pins one visible tree even when an org update
+	// commits between the scheduler's version and child reads.
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	txq := db.New(tx)
+	pinned, err := txq.GetDreamOrgTreeVersion(ctx, ent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.UpdateKnowledgeSpaceIfNewer(ctx, db.UpdateKnowledgeSpaceIfNewerParams{ID: childSpace, EnterpriseID: ent, Name: "Child updated", OrgVersion: pinned + 1}); err != nil {
+		t.Fatal(err)
+	}
+	stillPinned, err := txq.GetDreamOrgTreeVersion(ctx, ent)
+	if err != nil || stillPinned != pinned {
+		t.Fatalf("repeatable tree version=%d want=%d err=%v", stillPinned, pinned, err)
+	}
+	childrenInSnapshot, err := txq.ListDreamImmediateChildren(ctx, db.ListDreamImmediateChildrenParams{EnterpriseID: ent, ParentScopeKind: "department", ParentScopeID: "parent-" + suffix, ResultLimit: 10})
+	if err != nil || len(childrenInSnapshot) != 1 || childrenInSnapshot[0].OrgVersion != pinned {
+		t.Fatalf("snapshot children=%+v pinned=%d err=%v", childrenInSnapshot, pinned, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
 	}
 }
 

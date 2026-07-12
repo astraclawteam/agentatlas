@@ -116,7 +116,9 @@ func TestDreamWorkflowLifecycleOutbox(t *testing.T) {
 	if dsn == "" {
 		t.Skip("set ATLAS_TEST_POSTGRES_DSN")
 	}
-	ctx, conn, queries := openDreamMigrationQueries(t, dsn, 5)
+	// Generated Dream rows include the scheduler identity added in 000006;
+	// lifecycle/outbox behavior from 000005 is exercised on the current schema.
+	ctx, conn, queries := openDreamMigrationQueries(t, dsn, 6)
 	seed := `insert into enterprises(id,name) values('outbox-ent','Outbox');
 insert into workflows(id,enterprise_id,name,kind,draft,created_by) values('outbox-wf','outbox-ent','Dream','dream','{}','x');
 insert into workflow_versions(workflow_id,version,definition,risk_level,published_by) values('outbox-wf',1,'{"workflow_id":"outbox-wf","version":1,"kind":"dream","nodes":[{"id":"confirm","type":"human.confirm"}],"edges":[],"risk_level":"low"}','low','x');
