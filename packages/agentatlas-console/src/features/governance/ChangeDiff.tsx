@@ -8,7 +8,6 @@ export function ChangeDiff({ before, after }: { before: Partial<KnowledgeContent
     </div>
   );
 }
-
 function ReadableVersion({ label, content }: { label: string; content: Partial<KnowledgeContent> }) {
   const steps = content.steps ?? [];
   const sections = content.sections ?? [];
@@ -33,4 +32,3 @@ function ReadableVersion({ label, content }: { label: string; content: Partial<K
     </section>
   );
 }
-

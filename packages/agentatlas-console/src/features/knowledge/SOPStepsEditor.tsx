@@ -40,4 +40,3 @@ export function SOPStepsEditor({ steps, onChange }: { steps: SOPStep[]; onChange
     </section>
   );
 }
-
