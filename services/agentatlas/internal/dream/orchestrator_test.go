@@ -2,11 +2,13 @@ package dream
 
 import (
 	"context"
+	"github.com/jackc/pgx/v5/pgtype"
 	"strings"
 	"testing"
 	"time"
 
 	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
+	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/workflow"
 )
 
@@ -17,13 +19,40 @@ type recordingDreamRuntime struct {
 	input             map[string]any
 	result            workflow.RunResult
 	err               error
+	verified          workflow.VerifiedDreamContext
+	resumedRunID      string
 }
 
-func (r *recordingDreamRuntime) RunPublished(_ context.Context, enterpriseID, workflowID string, version int32, input map[string]any) (workflow.RunResult, error) {
+func (r *recordingDreamRuntime) DreamResult(_ context.Context, runID string, verified workflow.VerifiedDreamContext) (workflow.RunResult, error) {
+	r.resumedRunID = runID
+	r.verified = verified
+	return r.result, r.err
+}
+
+func TestOrchestratorReconcilesExactExistingWorkflowRun(t *testing.T) {
+	runtime := &recordingDreamRuntime{result: workflow.RunResult{RunID: "wrun-pinned", Status: workflow.RunSucceeded, AggregateNodeID: "aggregate", Outputs: map[string]map[string]any{"aggregate": validDreamWorkflowOutput()}}}
+	exec := validDreamExecution()
+	exec.ExistingWorkflowRunID = "wrun-pinned"
+	out, err := NewOrchestrator(runtime).Run(context.Background(), exec)
+	if err != nil || runtime.resumedRunID != "wrun-pinned" || runtime.startedWorkflow != "" || out.WorkflowRunID != "wrun-pinned" {
+		t.Fatalf("out=%+v runtime=%+v err=%v", out, runtime, err)
+	}
+}
+
+func TestOrchestratorUsesRuntimeVerifiedAggregateNode(t *testing.T) {
+	runtime := &recordingDreamRuntime{result: workflow.RunResult{RunID: "wrun", Status: workflow.RunSucceeded, AggregateNodeID: "aggregate", Outputs: map[string]map[string]any{"aggregate": validDreamWorkflowOutput(), "spoof": validDreamWorkflowOutput()}}}
+	out, err := NewOrchestrator(runtime).Run(context.Background(), validDreamExecution())
+	if err != nil || out.Output.Display != "display" {
+		t.Fatalf("out=%+v err=%v", out, err)
+	}
+}
+
+func (r *recordingDreamRuntime) RunDreamPublished(_ context.Context, enterpriseID, workflowID string, version int32, input map[string]any, verified workflow.VerifiedDreamContext) (workflow.RunResult, error) {
 	r.startedEnterprise = enterpriseID
 	r.startedWorkflow = workflowID
 	r.startedVersion = version
 	r.input = input
+	r.verified = verified
 	return r.result, r.err
 }
 
@@ -38,7 +67,7 @@ func validDreamWorkflowOutput() map[string]any {
 func TestOrchestratorRunsExactlyPinnedPublishedWorkflow(t *testing.T) {
 	runtime := &recordingDreamRuntime{result: workflow.RunResult{
 		RunID: "wrun-1", Status: workflow.RunSucceeded,
-		Outputs: map[string]map[string]any{"aggregate": validDreamWorkflowOutput()},
+		Outputs: map[string]map[string]any{"aggregate": validDreamWorkflowOutput()}, AggregateNodeID: "aggregate",
 	}}
 	orchestrator := NewOrchestrator(runtime)
 	start := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
@@ -58,8 +87,8 @@ func TestOrchestratorRunsExactlyPinnedPublishedWorkflow(t *testing.T) {
 	if out.WorkflowRunID != "wrun-1" || out.Output.Display != "display" {
 		t.Fatalf("out = %+v", out)
 	}
-	if runtime.input["dream_policy_id"] != "policy-1" || runtime.input["workflow_id"] != "wf-dream" {
-		t.Fatalf("lineage input missing: %v", runtime.input)
+	if runtime.verified.PolicyID != "policy-1" || runtime.verified.WorkflowID != "wf-dream" {
+		t.Fatalf("verified lineage missing: %+v", runtime.verified)
 	}
 }
 
@@ -70,7 +99,7 @@ func TestOrchestratorRejectsMalformedOrAmbiguousOutput(t *testing.T) {
 		"ambiguous": {"aggregate-a": validDreamWorkflowOutput(), "aggregate-b": validDreamWorkflowOutput()},
 	} {
 		t.Run(name, func(t *testing.T) {
-			runtime := &recordingDreamRuntime{result: workflow.RunResult{RunID: "wrun", Status: workflow.RunSucceeded, Outputs: outputs}}
+			runtime := &recordingDreamRuntime{result: workflow.RunResult{RunID: "wrun", Status: workflow.RunSucceeded, Outputs: outputs, AggregateNodeID: "aggregate"}}
 			_, err := NewOrchestrator(runtime).Run(context.Background(), validDreamExecution())
 			if err == nil {
 				t.Fatal("invalid workflow output must fail closed")
@@ -125,4 +154,23 @@ func validDreamExecution() DreamExecution {
 	return DreamExecution{EnterpriseID: "ent-1", PolicyID: "policy-1", PolicyVersion: 1,
 		Workflow: sdkdream.WorkflowRef{ID: "wf-dream", Version: 3},
 		Input:    WorkflowInput{OrgUnitID: "department:rd", WindowStart: start, WindowEnd: start.Add(time.Hour), Inputs: []ResolvedInput{}, Missing: []MissingInput{}}}
+}
+
+func TestDreamRunPolicySnapshotAgreementFailsClosed(t *testing.T) {
+	p := validPolicy()
+	run := db.DreamRun{ID: "dr", PolicyID: "policy", Version: 2, PolicyVersion: 2, EnterpriseID: "ent-1", OrgUnitID: p.OrgUnitID, Timezone: p.Timezone, WorkflowID: pgtype.Text{String: p.Workflow.ID, Valid: true}, WorkflowVersion: pgtype.Int4{Int32: p.Workflow.Version, Valid: true}, ModelRoute: "workflow/" + p.Workflow.ID, ModelVersion: "v3", WindowStart: pgtype.Timestamptz{Time: time.Now(), Valid: true}, WindowEnd: pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true}, InputSnapshot: []byte(`{"source_counts":[{"source_type":"work_brief","count":0}],"sanitized_input_ids":[]}`), VisibilitySnapshot: []byte(`{"visibility_level":"members","org_unit_ids":["department:rd-1"],"masked_field_count":0}`)}
+	if err := validateRunPolicySnapshot(run, "ent-1", p); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*db.DreamRun){"enterprise": func(r *db.DreamRun) { r.EnterpriseID = "ent-2" }, "legacy_version": func(r *db.DreamRun) { r.Version++ }, "org": func(r *db.DreamRun) { r.OrgUnitID = "department:other" }, "timezone": func(r *db.DreamRun) { r.Timezone = "UTC" }, "route": func(r *db.DreamRun) { r.ModelRoute = "forged" }, "visibility": func(r *db.DreamRun) {
+		r.VisibilitySnapshot = []byte(`{"visibility_level":"members","org_unit_ids":["other"],"masked_field_count":0}`)
+	}} {
+		t.Run(name, func(t *testing.T) {
+			copy := run
+			mutate(&copy)
+			if validateRunPolicySnapshot(copy, "ent-1", p) == nil {
+				t.Fatal("must reject")
+			}
+		})
+	}
 }

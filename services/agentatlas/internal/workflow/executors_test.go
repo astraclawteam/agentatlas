@@ -100,7 +100,7 @@ func TestDreamExecutorConsumesOnlyTypedBoundedSanitizedInput(t *testing.T) {
 			"source": "deterministic", "model_route": "workflow/dream", "model_version": "v3",
 		}, nil
 	}})
-	run := &RunContext{EnterpriseID: "ent-1", Input: map[string]any{
+	run := &RunContext{EnterpriseID: "ent-1", Dream: &VerifiedDreamContext{DreamRunID: "dr-1", PolicyID: "policy-1", PolicyVersion: 1, WorkflowID: "wf-dream", WorkflowVersion: 3}, Input: map[string]any{
 		"org_unit_id": "department:rd", "window_start": "2026-07-11T00:00:00Z", "window_end": "2026-07-12T00:00:00Z",
 		"inputs":   []any{map[string]any{"source_type": "work_brief", "source_id": "brief-1", "org_unit_id": "department:rd", "sanitized_text": "safe", "visibility": []any{"managers"}}},
 		"coverage": map[string]any{"expected_children": float64(0), "completed_children": float64(0), "input_count": float64(1)},
@@ -120,8 +120,25 @@ func TestDreamExecutorConsumesOnlyTypedBoundedSanitizedInput(t *testing.T) {
 	}
 }
 
+func TestDreamExecutorRejectsCallerControlledGenericWorkflowInput(t *testing.T) {
+	called := false
+	r := NewRegistryWithServices(Executors{Dream: func(context.Context, DreamAggregateInput) (map[string]any, error) {
+		called = true
+		return validExecutorDreamOutput(), nil
+	}})
+	run := &RunContext{EnterpriseID: "ent-1", Input: map[string]any{"dream_run_id": "dr-forged", "org_unit_id": "department:rd"}, Outputs: map[string]map[string]any{}}
+	_, err := r[sdkworkflow.NodeDreamAggregate].Execute(context.Background(), sdkworkflow.Node{ID: "dream", Type: sdkworkflow.NodeDreamAggregate}, run)
+	if err == nil || !strings.Contains(err.Error(), "verified Dream") || called {
+		t.Fatalf("err=%v called=%v", err, called)
+	}
+}
+
+func validExecutorDreamOutput() map[string]any {
+	return map[string]any{"display": "d", "retrieval": "r", "sealed_detail": "s", "facts": []any{}, "themes": []any{}, "trends": []any{}, "risks": []any{}, "todos": []any{}, "source": "deterministic", "model_route": "workflow/wf-dream", "model_version": "v3"}
+}
+
 func TestTraceRecordPreservesDreamRunWorkflowPolicyAndEvidenceLineage(t *testing.T) {
-	run := &RunContext{RunID: "wrun-1", EnterpriseID: "ent-1", Input: map[string]any{
+	run := &RunContext{RunID: "wrun-1", EnterpriseID: "ent-1", Dream: &VerifiedDreamContext{DreamRunID: "dr-1", PolicyID: "policy-1", PolicyVersion: 7, WorkflowID: "wf-dream", WorkflowVersion: 3, EvidencePointerIDs: []string{"ev-1", "ev-2"}, ParentDreamRunIDs: []string{"dr-child"}}, Input: map[string]any{
 		"dream_run_id": "dr-1", "dream_policy_id": "policy-1", "dream_policy_version": float64(7),
 		"workflow_id": "wf-dream", "workflow_version": float64(3),
 		"evidence_pointer_ids": []any{"ev-1", "ev-2"}, "parent_dream_run_ids": []any{"dr-child"},

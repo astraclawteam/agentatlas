@@ -44,6 +44,21 @@ RETURNING *;
 -- name: GetDreamRun :one
 SELECT * FROM dream_runs WHERE id = $1;
 
+-- name: BindDreamWorkflowRun :one
+UPDATE dream_runs SET workflow_run_id = sqlc.arg(workflow_run_id)
+WHERE enterprise_id = sqlc.arg(enterprise_id) AND id = sqlc.arg(run_id)
+  AND (workflow_run_id IS NULL OR workflow_run_id = sqlc.arg(workflow_run_id))
+RETURNING *;
+
+-- name: GetDreamRunByWorkflowRun :one
+SELECT * FROM dream_runs WHERE enterprise_id = sqlc.arg(enterprise_id) AND workflow_run_id = sqlc.arg(workflow_run_id);
+
+-- name: RequeueDreamRunAfterWorkflow :one
+UPDATE dream_runs SET status = 'pending', error = ''
+WHERE enterprise_id = sqlc.arg(enterprise_id) AND workflow_run_id = sqlc.arg(workflow_run_id)
+  AND status = 'waiting_confirmation'
+RETURNING *;
+
 -- name: ClaimDreamRun :execrows
 UPDATE dream_runs SET status = 'running' WHERE id = $1 AND status = 'pending';
 
@@ -58,11 +73,14 @@ WHERE id = $1;
 
 -- name: InsertDreamInput :exec
 INSERT INTO dream_inputs (run_id, source_type, source_id)
-VALUES ($1, $2, $3);
+VALUES ($1, $2, $3)
+ON CONFLICT (run_id, source_type, source_id) DO NOTHING;
 
 -- name: CreateDreamSummary :one
 INSERT INTO dream_summaries (id, run_id, enterprise_id, space_id, layer, summary_text, sealed_object_key, evidence_pointer_id, risk_signals, facts, themes, trends, todos)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+        COALESCE(sqlc.narg(risk_signals)::jsonb, '[]'::jsonb), COALESCE(sqlc.narg(facts)::jsonb, '[]'::jsonb),
+        COALESCE(sqlc.narg(themes)::jsonb, '[]'::jsonb), COALESCE(sqlc.narg(trends)::jsonb, '[]'::jsonb), COALESCE(sqlc.narg(todos)::jsonb, '[]'::jsonb))
 RETURNING *;
 
 -- name: GetDreamSummary :one

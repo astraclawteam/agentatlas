@@ -1,10 +1,13 @@
 package dream
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
+	sdkworkflow "github.com/astraclawteam/agentatlas/sdk/go/workflow"
+	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 )
 
 func validPolicy() Policy {
@@ -16,6 +19,39 @@ func validPolicy() Policy {
 		EvidenceRetention: sdkdream.EvidencePointerPlusDisplaySummary, OutputSpaceID: "spc_dept",
 		ConfirmationMode: sdkdream.ConfirmationHighRiskOnly,
 	})
+}
+
+func TestPolicyPublishValidatesExactPublishedDreamWorkflow(t *testing.T) {
+	p := validPolicy()
+	def := sdkworkflow.Workflow{WorkflowID: p.Workflow.ID, Version: int(p.Workflow.Version), Kind: sdkworkflow.KindDream, RiskLevel: sdkworkflow.RiskLow, Nodes: []sdkworkflow.Node{{ID: "aggregate", Type: sdkworkflow.NodeDreamAggregate}}}
+	raw, _ := json.Marshal(def)
+	if err := validatePublishedDreamWorkflow("ent-1", p, db.Workflow{ID: p.Workflow.ID, EnterpriseID: "ent-1", Kind: "dream"}, db.WorkflowVersion{WorkflowID: p.Workflow.ID, Version: p.Workflow.Version, Definition: raw}); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*db.Workflow, *db.WorkflowVersion){
+		"cross_enterprise": func(w *db.Workflow, _ *db.WorkflowVersion) { w.EnterpriseID = "ent-2" },
+		"wrong_kind":       func(w *db.Workflow, _ *db.WorkflowVersion) { w.Kind = "sop" },
+		"wrong_version":    func(_ *db.Workflow, v *db.WorkflowVersion) { v.Version++ },
+		"missing_aggregate": func(_ *db.Workflow, v *db.WorkflowVersion) {
+			d := def
+			d.Nodes = nil
+			v.Definition, _ = json.Marshal(d)
+		},
+		"ambiguous_aggregate": func(_ *db.Workflow, v *db.WorkflowVersion) {
+			d := def
+			d.Nodes = append(d.Nodes, sdkworkflow.Node{ID: "aggregate2", Type: sdkworkflow.NodeDreamAggregate})
+			v.Definition, _ = json.Marshal(d)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := db.Workflow{ID: p.Workflow.ID, EnterpriseID: "ent-1", Kind: "dream"}
+			v := db.WorkflowVersion{WorkflowID: p.Workflow.ID, Version: p.Workflow.Version, Definition: raw}
+			mutate(&w, &v)
+			if validatePublishedDreamWorkflow("ent-1", p, w, v) == nil {
+				t.Fatal("must reject")
+			}
+		})
+	}
 }
 
 func TestPolicyValidate(t *testing.T) {

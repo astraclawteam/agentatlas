@@ -25,6 +25,21 @@ type RunContext struct {
 	EnterpriseID string
 	Input        map[string]any
 	Outputs      map[string]map[string]any
+	Dream        *VerifiedDreamContext
+}
+
+// VerifiedDreamContext is runtime-owned provenance. Executors must never
+// derive this authority from workflow input or node configuration.
+type VerifiedDreamContext struct {
+	EnterpriseID       string   `json:"enterprise_id"`
+	DreamRunID         string   `json:"dream_run_id"`
+	PolicyID           string   `json:"policy_id"`
+	PolicyVersion      int32    `json:"policy_version"`
+	WorkflowID         string   `json:"workflow_id"`
+	WorkflowVersion    int32    `json:"workflow_version"`
+	OrgUnitID          string   `json:"org_unit_id"`
+	EvidencePointerIDs []string `json:"evidence_pointer_ids"`
+	ParentDreamRunIDs  []string `json:"parent_dream_run_ids"`
 }
 
 // Registry maps node types to executors. All sixteen built-in types are

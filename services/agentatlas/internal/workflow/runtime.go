@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"go.opentelemetry.io/otel/attribute"
 
@@ -16,10 +17,11 @@ import (
 // Runtime executes published workflow versions as a persisted state machine.
 // Runs pause at human.confirm nodes and resume on an explicit decision.
 type Runtime struct {
-	store    Store
-	service  *Service
-	registry Registry
-	metrics  *observability.Metrics
+	store          Store
+	service        *Service
+	registry       Registry
+	metrics        *observability.Metrics
+	completionHook func(context.Context, RunResult) error
 }
 
 // ErrRunForbidden marks a run operation attempted by an actor outside the
@@ -36,26 +38,62 @@ func NewRuntime(store Store, service *Service, registry Registry) *Runtime {
 
 // SetMetrics wires the optional Prometheus surface (WorkflowRuns by terminal
 // status).
-func (r *Runtime) SetMetrics(m *observability.Metrics) { r.metrics = m }
+func (r *Runtime) SetMetrics(m *observability.Metrics)                        { r.metrics = m }
+func (r *Runtime) SetCompletionHook(h func(context.Context, RunResult) error) { r.completionHook = h }
 
 // runState is persisted in workflow_runs.output while a run is in flight.
 type runState struct {
 	NextIndex int                       `json:"next_index"`
 	Outputs   map[string]map[string]any `json:"outputs"`
 	Input     map[string]any            `json:"input"`
+	Dream     *VerifiedDreamContext     `json:"dream,omitempty"`
 }
 
 // RunResult is the bounded execution surface consumed by typed orchestrators.
 // Outputs are the persisted outputs of the exact published workflow version.
 type RunResult struct {
-	RunID   string
-	Status  string
-	Outputs map[string]map[string]any
+	RunID           string
+	Status          string
+	Outputs         map[string]map[string]any
+	AggregateNodeID string
+	EnterpriseID    string
 }
 
 // RunPublished executes one exact immutable workflow version and returns its
 // node outputs. It never substitutes the latest version.
 func (r *Runtime) RunPublished(ctx context.Context, enterpriseID, workflowID string, version int32, input map[string]any) (RunResult, error) {
+	return r.runPublished(ctx, enterpriseID, workflowID, version, input, nil)
+}
+
+func (r *Runtime) RunDreamPublished(ctx context.Context, enterpriseID, workflowID string, version int32, input map[string]any, dream VerifiedDreamContext) (RunResult, error) {
+	if dream.EnterpriseID != enterpriseID || dream.DreamRunID == "" || dream.PolicyID == "" || dream.WorkflowID != workflowID || dream.WorkflowVersion != version {
+		return RunResult{}, fmt.Errorf("invalid verified Dream context")
+	}
+	return r.runPublished(ctx, enterpriseID, workflowID, version, input, &dream)
+}
+
+func (r *Runtime) DreamResult(ctx context.Context, runID string, expected VerifiedDreamContext) (RunResult, error) {
+	run, err := r.store.GetWorkflowRun(ctx, runID)
+	if err != nil {
+		return RunResult{}, fmt.Errorf("load Dream workflow run: %w", err)
+	}
+	var state runState
+	if len(run.Output) > 0 {
+		if err := json.Unmarshal(run.Output, &state); err != nil {
+			return RunResult{}, fmt.Errorf("decode Dream workflow state: %w", err)
+		}
+	}
+	if state.Dream == nil || state.Dream.EnterpriseID != expected.EnterpriseID || run.EnterpriseID != expected.EnterpriseID || state.Dream.DreamRunID != expected.DreamRunID || state.Dream.PolicyID != expected.PolicyID || state.Dream.PolicyVersion != expected.PolicyVersion || state.Dream.OrgUnitID != expected.OrgUnitID || run.WorkflowID != expected.WorkflowID || run.Version != expected.WorkflowVersion || !slices.Equal(state.Dream.EvidencePointerIDs, expected.EvidencePointerIDs) || !slices.Equal(state.Dream.ParentDreamRunIDs, expected.ParentDreamRunIDs) {
+		return RunResult{}, fmt.Errorf("workflow run is not bound to verified Dream context")
+	}
+	def, err := r.service.VersionDefinition(ctx, run.WorkflowID, run.Version)
+	if err != nil {
+		return RunResult{}, err
+	}
+	return RunResult{RunID: run.ID, Status: run.Status, EnterpriseID: run.EnterpriseID, Outputs: state.Outputs, AggregateNodeID: aggregateNodeID(def)}, nil
+}
+
+func (r *Runtime) runPublished(ctx context.Context, enterpriseID, workflowID string, version int32, input map[string]any, dream *VerifiedDreamContext) (RunResult, error) {
 	wf, err := r.store.GetWorkflow(ctx, workflowID)
 	if err != nil {
 		return RunResult{}, fmt.Errorf("load workflow %s: %w", workflowID, err)
@@ -63,8 +101,12 @@ func (r *Runtime) RunPublished(ctx context.Context, enterpriseID, workflowID str
 	if wf.EnterpriseID != enterpriseID {
 		return RunResult{}, ErrWorkflowForbidden
 	}
-	runID, status, runErr := r.StartRun(ctx, enterpriseID, workflowID, version, input)
-	result := RunResult{RunID: runID, Status: status, Outputs: map[string]map[string]any{}}
+	def, err := r.service.VersionDefinition(ctx, workflowID, version)
+	if err != nil {
+		return RunResult{}, err
+	}
+	runID, status, runErr := r.startRun(ctx, enterpriseID, workflowID, version, input, dream)
+	result := RunResult{RunID: runID, Status: status, EnterpriseID: enterpriseID, Outputs: map[string]map[string]any{}, AggregateNodeID: aggregateNodeID(def)}
 	if runID != "" {
 		run, err := r.store.GetWorkflowRun(ctx, runID)
 		if err != nil {
@@ -83,9 +125,26 @@ func (r *Runtime) RunPublished(ctx context.Context, enterpriseID, workflowID str
 	return result, runErr
 }
 
+func aggregateNodeID(def Definition) string {
+	var id string
+	for _, node := range def.Nodes {
+		if node.Type == sdkworkflow.NodeDreamAggregate {
+			if id != "" {
+				return ""
+			}
+			id = node.ID
+		}
+	}
+	return id
+}
+
 // StartRun creates a run bound to a published version and executes until
 // completion, failure, or a human.confirm pause.
 func (r *Runtime) StartRun(ctx context.Context, enterpriseID, workflowID string, version int32, input map[string]any) (string, string, error) {
+	return r.startRun(ctx, enterpriseID, workflowID, version, input, nil)
+}
+
+func (r *Runtime) startRun(ctx context.Context, enterpriseID, workflowID string, version int32, input map[string]any, dream *VerifiedDreamContext) (string, string, error) {
 	def, err := r.service.VersionDefinition(ctx, workflowID, version)
 	if err != nil {
 		return "", "", err
@@ -109,7 +168,7 @@ func (r *Runtime) StartRun(ctx context.Context, enterpriseID, workflowID string,
 		return "", "", fmt.Errorf("create run: %w", err)
 	}
 
-	state := runState{NextIndex: 0, Outputs: map[string]map[string]any{}, Input: input}
+	state := runState{NextIndex: 0, Outputs: map[string]map[string]any{}, Input: input, Dream: dream}
 	status, err := r.execute(ctx, runID, enterpriseID, def, order, state)
 	return runID, status, err
 }
@@ -173,7 +232,7 @@ func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def D
 	span.SetAttributes(attribute.String("run_id", runID), attribute.String("enterprise_id", enterpriseID), attribute.String("workflow_id", def.WorkflowID))
 	defer span.End()
 
-	runCtx := &RunContext{RunID: runID, EnterpriseID: enterpriseID, Input: state.Input, Outputs: state.Outputs}
+	runCtx := &RunContext{RunID: runID, EnterpriseID: enterpriseID, Input: state.Input, Outputs: state.Outputs, Dream: state.Dream}
 
 	for state.NextIndex < len(order) {
 		node := order[state.NextIndex]
@@ -215,6 +274,11 @@ func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def D
 
 	if err := r.setRunStatus(ctx, runID, RunSucceeded, &state); err != nil {
 		return "", err
+	}
+	if r.completionHook != nil {
+		if err := r.completionHook(ctx, RunResult{RunID: runID, EnterpriseID: enterpriseID, Status: RunSucceeded, Outputs: state.Outputs, AggregateNodeID: aggregateNodeID(def)}); err != nil {
+			return RunFailed, err
+		}
 	}
 	return RunSucceeded, nil
 }

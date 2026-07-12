@@ -11,6 +11,52 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bindDreamWorkflowRun = `-- name: BindDreamWorkflowRun :one
+UPDATE dream_runs SET workflow_run_id = $1
+WHERE enterprise_id = $2 AND id = $3
+  AND (workflow_run_id IS NULL OR workflow_run_id = $1)
+RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id
+`
+
+type BindDreamWorkflowRunParams struct {
+	WorkflowRunID pgtype.Text `json:"workflow_run_id"`
+	EnterpriseID  string      `json:"enterprise_id"`
+	RunID         string      `json:"run_id"`
+}
+
+func (q *Queries) BindDreamWorkflowRun(ctx context.Context, arg BindDreamWorkflowRunParams) (DreamRun, error) {
+	row := q.db.QueryRow(ctx, bindDreamWorkflowRun, arg.WorkflowRunID, arg.EnterpriseID, arg.RunID)
+	var i DreamRun
+	err := row.Scan(
+		&i.ID,
+		&i.PolicyID,
+		&i.Version,
+		&i.EnterpriseID,
+		&i.Status,
+		&i.WindowStart,
+		&i.WindowEnd,
+		&i.Error,
+		&i.CreatedAt,
+		&i.FinishedAt,
+		&i.OrgUnitID,
+		&i.PolicyVersion,
+		&i.WorkflowID,
+		&i.WorkflowVersion,
+		&i.Timezone,
+		&i.InputSnapshot,
+		&i.VisibilitySnapshot,
+		&i.ModelRoute,
+		&i.ModelVersion,
+		&i.Attempt,
+		&i.RerunOfRunID,
+		&i.Coverage,
+		&i.MissingInputs,
+		&i.IdempotencyKey,
+		&i.WorkflowRunID,
+	)
+	return i, err
+}
+
 const claimDreamRun = `-- name: ClaimDreamRun :execrows
 UPDATE dream_runs SET status = 'running' WHERE id = $1 AND status = 'pending'
 `
@@ -116,7 +162,7 @@ VALUES (
     $16, $17, $18,
     $19, $20, $21
 )
-RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key
+RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id
 `
 
 type CreateDreamRunParams struct {
@@ -193,6 +239,7 @@ func (q *Queries) CreateDreamRun(ctx context.Context, arg CreateDreamRunParams) 
 		&i.Coverage,
 		&i.MissingInputs,
 		&i.IdempotencyKey,
+		&i.WorkflowRunID,
 	)
 	return i, err
 }
@@ -223,7 +270,9 @@ func (q *Queries) CreateDreamRunLineage(ctx context.Context, arg CreateDreamRunL
 
 const createDreamSummary = `-- name: CreateDreamSummary :one
 INSERT INTO dream_summaries (id, run_id, enterprise_id, space_id, layer, summary_text, sealed_object_key, evidence_pointer_id, risk_signals, facts, themes, trends, todos)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+        COALESCE($9::jsonb, '[]'::jsonb), COALESCE($10::jsonb, '[]'::jsonb),
+        COALESCE($11::jsonb, '[]'::jsonb), COALESCE($12::jsonb, '[]'::jsonb), COALESCE($13::jsonb, '[]'::jsonb))
 RETURNING id, run_id, enterprise_id, space_id, layer, summary_text, sealed_object_key, evidence_pointer_id, risk_signals, created_at, facts, themes, trends, todos
 `
 
@@ -320,7 +369,7 @@ func (q *Queries) GetDreamPolicyVersion(ctx context.Context, arg GetDreamPolicyV
 }
 
 const getDreamRun = `-- name: GetDreamRun :one
-SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key FROM dream_runs WHERE id = $1
+SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id FROM dream_runs WHERE id = $1
 `
 
 func (q *Queries) GetDreamRun(ctx context.Context, id string) (DreamRun, error) {
@@ -351,12 +400,55 @@ func (q *Queries) GetDreamRun(ctx context.Context, id string) (DreamRun, error) 
 		&i.Coverage,
 		&i.MissingInputs,
 		&i.IdempotencyKey,
+		&i.WorkflowRunID,
+	)
+	return i, err
+}
+
+const getDreamRunByWorkflowRun = `-- name: GetDreamRunByWorkflowRun :one
+SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id FROM dream_runs WHERE enterprise_id = $1 AND workflow_run_id = $2
+`
+
+type GetDreamRunByWorkflowRunParams struct {
+	EnterpriseID  string      `json:"enterprise_id"`
+	WorkflowRunID pgtype.Text `json:"workflow_run_id"`
+}
+
+func (q *Queries) GetDreamRunByWorkflowRun(ctx context.Context, arg GetDreamRunByWorkflowRunParams) (DreamRun, error) {
+	row := q.db.QueryRow(ctx, getDreamRunByWorkflowRun, arg.EnterpriseID, arg.WorkflowRunID)
+	var i DreamRun
+	err := row.Scan(
+		&i.ID,
+		&i.PolicyID,
+		&i.Version,
+		&i.EnterpriseID,
+		&i.Status,
+		&i.WindowStart,
+		&i.WindowEnd,
+		&i.Error,
+		&i.CreatedAt,
+		&i.FinishedAt,
+		&i.OrgUnitID,
+		&i.PolicyVersion,
+		&i.WorkflowID,
+		&i.WorkflowVersion,
+		&i.Timezone,
+		&i.InputSnapshot,
+		&i.VisibilitySnapshot,
+		&i.ModelRoute,
+		&i.ModelVersion,
+		&i.Attempt,
+		&i.RerunOfRunID,
+		&i.Coverage,
+		&i.MissingInputs,
+		&i.IdempotencyKey,
+		&i.WorkflowRunID,
 	)
 	return i, err
 }
 
 const getDreamRunView = `-- name: GetDreamRunView :one
-SELECT runs.id, runs.policy_id, runs.version, runs.enterprise_id, runs.status, runs.window_start, runs.window_end, runs.error, runs.created_at, runs.finished_at, runs.org_unit_id, runs.policy_version, runs.workflow_id, runs.workflow_version, runs.timezone, runs.input_snapshot, runs.visibility_snapshot, runs.model_route, runs.model_version, runs.attempt, runs.rerun_of_run_id, runs.coverage, runs.missing_inputs, runs.idempotency_key,
+SELECT runs.id, runs.policy_id, runs.version, runs.enterprise_id, runs.status, runs.window_start, runs.window_end, runs.error, runs.created_at, runs.finished_at, runs.org_unit_id, runs.policy_version, runs.workflow_id, runs.workflow_version, runs.timezone, runs.input_snapshot, runs.visibility_snapshot, runs.model_route, runs.model_version, runs.attempt, runs.rerun_of_run_id, runs.coverage, runs.missing_inputs, runs.idempotency_key, runs.workflow_run_id,
        ARRAY(
            SELECT lineage.parent_run_id
            FROM dream_run_lineage AS lineage
@@ -415,6 +507,7 @@ type GetDreamRunViewRow struct {
 	Coverage           []byte             `json:"coverage"`
 	MissingInputs      []byte             `json:"missing_inputs"`
 	IdempotencyKey     string             `json:"idempotency_key"`
+	WorkflowRunID      pgtype.Text        `json:"workflow_run_id"`
 	ParentRunIds       []string           `json:"parent_run_ids"`
 	InputCount         int64              `json:"input_count"`
 	DisplaySummary     string             `json:"display_summary"`
@@ -454,6 +547,7 @@ func (q *Queries) GetDreamRunView(ctx context.Context, arg GetDreamRunViewParams
 		&i.Coverage,
 		&i.MissingInputs,
 		&i.IdempotencyKey,
+		&i.WorkflowRunID,
 		&i.ParentRunIds,
 		&i.InputCount,
 		&i.DisplaySummary,
@@ -554,7 +648,7 @@ func (q *Queries) GetLatestDreamPolicyVersion(ctx context.Context, policyID stri
 }
 
 const getLatestDreamRunForPolicy = `-- name: GetLatestDreamRunForPolicy :one
-SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key FROM dream_runs WHERE policy_id = $1 ORDER BY window_end DESC LIMIT 1
+SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id FROM dream_runs WHERE policy_id = $1 ORDER BY window_end DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestDreamRunForPolicy(ctx context.Context, policyID string) (DreamRun, error) {
@@ -585,6 +679,7 @@ func (q *Queries) GetLatestDreamRunForPolicy(ctx context.Context, policyID strin
 		&i.Coverage,
 		&i.MissingInputs,
 		&i.IdempotencyKey,
+		&i.WorkflowRunID,
 	)
 	return i, err
 }
@@ -608,6 +703,7 @@ func (q *Queries) InsertDreamEvidencePointer(ctx context.Context, arg InsertDrea
 const insertDreamInput = `-- name: InsertDreamInput :exec
 INSERT INTO dream_inputs (run_id, source_type, source_id)
 VALUES ($1, $2, $3)
+ON CONFLICT (run_id, source_type, source_id) DO NOTHING
 `
 
 type InsertDreamInputParams struct {
@@ -675,7 +771,7 @@ func (q *Queries) ListChildSpaces(ctx context.Context, arg ListChildSpacesParams
 }
 
 const listCompletedChildDreamRuns = `-- name: ListCompletedChildDreamRuns :many
-SELECT runs.id, runs.policy_id, runs.version, runs.enterprise_id, runs.status, runs.window_start, runs.window_end, runs.error, runs.created_at, runs.finished_at, runs.org_unit_id, runs.policy_version, runs.workflow_id, runs.workflow_version, runs.timezone, runs.input_snapshot, runs.visibility_snapshot, runs.model_route, runs.model_version, runs.attempt, runs.rerun_of_run_id, runs.coverage, runs.missing_inputs, runs.idempotency_key
+SELECT runs.id, runs.policy_id, runs.version, runs.enterprise_id, runs.status, runs.window_start, runs.window_end, runs.error, runs.created_at, runs.finished_at, runs.org_unit_id, runs.policy_version, runs.workflow_id, runs.workflow_version, runs.timezone, runs.input_snapshot, runs.visibility_snapshot, runs.model_route, runs.model_version, runs.attempt, runs.rerun_of_run_id, runs.coverage, runs.missing_inputs, runs.idempotency_key, runs.workflow_run_id
 FROM dream_runs AS runs
 JOIN org_scope_bindings AS bindings
   ON bindings.enterprise_id = runs.enterprise_id
@@ -747,6 +843,7 @@ func (q *Queries) ListCompletedChildDreamRuns(ctx context.Context, arg ListCompl
 			&i.Coverage,
 			&i.MissingInputs,
 			&i.IdempotencyKey,
+			&i.WorkflowRunID,
 		); err != nil {
 			return nil, err
 		}
@@ -759,7 +856,7 @@ func (q *Queries) ListCompletedChildDreamRuns(ctx context.Context, arg ListCompl
 }
 
 const listDreamCompletedChildRuns = `-- name: ListDreamCompletedChildRuns :many
-SELECT DISTINCT runs.id, runs.policy_id, runs.version, runs.enterprise_id, runs.status, runs.window_start, runs.window_end, runs.error, runs.created_at, runs.finished_at, runs.org_unit_id, runs.policy_version, runs.workflow_id, runs.workflow_version, runs.timezone, runs.input_snapshot, runs.visibility_snapshot, runs.model_route, runs.model_version, runs.attempt, runs.rerun_of_run_id, runs.coverage, runs.missing_inputs, runs.idempotency_key,
+SELECT DISTINCT runs.id, runs.policy_id, runs.version, runs.enterprise_id, runs.status, runs.window_start, runs.window_end, runs.error, runs.created_at, runs.finished_at, runs.org_unit_id, runs.policy_version, runs.workflow_id, runs.workflow_version, runs.timezone, runs.input_snapshot, runs.visibility_snapshot, runs.model_route, runs.model_version, runs.attempt, runs.rerun_of_run_id, runs.coverage, runs.missing_inputs, runs.idempotency_key, runs.workflow_run_id,
        child_space.id::text AS child_space_id,
        child_space.org_scope::text AS child_org_scope,
        parent_space.id::text AS parent_space_id,
@@ -825,6 +922,7 @@ type ListDreamCompletedChildRunsRow struct {
 	Coverage           []byte             `json:"coverage"`
 	MissingInputs      []byte             `json:"missing_inputs"`
 	IdempotencyKey     string             `json:"idempotency_key"`
+	WorkflowRunID      pgtype.Text        `json:"workflow_run_id"`
 	ChildSpaceID       string             `json:"child_space_id"`
 	ChildOrgScope      string             `json:"child_org_scope"`
 	ParentSpaceID      string             `json:"parent_space_id"`
@@ -874,6 +972,7 @@ func (q *Queries) ListDreamCompletedChildRuns(ctx context.Context, arg ListDream
 			&i.Coverage,
 			&i.MissingInputs,
 			&i.IdempotencyKey,
+			&i.WorkflowRunID,
 			&i.ChildSpaceID,
 			&i.ChildOrgScope,
 			&i.ParentSpaceID,
@@ -977,7 +1076,7 @@ func (q *Queries) ListDreamImmediateChildren(ctx context.Context, arg ListDreamI
 }
 
 const listDreamRunsByOrg = `-- name: ListDreamRunsByOrg :many
-SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key
+SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id
 FROM dream_runs
 WHERE enterprise_id = $1
   AND org_unit_id = $2
@@ -1025,6 +1124,7 @@ func (q *Queries) ListDreamRunsByOrg(ctx context.Context, arg ListDreamRunsByOrg
 			&i.Coverage,
 			&i.MissingInputs,
 			&i.IdempotencyKey,
+			&i.WorkflowRunID,
 		); err != nil {
 			return nil, err
 		}
@@ -1136,6 +1236,51 @@ func (q *Queries) PublishDreamPolicyVersion(ctx context.Context, arg PublishDrea
 		&i.Version,
 		&i.Definition,
 		&i.PublishedAt,
+	)
+	return i, err
+}
+
+const requeueDreamRunAfterWorkflow = `-- name: RequeueDreamRunAfterWorkflow :one
+UPDATE dream_runs SET status = 'pending', error = ''
+WHERE enterprise_id = $1 AND workflow_run_id = $2
+  AND status = 'waiting_confirmation'
+RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id
+`
+
+type RequeueDreamRunAfterWorkflowParams struct {
+	EnterpriseID  string      `json:"enterprise_id"`
+	WorkflowRunID pgtype.Text `json:"workflow_run_id"`
+}
+
+func (q *Queries) RequeueDreamRunAfterWorkflow(ctx context.Context, arg RequeueDreamRunAfterWorkflowParams) (DreamRun, error) {
+	row := q.db.QueryRow(ctx, requeueDreamRunAfterWorkflow, arg.EnterpriseID, arg.WorkflowRunID)
+	var i DreamRun
+	err := row.Scan(
+		&i.ID,
+		&i.PolicyID,
+		&i.Version,
+		&i.EnterpriseID,
+		&i.Status,
+		&i.WindowStart,
+		&i.WindowEnd,
+		&i.Error,
+		&i.CreatedAt,
+		&i.FinishedAt,
+		&i.OrgUnitID,
+		&i.PolicyVersion,
+		&i.WorkflowID,
+		&i.WorkflowVersion,
+		&i.Timezone,
+		&i.InputSnapshot,
+		&i.VisibilitySnapshot,
+		&i.ModelRoute,
+		&i.ModelVersion,
+		&i.Attempt,
+		&i.RerunOfRunID,
+		&i.Coverage,
+		&i.MissingInputs,
+		&i.IdempotencyKey,
+		&i.WorkflowRunID,
 	)
 	return i, err
 }

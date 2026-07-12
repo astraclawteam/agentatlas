@@ -208,6 +208,7 @@ func run() error {
 	workflowRuntime := workflow.NewRuntime(queries, workflowSvc, registry)
 	workflowRuntime.SetMetrics(metrics)
 	dreamRunner := dream.NewRunner(queries, objects, dream.NewPolicyService(queries), runner, dream.NewOrchestrator(workflowRuntime))
+	workflowRuntime.SetCompletionHook(dreamRunner.WorkflowCompleted)
 	dreamRunner.SetMetrics(metrics)
 	runJobs := workflow.NewRunJobHandler(workflowRuntime, queries, runner)
 

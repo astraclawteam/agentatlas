@@ -343,6 +343,9 @@ func NewRegistryWithServices(e Executors) Registry {
 
 	r.Register(sdkworkflow.NodeDreamAggregate, executorFunc(
 		func(ctx context.Context, node sdkworkflow.Node, run *RunContext) (map[string]any, error) {
+			if run.Dream == nil || run.Dream.WorkflowID == "" || run.Dream.WorkflowVersion < 1 {
+				return nil, fmt.Errorf("node %s: verified Dream execution context required", node.ID)
+			}
 			if err := requireDep("dream aggregator", e.Dream != nil); err != nil {
 				return nil, err
 			}
@@ -357,11 +360,10 @@ func NewRegistryWithServices(e Executors) Registry {
 			if out == nil {
 				return nil, fmt.Errorf("node %s: dream aggregator returned nil output", node.ID)
 			}
-			if _, ok := out["model_route"]; !ok {
-				out["model_route"] = fmt.Sprintf("workflow/%v", run.Input["workflow_id"])
-			}
-			if _, ok := out["model_version"]; !ok {
-				out["model_version"] = fmt.Sprintf("v%v", run.Input["workflow_version"])
+			out["model_route"] = "workflow/" + run.Dream.WorkflowID
+			out["model_version"] = fmt.Sprintf("v%d", run.Dream.WorkflowVersion)
+			if err := validateDreamAggregateOutput(out); err != nil {
+				return nil, fmt.Errorf("node %s: %w", node.ID, err)
 			}
 			return out, nil
 		}))
@@ -402,11 +404,43 @@ func NewRegistryWithServices(e Executors) Registry {
 	return r
 }
 
+func validateDreamAggregateOutput(out map[string]any) error {
+	for key, max := range map[string]int{"display": 4000, "retrieval": 4000, "sealed_detail": 100000, "source": 128, "model_route": 128, "model_version": 128} {
+		value, ok := out[key].(string)
+		if !ok || strings.TrimSpace(value) == "" || len([]rune(value)) > max {
+			return fmt.Errorf("Dream output %s is missing or exceeds bound %d", key, max)
+		}
+	}
+	for _, key := range []string{"facts", "themes", "trends", "risks", "todos"} {
+		values, ok := out[key].([]any)
+		if !ok || values == nil || len(values) > 500 {
+			return fmt.Errorf("Dream output %s must be a non-null bounded collection", key)
+		}
+		for _, value := range values {
+			item, ok := value.(map[string]any)
+			if !ok {
+				return fmt.Errorf("Dream output %s contains malformed signal", key)
+			}
+			for field, max := range map[string]int{"id": 128, "title": 200, "detail": 2000, "evidence_pointer_id": 256} {
+				text, ok := item[field].(string)
+				if !ok || strings.TrimSpace(text) == "" || len([]rune(text)) > max {
+					return fmt.Errorf("Dream output %s signal has invalid %s", key, field)
+				}
+			}
+			severity, _ := item["severity"].(string)
+			if severity != "info" && severity != "warning" && severity != "critical" {
+				return fmt.Errorf("Dream output %s signal has invalid severity", key)
+			}
+		}
+	}
+	return nil
+}
+
 func traceRecord(node sdkworkflow.Node, run *RunContext) (trace.Record, error) {
 	ticketID, ok := resolveString(node, run, "ticket_id")
 	if !ok {
-		if dreamRunID, dream := run.Input["dream_run_id"].(string); dream && dreamRunID != "" {
-			ticketID = "dream-run/" + dreamRunID
+		if run.Dream != nil && run.Dream.DreamRunID != "" {
+			ticketID = "dream-run/" + run.Dream.DreamRunID
 		} else {
 			return trace.Record{}, fmt.Errorf("node %s: ticket_id required for trace.append", node.ID)
 		}
@@ -417,18 +451,21 @@ func traceRecord(node sdkworkflow.Node, run *RunContext) (trace.Record, error) {
 	}
 	question, _ := resolveString(node, run, "question")
 	answer, _ := resolveString(node, run, "answer")
-	evidence := append(gatherStrings(run, "evidence_pointer_id", "evidence_pointer_ids"), inputStrings(run.Input["evidence_pointer_ids"])...)
+	evidence := gatherStrings(run, "evidence_pointer_id", "evidence_pointer_ids")
+	if run.Dream != nil {
+		evidence = append(evidence, run.Dream.EvidencePointerIDs...)
+	}
 	record := trace.Record{
 		EnterpriseID: run.EnterpriseID, CaseTicketID: ticketID, ActorUserID: actor,
 		Question: question, SanitizedQuestionSummary: question, WorkflowRunID: run.RunID,
 		EvidencePointerIDs: evidence, ReadGrantIDs: gatherStrings(run, "grant_id"),
 		ModelRoute: firstString(run, "model_route"), Answer: answer,
 	}
-	if dreamRunID, dream := run.Input["dream_run_id"].(string); dream && dreamRunID != "" {
+	if run.Dream != nil && run.Dream.DreamRunID != "" {
 		record.Steps = []trace.Step{{Kind: "dream.lineage", Detail: map[string]any{
-			"dream_run_id": dreamRunID, "dream_policy_id": run.Input["dream_policy_id"],
-			"dream_policy_version": run.Input["dream_policy_version"], "workflow_id": run.Input["workflow_id"],
-			"workflow_version": run.Input["workflow_version"], "parent_dream_run_ids": inputStrings(run.Input["parent_dream_run_ids"]),
+			"dream_run_id": run.Dream.DreamRunID, "dream_policy_id": run.Dream.PolicyID,
+			"dream_policy_version": run.Dream.PolicyVersion, "workflow_id": run.Dream.WorkflowID,
+			"workflow_version": run.Dream.WorkflowVersion, "parent_dream_run_ids": run.Dream.ParentDreamRunIDs,
 		}}}
 	}
 	return record, nil

@@ -7,6 +7,7 @@ package integration
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -99,14 +100,15 @@ func TestDreamJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	dreamWorkflowID := newID("wf_dream")
 	_, err = wfSvc.CreateDraft(ctx, entID, "Published Dream", "integration", workflow.Definition{
-		WorkflowID: "legacy-direct-dream", Kind: sdkworkflow.KindDream, RiskLevel: sdkworkflow.RiskLow,
-		Nodes: []sdkworkflow.Node{{ID: "aggregate", Type: sdkworkflow.NodeDreamAggregate}}, Edges: []sdkworkflow.Edge{},
+		WorkflowID: dreamWorkflowID, Kind: sdkworkflow.KindDream, RiskLevel: sdkworkflow.RiskLow,
+		Nodes: []sdkworkflow.Node{{ID: "confirm", Type: sdkworkflow.NodeHumanConfirm}, {ID: "aggregate", Type: sdkworkflow.NodeDreamAggregate}}, Edges: []sdkworkflow.Edge{{From: "confirm", To: "aggregate"}},
 	})
 	if err != nil {
 		t.Fatalf("Dream workflow: %v", err)
 	}
-	if _, err := wfSvc.Publish(ctx, entID, "legacy-direct-dream", "integration"); err != nil {
+	if _, err := wfSvc.Publish(ctx, entID, dreamWorkflowID, "integration"); err != nil {
 		t.Fatalf("Dream workflow version: %v", err)
 	}
 
@@ -115,7 +117,7 @@ func TestDreamJob(t *testing.T) {
 	policyID, err := policySvc.CreateDraft(ctx, entID, dream.Policy(sdkdream.DreamPolicyDefinition{
 		OrgUnitID: "project_group:pg1", Timezone: "UTC", Schedule: "0 22 * * *",
 		InputSources:      []sdkdream.Source{sdkdream.SourceWorkBrief},
-		Workflow:          sdkdream.WorkflowRef{ID: "legacy-direct-dream", Version: 1},
+		Workflow:          sdkdream.WorkflowRef{ID: dreamWorkflowID, Version: 1},
 		VisibilityLevel:   sdkdream.VisibilityMembers,
 		MaskingRules:      []string{`1[3-9]\d{9}`},
 		RiskSignalRules:   []string{`风险[:：]\S+`},
@@ -135,7 +137,11 @@ func TestDreamJob(t *testing.T) {
 	synth := dream.NewSynthesizer(nil)
 	wfRuntime := workflow.NewRuntime(q, wfSvc, workflow.NewRegistryWithServices(workflow.Executors{Dream: synth.AggregateWorkflowInput}))
 	dreamRunner := dream.NewRunner(q, objects, policySvc, runner, dream.NewOrchestrator(wfRuntime))
+	wfRuntime.SetCompletionHook(dreamRunner.WorkflowCompleted)
 	if err := dreamRunner.RegisterJobHandler(); err != nil {
+		t.Fatal(err)
+	}
+	if err := workflow.NewRunJobHandler(wfRuntime, q, runner).RegisterJobHandler(); err != nil {
 		t.Fatal(err)
 	}
 	if err := runner.Start(ctx); err != nil {
@@ -146,6 +152,73 @@ func TestDreamJob(t *testing.T) {
 	n, err := scheduler.Tick(ctx, entID, now)
 	if err != nil || n != 1 {
 		t.Fatalf("tick dispatched %d err=%v", n, err)
+	}
+	dreamRun, err := q.GetLatestDreamRunForPolicy(ctx, policyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dreamRun.Status != "waiting_confirmation" || !dreamRun.WorkflowRunID.Valid {
+		t.Fatalf("paused Dream=%+v", dreamRun)
+	}
+	if sums, _ := q.ListDreamSummariesBySpace(ctx, db.ListDreamSummariesBySpaceParams{SpaceID: spaceID, Layer: "display", Limit: 5}); len(sums) != 0 {
+		t.Fatal("paused Dream exposed output")
+	}
+	status, err := wfRuntime.Resume(ctx, dreamRun.WorkflowRunID.String, entID, true, "approved")
+	if err != nil || status != workflow.RunPending {
+		t.Fatalf("resume=%s err=%v", status, err)
+	}
+	_, err = pool.Exec(ctx, `CREATE OR REPLACE FUNCTION task4_fail_retrieval() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.layer='retrieval' THEN RAISE EXCEPTION 'task4 injected mid-transaction failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER task4_fail_retrieval BEFORE INSERT ON dream_summaries FOR EACH ROW EXECUTE FUNCTION task4_fail_retrieval()`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Enqueue(ctx, workflow.JobTypeRun, dreamRun.WorkflowRunID.String); err != nil {
+		t.Fatal(err)
+	}
+	dreamRun, err = q.GetDreamRun(ctx, dreamRun.ID)
+	if err != nil || dreamRun.Status != "failed" {
+		t.Fatalf("injected Dream=%+v err=%v", dreamRun, err)
+	}
+	sealedKey := fmt.Sprintf("dreams/%s/%s.md", entID, dreamRun.ID)
+	if _, err := objects.Get(ctx, sealedKey); err != nil {
+		t.Fatalf("staged sealed object must remain retryable: %v", err)
+	}
+	for name, query := range map[string]string{
+		"summaries": `select count(*) from dream_summaries where run_id=$1 and $2::text=$2::text and $3::text=$3::text`,
+		"links":     `select count(*) from dream_evidence_pointers l join dream_summaries s on s.id=l.dream_summary_id where s.run_id=$1 and $2::text=$2::text and $3::text=$3::text`,
+		"indexes":   `select count(*) from index_jobs where enterprise_id=$2 and source_type='dream_summary' and $1::text=$1::text and $3::text=$3::text`,
+		"timeline":  `select count(*) from timeline_nodes where enterprise_id=$2 and source_type='dream_summary' and $1::text=$1::text and $3::text=$3::text`,
+		"pointer":   `select count(*) from evidence_pointers where enterprise_id=$2 and resource_ref=$3 and $1::text=$1::text`,
+	} {
+		var count int
+		if err := pool.QueryRow(ctx, query, dreamRun.ID, entID, sealedKey).Scan(&count); err != nil {
+			t.Fatalf("%s count: %v", name, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s visible after rollback: %d", name, count)
+		}
+	}
+	if _, err := pool.Exec(ctx, `DROP TRIGGER task4_fail_retrieval ON dream_summaries; DROP FUNCTION task4_fail_retrieval()`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.UpdateDreamRunStatus(ctx, db.UpdateDreamRunStatusParams{ID: dreamRun.ID, Status: "pending", Error: ""}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Enqueue(ctx, dream.JobTypeDream, dreamRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	dreamRun, err = q.GetDreamRun(ctx, dreamRun.ID)
+	if err != nil || dreamRun.Status != "succeeded" {
+		t.Fatalf("idempotent retry Dream=%+v err=%v", dreamRun, err)
+	}
+	var workflowRuns int
+	if err := pool.QueryRow(ctx, `select count(*) from workflow_runs where id=$1`, dreamRun.WorkflowRunID).Scan(&workflowRuns); err != nil || workflowRuns != 1 {
+		t.Fatalf("workflow run count=%d err=%v", workflowRuns, err)
+	}
+	if got, err := objects.Get(ctx, sealedKey); err != nil || len(got) == 0 {
+		t.Fatalf("sealed retry object incoherent: %v", err)
+	}
+	if dreamRun.WorkflowRunID.String == "" {
+		t.Fatal("workflow binding lost")
 	}
 	// idempotent double tick
 	n2, err := scheduler.Tick(ctx, entID, now)

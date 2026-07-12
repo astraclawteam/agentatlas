@@ -220,6 +220,7 @@ type DreamRun struct {
 	Coverage           []byte             `json:"coverage"`
 	MissingInputs      []byte             `json:"missing_inputs"`
 	IdempotencyKey     string             `json:"idempotency_key"`
+	WorkflowRunID      pgtype.Text        `json:"workflow_run_id"`
 }
 
 type DreamRunAnnotation struct {

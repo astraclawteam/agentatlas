@@ -15,6 +15,7 @@ import (
 	"github.com/robfig/cron/v3"
 
 	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
+	sdkworkflow "github.com/astraclawteam/agentatlas/sdk/go/workflow"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	publicschemas "github.com/astraclawteam/agentatlas/services/agentatlas/schemas"
 )
@@ -184,8 +185,27 @@ func (s *PolicyService) Publish(ctx context.Context, policyID string) (int32, er
 	if err != nil {
 		return 0, fmt.Errorf("load policy: %w", err)
 	}
-	if _, err := decodePolicy(row.Draft); err != nil {
+	p, err := decodePolicy(row.Draft)
+	if err != nil {
 		return 0, fmt.Errorf("decode draft: %w", err)
+	}
+	wfStore, ok := s.store.(interface {
+		GetWorkflow(context.Context, string) (db.Workflow, error)
+		GetWorkflowVersion(context.Context, db.GetWorkflowVersionParams) (db.WorkflowVersion, error)
+	})
+	if !ok {
+		return 0, fmt.Errorf("policy store cannot validate published workflows")
+	}
+	wf, err := wfStore.GetWorkflow(ctx, p.Workflow.ID)
+	if err != nil {
+		return 0, fmt.Errorf("load Dream workflow: %w", err)
+	}
+	versionRow, err := wfStore.GetWorkflowVersion(ctx, db.GetWorkflowVersionParams{WorkflowID: p.Workflow.ID, Version: p.Workflow.Version})
+	if err != nil {
+		return 0, fmt.Errorf("load Dream workflow version: %w", err)
+	}
+	if err := validatePublishedDreamWorkflow(row.EnterpriseID, p, wf, versionRow); err != nil {
+		return 0, err
 	}
 	next := int32(1)
 	if latest, err := s.store.GetLatestDreamPolicyVersion(ctx, policyID); err == nil {
@@ -202,6 +222,32 @@ func (s *PolicyService) Publish(ctx context.Context, policyID string) (int32, er
 		return 0, err
 	}
 	return next, nil
+}
+
+func validatePublishedDreamWorkflow(enterpriseID string, p Policy, wf db.Workflow, version db.WorkflowVersion) error {
+	if wf.ID != p.Workflow.ID || wf.EnterpriseID != enterpriseID || wf.Kind != string(sdkworkflow.KindDream) {
+		return fmt.Errorf("Dream policy workflow must be same-enterprise kind dream")
+	}
+	if version.WorkflowID != p.Workflow.ID || version.Version != p.Workflow.Version {
+		return fmt.Errorf("Dream policy workflow version mismatch")
+	}
+	var def sdkworkflow.Workflow
+	if err := json.Unmarshal(version.Definition, &def); err != nil {
+		return fmt.Errorf("decode Dream workflow: %w", err)
+	}
+	if def.WorkflowID != p.Workflow.ID || def.Version != int(p.Workflow.Version) || def.Kind != sdkworkflow.KindDream {
+		return fmt.Errorf("published Dream workflow definition mismatch")
+	}
+	count := 0
+	for _, node := range def.Nodes {
+		if node.Type == sdkworkflow.NodeDreamAggregate {
+			count++
+		}
+	}
+	if count != 1 {
+		return fmt.Errorf("published Dream workflow requires exactly one dream.aggregate node")
+	}
+	return nil
 }
 
 // LoadPublished returns the policy definition of the newest published version.

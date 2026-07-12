@@ -49,12 +49,13 @@ type DreamOutput struct {
 }
 
 type DreamExecution struct {
-	EnterpriseID  string
-	DreamRunID    string
-	PolicyID      string
-	PolicyVersion int32
-	Workflow      sdkdream.WorkflowRef
-	Input         WorkflowInput
+	EnterpriseID          string
+	DreamRunID            string
+	PolicyID              string
+	PolicyVersion         int32
+	Workflow              sdkdream.WorkflowRef
+	Input                 WorkflowInput
+	ExistingWorkflowRunID string
 }
 
 type ExecutionResult struct {
@@ -64,7 +65,8 @@ type ExecutionResult struct {
 }
 
 type publishedRuntime interface {
-	RunPublished(context.Context, string, string, int32, map[string]any) (workflow.RunResult, error)
+	RunDreamPublished(context.Context, string, string, int32, map[string]any, workflow.VerifiedDreamContext) (workflow.RunResult, error)
+	DreamResult(context.Context, string, workflow.VerifiedDreamContext) (workflow.RunResult, error)
 }
 
 type Orchestrator struct{ runtime publishedRuntime }
@@ -88,7 +90,14 @@ func (o *Orchestrator) Run(ctx context.Context, execution DreamExecution) (Execu
 	if err != nil {
 		return ExecutionResult{}, err
 	}
-	result, err := o.runtime.RunPublished(ctx, execution.EnterpriseID, execution.Workflow.ID, execution.Workflow.Version, input)
+	evidence, parents := executionLineage(execution.Input.Inputs)
+	verified := workflow.VerifiedDreamContext{EnterpriseID: execution.EnterpriseID, DreamRunID: execution.DreamRunID, PolicyID: execution.PolicyID, PolicyVersion: execution.PolicyVersion, WorkflowID: execution.Workflow.ID, WorkflowVersion: execution.Workflow.Version, OrgUnitID: execution.Input.OrgUnitID, EvidencePointerIDs: evidence, ParentDreamRunIDs: parents}
+	var result workflow.RunResult
+	if execution.ExistingWorkflowRunID != "" {
+		result, err = o.runtime.DreamResult(ctx, execution.ExistingWorkflowRunID, verified)
+	} else {
+		result, err = o.runtime.RunDreamPublished(ctx, execution.EnterpriseID, execution.Workflow.ID, execution.Workflow.Version, input, verified)
+	}
 	out := ExecutionResult{WorkflowRunID: result.RunID, Status: result.Status}
 	if err != nil {
 		return out, fmt.Errorf("run Dream workflow %s@%d: %w", execution.Workflow.ID, execution.Workflow.Version, err)
@@ -99,7 +108,10 @@ func (o *Orchestrator) Run(ctx context.Context, execution DreamExecution) (Execu
 	if result.Status != workflow.RunSucceeded {
 		return out, fmt.Errorf("Dream workflow %s finished with status %q", result.RunID, result.Status)
 	}
-	dreamOut, err := decodeDreamOutput(result.Outputs)
+	if result.AggregateNodeID == "" {
+		return out, fmt.Errorf("Dream workflow has no verified aggregate node")
+	}
+	dreamOut, err := decodeDreamOutput(result.Outputs, result.AggregateNodeID)
 	if err != nil {
 		return out, err
 	}
@@ -116,14 +128,13 @@ func workflowInputMap(execution DreamExecution) (map[string]any, error) {
 	if err := json.Unmarshal(raw, &input); err != nil {
 		return nil, fmt.Errorf("decode Dream workflow input: %w", err)
 	}
-	input["dream_run_id"] = execution.DreamRunID
-	input["dream_policy_id"] = execution.PolicyID
-	input["dream_policy_version"] = execution.PolicyVersion
-	input["workflow_id"] = execution.Workflow.ID
-	input["workflow_version"] = execution.Workflow.Version
-	evidence := make([]string, 0, len(execution.Input.Inputs))
-	parents := make([]string, 0, len(execution.Input.Inputs))
-	for _, item := range execution.Input.Inputs {
+	return input, nil
+}
+
+func executionLineage(inputs []ResolvedInput) ([]string, []string) {
+	evidence := make([]string, 0, len(inputs))
+	parents := make([]string, 0, len(inputs))
+	for _, item := range inputs {
 		if item.EvidencePointerID != "" {
 			evidence = append(evidence, item.EvidencePointerID)
 		}
@@ -131,9 +142,7 @@ func workflowInputMap(execution DreamExecution) (map[string]any, error) {
 			parents = append(parents, item.ParentRunID)
 		}
 	}
-	input["evidence_pointer_ids"] = evidence
-	input["parent_dream_run_ids"] = parents
-	return input, nil
+	return evidence, parents
 }
 
 func validateWorkflowInput(input WorkflowInput) error {
@@ -167,41 +176,38 @@ func validateWorkflowInput(input WorkflowInput) error {
 	return nil
 }
 
-func decodeDreamOutput(outputs map[string]map[string]any) (DreamOutput, error) {
-	var candidates []DreamOutput
-	for _, nodeOut := range outputs {
-		if _, ok := nodeOut["display"]; !ok {
-			continue
-		}
-		raw, err := json.Marshal(nodeOut)
-		if err != nil {
-			return DreamOutput{}, fmt.Errorf("encode Dream workflow output: %w", err)
-		}
-		var out DreamOutput
-		decoder := json.NewDecoder(bytes.NewReader(raw))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&out); err != nil {
-			return DreamOutput{}, fmt.Errorf("malformed Dream workflow output: %w", err)
-		}
-		if err := validateDreamOutput(out); err != nil {
-			return DreamOutput{}, err
-		}
-		candidates = append(candidates, out)
+func decodeDreamOutput(outputs map[string]map[string]any, aggregateNodeID string) (DreamOutput, error) {
+	nodeOut, ok := outputs[aggregateNodeID]
+	if !ok {
+		return DreamOutput{}, fmt.Errorf("verified Dream aggregate output %q missing", aggregateNodeID)
 	}
-	if len(candidates) != 1 {
-		return DreamOutput{}, fmt.Errorf("Dream workflow must produce exactly one typed output, got %d", len(candidates))
+	raw, err := json.Marshal(nodeOut)
+	if err != nil {
+		return DreamOutput{}, fmt.Errorf("encode Dream workflow output: %w", err)
 	}
-	return candidates[0], nil
+	var out DreamOutput
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&out); err != nil {
+		return DreamOutput{}, fmt.Errorf("malformed Dream workflow output: %w", err)
+	}
+	if err := validateDreamOutput(out); err != nil {
+		return DreamOutput{}, err
+	}
+	return out, nil
 }
 
 func validateDreamOutput(out DreamOutput) error {
 	if strings.TrimSpace(out.Display) == "" || strings.TrimSpace(out.Retrieval) == "" || strings.TrimSpace(out.SealedDetail) == "" || strings.TrimSpace(out.Source) == "" || strings.TrimSpace(out.ModelRoute) == "" || strings.TrimSpace(out.ModelVersion) == "" {
 		return fmt.Errorf("Dream workflow output is missing required typed fields")
 	}
-	if len([]rune(out.Display)) > maxDreamDisplayRunes || len([]rune(out.Retrieval)) > maxDreamRetrievalRunes || len([]rune(out.SealedDetail)) > maxDreamSealedRunes {
+	if len([]rune(out.Display)) > 4000 || len([]rune(out.Retrieval)) > 4000 || len([]rune(out.SealedDetail)) > maxDreamSealedRunes {
 		return fmt.Errorf("Dream workflow output text exceeds bound")
 	}
 	for _, group := range [][]StructuredSignal{out.Facts, out.Themes, out.Trends, out.Risks, out.Todos} {
+		if group == nil {
+			return fmt.Errorf("Dream workflow output collections must be non-null")
+		}
 		if len(group) > maxDreamSignals {
 			return fmt.Errorf("Dream workflow output signals exceed bound %d", maxDreamSignals)
 		}
