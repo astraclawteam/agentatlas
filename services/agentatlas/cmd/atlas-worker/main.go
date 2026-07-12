@@ -231,6 +231,23 @@ func run() error {
 	if err := w.Start(ctx); err != nil {
 		return err
 	}
+	if err := dreamRunner.ReconcileWorkflowLifecycle(ctx); err != nil {
+		logger.Warn("initial Dream workflow lifecycle reconciliation", zap.Error(err))
+	}
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := dreamRunner.ReconcileWorkflowLifecycle(ctx); err != nil {
+					logger.Warn("Dream workflow lifecycle reconciliation", zap.Error(err))
+				}
+			}
+		}
+	}()
 
 	// Dream scheduling: the worker ticks every published policy's cron window
 	// across all enterprises (ATLAS_DREAM_TICK_SECONDS, default 60; 0 = off).

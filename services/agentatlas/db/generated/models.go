@@ -258,6 +258,20 @@ type DreamSummary struct {
 	Todos             []byte             `json:"todos"`
 }
 
+type DreamWorkflowLifecycleOutbox struct {
+	ID             int64              `json:"id"`
+	EnterpriseID   string             `json:"enterprise_id"`
+	DreamRunID     string             `json:"dream_run_id"`
+	WorkflowRunID  string             `json:"workflow_run_id"`
+	Status         string             `json:"status"`
+	LifecycleError string             `json:"lifecycle_error"`
+	Attempts       int32              `json:"attempts"`
+	LastError      string             `json:"last_error"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	ProcessedAt    pgtype.Timestamptz `json:"processed_at"`
+}
+
 type Enterprise struct {
 	ID        string             `json:"id"`
 	Name      string             `json:"name"`

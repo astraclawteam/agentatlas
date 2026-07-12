@@ -178,11 +178,23 @@ func TestDreamRunPolicySnapshotAgreementFailsClosed(t *testing.T) {
 		"visibility_extra": func(r *db.DreamRun) {
 			r.VisibilitySnapshot = []byte(`{"visibility_level":"members","org_unit_ids":["department:rd-1"],"masked_field_count":0,"extra":true}`)
 		},
+		"visibility_duplicate_org": func(r *db.DreamRun) {
+			r.VisibilitySnapshot = []byte(`{"visibility_level":"members","org_unit_ids":["department:rd-1","department:rd-1"],"masked_field_count":0}`)
+		},
+		"visibility_additional_org": func(r *db.DreamRun) {
+			r.VisibilitySnapshot = []byte(`{"visibility_level":"members","org_unit_ids":["department:rd-1","department:other"],"masked_field_count":0}`)
+		},
+		"visibility_masked_count": func(r *db.DreamRun) {
+			r.VisibilitySnapshot = []byte(`{"visibility_level":"members","org_unit_ids":["department:rd-1"],"masked_field_count":1}`)
+		},
 		"input_null_counts": func(r *db.DreamRun) {
 			r.InputSnapshot = []byte(`{"source_counts":null,"sanitized_input_ids":[]}`)
 		},
 		"input_count_mismatch": func(r *db.DreamRun) {
 			r.InputSnapshot = []byte(`{"source_counts":[{"source_type":"work_brief","count":1}],"sanitized_input_ids":[]}`)
+		},
+		"input_nonzero_scheduler_snapshot": func(r *db.DreamRun) {
+			r.InputSnapshot = []byte(`{"source_counts":[{"source_type":"work_brief","count":1}],"sanitized_input_ids":["brief-1"]}`)
 		},
 	}
 	for name, mutate := range mutations {
@@ -191,6 +203,31 @@ func TestDreamRunPolicySnapshotAgreementFailsClosed(t *testing.T) {
 			mutate(&copy)
 			if validateRunPolicySnapshot(copy, "ent-1", p) == nil {
 				t.Fatal("must reject")
+			}
+		})
+	}
+}
+
+func TestPersistedDreamInputsMustExactlyMatchWorkflowInput(t *testing.T) {
+	input := WorkflowInput{Inputs: []ResolvedInput{{SourceType: sdkdream.SourceWorkBrief, SourceID: "brief-1"}}}
+	rows := []db.DreamInput{{RunID: "dr", SourceType: string(sdkdream.SourceWorkBrief), SourceID: "brief-1"}}
+	if err := validatePersistedDreamInputs(input, rows); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func([]db.DreamInput) []db.DreamInput{
+		"missing": func([]db.DreamInput) []db.DreamInput { return nil },
+		"extra": func(rows []db.DreamInput) []db.DreamInput {
+			return append(rows, db.DreamInput{RunID: "dr", SourceType: string(sdkdream.SourceWorkBrief), SourceID: "brief-2"})
+		},
+		"type": func(rows []db.DreamInput) []db.DreamInput {
+			rows[0].SourceType = string(sdkdream.SourceRiskEvent)
+			return rows
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			copyRows := append([]db.DreamInput(nil), rows...)
+			if validatePersistedDreamInputs(input, mutate(copyRows)) == nil {
+				t.Fatal("persisted input mismatch accepted")
 			}
 		})
 	}

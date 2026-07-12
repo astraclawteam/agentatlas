@@ -7,7 +7,94 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const createBoundDreamWorkflowRun = `-- name: CreateBoundDreamWorkflowRun :one
+WITH target AS (
+    SELECT dream.id
+    FROM dream_runs AS dream
+    WHERE dream.id = $1
+      AND dream.enterprise_id = $2
+      AND dream.policy_id = $3
+      AND dream.policy_version = $4
+      AND dream.org_unit_id = $5
+      AND dream.workflow_id = $6
+      AND dream.workflow_version = $7
+      AND dream.status = 'running'
+      AND dream.workflow_run_id IS NULL
+    FOR UPDATE
+), created AS (
+    INSERT INTO workflow_runs (id, workflow_id, version, enterprise_id, status, input, output)
+    SELECT $8, $6, $7, $2,
+           $9, $10, $11
+    FROM target
+    RETURNING id, workflow_id, version, enterprise_id, status, input, output, started_at, finished_at
+), bound AS (
+    UPDATE dream_runs AS dream
+    SET workflow_run_id = created.id
+    FROM created, target
+    WHERE dream.id = target.id
+    RETURNING dream.workflow_run_id
+)
+SELECT created.id, created.workflow_id, created.version, created.enterprise_id, created.status, created.input, created.output, created.started_at, created.finished_at FROM created JOIN bound ON bound.workflow_run_id = created.id
+`
+
+type CreateBoundDreamWorkflowRunParams struct {
+	DreamRunID    string      `json:"dream_run_id"`
+	EnterpriseID  string      `json:"enterprise_id"`
+	PolicyID      string      `json:"policy_id"`
+	PolicyVersion int32       `json:"policy_version"`
+	OrgUnitID     string      `json:"org_unit_id"`
+	WorkflowID    pgtype.Text `json:"workflow_id"`
+	Version       pgtype.Int4 `json:"version"`
+	ID            string      `json:"id"`
+	Status        string      `json:"status"`
+	Input         []byte      `json:"input"`
+	Output        []byte      `json:"output"`
+}
+
+type CreateBoundDreamWorkflowRunRow struct {
+	ID           string             `json:"id"`
+	WorkflowID   string             `json:"workflow_id"`
+	Version      int32              `json:"version"`
+	EnterpriseID string             `json:"enterprise_id"`
+	Status       string             `json:"status"`
+	Input        []byte             `json:"input"`
+	Output       []byte             `json:"output"`
+	StartedAt    pgtype.Timestamptz `json:"started_at"`
+	FinishedAt   pgtype.Timestamptz `json:"finished_at"`
+}
+
+func (q *Queries) CreateBoundDreamWorkflowRun(ctx context.Context, arg CreateBoundDreamWorkflowRunParams) (CreateBoundDreamWorkflowRunRow, error) {
+	row := q.db.QueryRow(ctx, createBoundDreamWorkflowRun,
+		arg.DreamRunID,
+		arg.EnterpriseID,
+		arg.PolicyID,
+		arg.PolicyVersion,
+		arg.OrgUnitID,
+		arg.WorkflowID,
+		arg.Version,
+		arg.ID,
+		arg.Status,
+		arg.Input,
+		arg.Output,
+	)
+	var i CreateBoundDreamWorkflowRunRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkflowID,
+		&i.Version,
+		&i.EnterpriseID,
+		&i.Status,
+		&i.Input,
+		&i.Output,
+		&i.StartedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
 
 const createWorkflowDraft = `-- name: CreateWorkflowDraft :one
 INSERT INTO workflows (id, enterprise_id, name, kind, created_by, draft)
@@ -352,6 +439,48 @@ func (q *Queries) PublishWorkflowVersion(ctx context.Context, arg PublishWorkflo
 		&i.PublishedAt,
 	)
 	return i, err
+}
+
+const transitionDreamWorkflowRun = `-- name: TransitionDreamWorkflowRun :execrows
+WITH changed AS (
+    UPDATE workflow_runs AS run
+    SET status = $2, output = $3,
+        finished_at = CASE WHEN $2 IN ('succeeded','failed','cancelled') THEN now() ELSE run.finished_at END
+    WHERE run.id = $4 AND run.enterprise_id = $5
+    RETURNING run.id, run.enterprise_id, run.status
+)
+INSERT INTO dream_workflow_lifecycle_outbox (
+    enterprise_id, dream_run_id, workflow_run_id, status, lifecycle_error
+)
+SELECT changed.enterprise_id, dream.id, changed.id, changed.status, $1
+FROM changed
+JOIN dream_runs AS dream
+  ON dream.enterprise_id = changed.enterprise_id AND dream.workflow_run_id = changed.id
+WHERE changed.status IN ('waiting_confirmation','succeeded','failed','cancelled')
+ON CONFLICT (workflow_run_id, status) DO UPDATE
+SET lifecycle_error = EXCLUDED.lifecycle_error, updated_at = now()
+`
+
+type TransitionDreamWorkflowRunParams struct {
+	LifecycleError string `json:"lifecycle_error"`
+	Status         string `json:"status"`
+	RunOutput      []byte `json:"run_output"`
+	ID             string `json:"id"`
+	EnterpriseID   string `json:"enterprise_id"`
+}
+
+func (q *Queries) TransitionDreamWorkflowRun(ctx context.Context, arg TransitionDreamWorkflowRunParams) (int64, error) {
+	result, err := q.db.Exec(ctx, transitionDreamWorkflowRun,
+		arg.LifecycleError,
+		arg.Status,
+		arg.RunOutput,
+		arg.ID,
+		arg.EnterpriseID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateWorkflowDraft = `-- name: UpdateWorkflowDraft :execrows

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.opentelemetry.io/otel/attribute"
 
 	sdkworkflow "github.com/astraclawteam/agentatlas/sdk/go/workflow"
@@ -21,6 +22,11 @@ type Runtime struct {
 	registry       Registry
 	metrics        *observability.Metrics
 	dreamLifecycle func(context.Context, RunResult) error
+}
+
+type dreamWorkflowStore interface {
+	CreateBoundDreamWorkflowRun(context.Context, db.CreateBoundDreamWorkflowRunParams) (db.CreateBoundDreamWorkflowRunRow, error)
+	TransitionDreamWorkflowRun(context.Context, db.TransitionDreamWorkflowRunParams) (int64, error)
 }
 
 // ErrRunForbidden marks a run operation attempted by an actor outside the
@@ -165,19 +171,32 @@ func (r *Runtime) startRun(ctx context.Context, enterpriseID, workflowID string,
 		return "", "", fmt.Errorf("encode run input: %w", err)
 	}
 	runID := newID("run")
-	if _, err := r.store.CreateWorkflowRun(ctx, db.CreateWorkflowRunParams{
-		ID: runID, WorkflowID: workflowID, Version: version,
-		EnterpriseID: enterpriseID, Status: RunRunning, Input: rawInput,
-	}); err != nil {
-		return "", "", fmt.Errorf("create run: %w", err)
-	}
-	if dream != nil && r.dreamLifecycle != nil {
-		if err := r.dreamLifecycle(ctx, RunResult{RunID: runID, EnterpriseID: enterpriseID, Status: RunRunning, Dream: dream}); err != nil {
-			return runID, RunFailed, fmt.Errorf("bind Dream workflow lifecycle: %w", err)
+	state := runState{NextIndex: 0, Outputs: map[string]map[string]any{}, Input: input, Dream: dream}
+	if dream == nil {
+		if _, err := r.store.CreateWorkflowRun(ctx, db.CreateWorkflowRunParams{
+			ID: runID, WorkflowID: workflowID, Version: version,
+			EnterpriseID: enterpriseID, Status: RunRunning, Input: rawInput,
+		}); err != nil {
+			return "", "", fmt.Errorf("create run: %w", err)
+		}
+	} else {
+		dreamStore, ok := r.store.(dreamWorkflowStore)
+		if !ok {
+			return "", "", fmt.Errorf("workflow store cannot atomically bind Dream runs")
+		}
+		rawState, err := json.Marshal(state)
+		if err != nil {
+			return "", "", fmt.Errorf("encode initial Dream workflow state: %w", err)
+		}
+		if _, err := dreamStore.CreateBoundDreamWorkflowRun(ctx, db.CreateBoundDreamWorkflowRunParams{
+			DreamRunID: dream.DreamRunID, EnterpriseID: enterpriseID, PolicyID: dream.PolicyID,
+			PolicyVersion: dream.PolicyVersion, OrgUnitID: dream.OrgUnitID,
+			WorkflowID: pgtype.Text{String: workflowID, Valid: true}, Version: pgtype.Int4{Int32: version, Valid: true},
+			ID: runID, Status: RunRunning, Input: rawInput, Output: rawState,
+		}); err != nil {
+			return runID, RunFailed, fmt.Errorf("create and bind Dream workflow run: %w", err)
 		}
 	}
-
-	state := runState{NextIndex: 0, Outputs: map[string]map[string]any{}, Input: input, Dream: dream}
 	status, err := r.execute(ctx, runID, enterpriseID, def, order, state)
 	return runID, status, err
 }
@@ -219,11 +238,8 @@ func (r *Runtime) Resume(ctx context.Context, runID, enterpriseID string, approv
 		if err := writeEvent(ctx, r.store, runID, confirmNode.ID, NodeFailed, map[string]any{"decision": "reject", "comment": comment}); err != nil {
 			return "", err
 		}
-		if err := r.setRunStatus(ctx, runID, RunCancelled, nil); err != nil {
+		if err := r.setRunStatus(ctx, runID, RunCancelled, &state, "human confirmation rejected"); err != nil {
 			return "", err
-		}
-		if state.Dream != nil && r.dreamLifecycle != nil {
-			_ = r.dreamLifecycle(ctx, RunResult{RunID: runID, EnterpriseID: run.EnterpriseID, Status: RunCancelled, Dream: state.Dream, Error: "human confirmation rejected"})
 		}
 		return RunCancelled, nil
 	}
@@ -233,7 +249,7 @@ func (r *Runtime) Resume(ctx context.Context, runID, enterpriseID string, approv
 	}
 	state.Outputs[confirmNode.ID] = map[string]any{"approved": true}
 	state.NextIndex++
-	if err := r.setRunStatus(ctx, runID, RunPending, &state); err != nil {
+	if err := r.setRunStatus(ctx, runID, RunPending, &state, ""); err != nil {
 		return "", err
 	}
 	return RunPending, nil
@@ -250,15 +266,10 @@ func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def D
 		node := order[state.NextIndex]
 
 		if node.Type == sdkworkflow.NodeHumanConfirm || node.RequiresConfirmation {
-			if state.Dream != nil && r.dreamLifecycle != nil {
-				if err := r.dreamLifecycle(ctx, RunResult{RunID: runID, EnterpriseID: enterpriseID, Status: RunWaitingConfirmation, Dream: state.Dream}); err != nil {
-					return RunFailed, err
-				}
-			}
 			if err := writeEvent(ctx, r.store, runID, node.ID, NodeWaitingConfirmation, nil); err != nil {
 				return "", err
 			}
-			if err := r.setRunStatus(ctx, runID, RunWaitingConfirmation, &state); err != nil {
+			if err := r.setRunStatus(ctx, runID, RunWaitingConfirmation, &state, ""); err != nil {
 				return "", err
 			}
 			return RunWaitingConfirmation, nil
@@ -274,11 +285,8 @@ func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def D
 		out, err := exec.Execute(ctx, node, runCtx)
 		if err != nil {
 			_ = writeEvent(ctx, r.store, runID, node.ID, NodeFailed, map[string]any{"error": err.Error()})
-			if serr := r.setRunStatus(ctx, runID, RunFailed, &state); serr != nil {
+			if serr := r.setRunStatus(ctx, runID, RunFailed, &state, err.Error()); serr != nil {
 				return "", errors.Join(err, serr)
-			}
-			if state.Dream != nil && r.dreamLifecycle != nil {
-				_ = r.dreamLifecycle(ctx, RunResult{RunID: runID, EnterpriseID: enterpriseID, Status: RunFailed, Dream: state.Dream, Error: err.Error()})
 			}
 			return RunFailed, err
 		}
@@ -292,22 +300,13 @@ func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def D
 		state.NextIndex++
 	}
 
-	if err := r.setRunStatus(ctx, runID, RunSucceeded, &state); err != nil {
+	if err := r.setRunStatus(ctx, runID, RunSucceeded, &state, ""); err != nil {
 		return "", err
-	}
-	if state.Dream != nil && r.dreamLifecycle != nil {
-		_ = r.dreamLifecycle(ctx, RunResult{RunID: runID, EnterpriseID: enterpriseID, Status: RunSucceeded, Outputs: state.Outputs, AggregateNodeID: aggregateNodeID(def), Dream: state.Dream})
 	}
 	return RunSucceeded, nil
 }
 
-func (r *Runtime) setRunStatus(ctx context.Context, runID, status string, state *runState) error {
-	if r.metrics != nil {
-		switch status {
-		case RunSucceeded, RunFailed, RunCancelled:
-			r.metrics.WorkflowRuns.WithLabelValues(status).Inc()
-		}
-	}
+func (r *Runtime) setRunStatus(ctx context.Context, runID, status string, state *runState, lifecycleError string) error {
 	var raw []byte
 	if state != nil {
 		var err error
@@ -316,16 +315,46 @@ func (r *Runtime) setRunStatus(ctx context.Context, runID, status string, state 
 			return fmt.Errorf("encode run state: %w", err)
 		}
 	}
-	rows, err := r.store.UpdateWorkflowRunStatus(ctx, db.UpdateWorkflowRunStatusParams{
-		ID: runID, Status: status, Output: raw,
-	})
+	var rows int64
+	var err error
+	if state != nil && state.Dream != nil && status != RunPending && status != RunRunning {
+		dreamStore, ok := r.store.(dreamWorkflowStore)
+		if !ok {
+			return fmt.Errorf("workflow store cannot atomically transition Dream runs")
+		}
+		rows, err = dreamStore.TransitionDreamWorkflowRun(ctx, db.TransitionDreamWorkflowRunParams{
+			LifecycleError: truncateWorkflowError(lifecycleError), Status: status, RunOutput: raw,
+			ID: runID, EnterpriseID: state.Dream.EnterpriseID,
+		})
+	} else {
+		rows, err = r.store.UpdateWorkflowRunStatus(ctx, db.UpdateWorkflowRunStatusParams{
+			ID: runID, Status: status, Output: raw,
+		})
+	}
 	if err != nil {
 		return fmt.Errorf("set run %s -> %s: %w", runID, status, err)
 	}
 	if rows == 0 {
 		return fmt.Errorf("run %s not found", runID)
 	}
+	if r.metrics != nil {
+		switch status {
+		case RunSucceeded, RunFailed, RunCancelled:
+			r.metrics.WorkflowRuns.WithLabelValues(status).Inc()
+		}
+	}
+	if state != nil && state.Dream != nil && r.dreamLifecycle != nil && status != RunPending && status != RunRunning {
+		_ = r.dreamLifecycle(ctx, RunResult{RunID: runID, EnterpriseID: state.Dream.EnterpriseID, Status: status, Dream: state.Dream, Error: lifecycleError})
+	}
 	return nil
+}
+
+func truncateWorkflowError(value string) string {
+	runes := []rune(value)
+	if len(runes) > 1000 {
+		return string(runes[:1000])
+	}
+	return value
 }
 
 // topoOrder returns a deterministic topological order (Kahn's algorithm,

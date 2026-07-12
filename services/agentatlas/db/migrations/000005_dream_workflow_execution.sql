@@ -26,6 +26,25 @@ ALTER TABLE dream_runs ADD CONSTRAINT dream_runs_workflow_run_pin_fk
 ALTER TABLE dream_summaries ADD CONSTRAINT dream_summaries_run_layer_uniq UNIQUE (enterprise_id, run_id, layer);
 ALTER TABLE dream_inputs ADD CONSTRAINT dream_inputs_run_source_uniq UNIQUE (run_id, source_type, source_id);
 
+CREATE TABLE dream_workflow_lifecycle_outbox (
+    id               bigserial PRIMARY KEY,
+    enterprise_id    text NOT NULL,
+    dream_run_id      text NOT NULL,
+    workflow_run_id   text NOT NULL,
+    status            text NOT NULL CHECK (status IN ('waiting_confirmation','succeeded','failed','cancelled')),
+    lifecycle_error   text NOT NULL DEFAULT '' CHECK (char_length(lifecycle_error) <= 1000),
+    attempts          integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    last_error        text NOT NULL DEFAULT '' CHECK (char_length(last_error) <= 1000),
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    updated_at        timestamptz NOT NULL DEFAULT now(),
+    processed_at      timestamptz,
+    UNIQUE (workflow_run_id, status),
+    FOREIGN KEY (enterprise_id, dream_run_id) REFERENCES dream_runs (enterprise_id, id),
+    FOREIGN KEY (enterprise_id, workflow_run_id) REFERENCES workflow_runs (enterprise_id, id)
+);
+CREATE INDEX dream_workflow_lifecycle_outbox_pending_idx
+    ON dream_workflow_lifecycle_outbox (processed_at, id) WHERE processed_at IS NULL;
+
 -- +goose StatementBegin
 CREATE FUNCTION protect_dream_workflow_run_binding() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -44,6 +63,7 @@ FOR EACH ROW EXECUTE FUNCTION protect_dream_workflow_run_binding();
 
 DROP TRIGGER dream_workflow_run_binding_immutable ON dream_runs;
 DROP FUNCTION protect_dream_workflow_run_binding();
+DROP TABLE dream_workflow_lifecycle_outbox;
 ALTER TABLE dream_inputs DROP CONSTRAINT dream_inputs_run_source_uniq;
 ALTER TABLE dream_summaries DROP CONSTRAINT dream_summaries_run_layer_uniq;
 ALTER TABLE dream_runs DROP CONSTRAINT dream_runs_workflow_run_pin_fk;

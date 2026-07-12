@@ -29,10 +29,14 @@ type RunnerStore interface {
 	RequeueDreamRunAfterWorkflow(ctx context.Context, arg db.RequeueDreamRunAfterWorkflowParams) (db.DreamRun, error)
 	PublishDreamWorkflowWait(ctx context.Context, arg db.PublishDreamWorkflowWaitParams) (db.DreamRun, error)
 	FailDreamRunAfterWorkflow(ctx context.Context, arg db.FailDreamRunAfterWorkflowParams) (db.DreamRun, error)
+	ListPendingDreamWorkflowLifecycle(ctx context.Context, resultLimit int32) ([]db.DreamWorkflowLifecycleOutbox, error)
+	RecordDreamWorkflowLifecycleFailure(ctx context.Context, arg db.RecordDreamWorkflowLifecycleFailureParams) error
+	CompleteDreamWorkflowLifecycle(ctx context.Context, id int64) error
 	ReserveDreamOutputHash(ctx context.Context, arg db.ReserveDreamOutputHashParams) (db.DreamRun, error)
 	ClaimDreamRun(ctx context.Context, id string) (int64, error)
 	UpdateDreamRunStatus(ctx context.Context, arg db.UpdateDreamRunStatusParams) (int64, error)
 	InsertDreamInput(ctx context.Context, arg db.InsertDreamInputParams) error
+	ListDreamInputsForRun(ctx context.Context, runID string) ([]db.DreamInput, error)
 	CreateDreamSummary(ctx context.Context, arg db.CreateDreamSummaryParams) (db.DreamSummary, error)
 	InsertDreamEvidencePointer(ctx context.Context, arg db.InsertDreamEvidencePointerParams) error
 	CreateEvidencePointer(ctx context.Context, arg db.CreateEvidencePointerParams) (db.EvidencePointer, error)
@@ -159,6 +163,13 @@ func (r *Runner) execute(ctx context.Context, runID string) error {
 		inputs = execution.Input.Inputs
 		coverage = execution.Input.Coverage
 		missing = execution.Input.Missing
+	}
+	persistedInputs, err := r.store.ListDreamInputsForRun(ctx, run.ID)
+	if err != nil {
+		return fmt.Errorf("load persisted Dream inputs: %w", err)
+	}
+	if err := validatePersistedDreamInputs(execution.Input, persistedInputs); err != nil {
+		return err
 	}
 	if execution.Status == workflow.RunWaitingConfirmation {
 		return ErrDreamWorkflowPaused
@@ -320,17 +331,8 @@ func validateRunPolicySnapshot(run db.DreamRun, policyEnterprise string, policy 
 	if err := decoder.Decode(&visibility); err != nil {
 		return fmt.Errorf("decode Dream visibility snapshot: %w", err)
 	}
-	if visibility.OrgUnitIDs == nil || visibility.MaskedFieldCount < 0 || visibility.VisibilityLevel != policy.VisibilityLevel {
+	if visibility.OrgUnitIDs == nil || len(visibility.OrgUnitIDs) != 1 || visibility.OrgUnitIDs[0] != policy.OrgUnitID || visibility.MaskedFieldCount != 0 || visibility.VisibilityLevel != policy.VisibilityLevel {
 		return fmt.Errorf("Dream visibility snapshot disagrees with policy")
-	}
-	found := false
-	for _, id := range visibility.OrgUnitIDs {
-		if id == policy.OrgUnitID {
-			found = true
-		}
-	}
-	if !found {
-		return fmt.Errorf("Dream visibility snapshot omits policy org unit")
 	}
 	var input sdkdream.InputSnapshotSummary
 	decoder = json.NewDecoder(bytes.NewReader(run.InputSnapshot))
@@ -342,66 +344,119 @@ func validateRunPolicySnapshot(run db.DreamRun, policyEnterprise string, policy 
 		return fmt.Errorf("Dream input snapshot disagrees with policy sources")
 	}
 	for i, source := range policy.InputSources {
-		if input.SourceCounts[i].SourceType != source || input.SourceCounts[i].Count < 0 {
+		if input.SourceCounts[i].SourceType != source || input.SourceCounts[i].Count != 0 {
 			return fmt.Errorf("Dream input snapshot source mismatch")
 		}
 	}
-	total := int32(0)
-	for _, count := range input.SourceCounts {
-		total += count.Count
-	}
-	if int(total) != len(input.SanitizedInputIDs) {
-		return fmt.Errorf("Dream input snapshot count mismatch")
-	}
-	seen := map[string]bool{}
-	for _, id := range input.SanitizedInputIDs {
-		if id == "" || len([]rune(id)) > 256 || seen[id] {
-			return fmt.Errorf("Dream input snapshot IDs are noncanonical")
-		}
-		seen[id] = true
+	if len(input.SanitizedInputIDs) != 0 {
+		return fmt.Errorf("Dream scheduler input snapshot must not claim unresolved IDs")
 	}
 	return nil
 }
 
-// WorkflowLifecycle atomically binds/waits/terminalizes the owning Dream.
-func (r *Runner) WorkflowLifecycle(ctx context.Context, result workflow.RunResult) error {
-	wfID := pgtype.Text{String: result.RunID, Valid: true}
-	if result.Dream == nil {
-		return nil
+func validatePersistedDreamInputs(input WorkflowInput, rows []db.DreamInput) error {
+	if len(input.Inputs) > maxResolvedInputs || len(rows) != len(input.Inputs) {
+		return fmt.Errorf("persisted Dream inputs disagree with workflow input")
 	}
-	switch result.Status {
-	case workflow.RunRunning:
-		_, err := r.store.BindDreamWorkflowRun(ctx, db.BindDreamWorkflowRunParams{EnterpriseID: result.EnterpriseID, RunID: result.Dream.DreamRunID, WorkflowRunID: wfID})
-		return err
-	case workflow.RunWaitingConfirmation:
-		_, err := r.store.PublishDreamWorkflowWait(ctx, db.PublishDreamWorkflowWaitParams{EnterpriseID: result.EnterpriseID, RunID: result.Dream.DreamRunID, WorkflowRunID: wfID})
-		return err
-	case workflow.RunFailed, workflow.RunCancelled:
-		_, err := r.store.FailDreamRunAfterWorkflow(ctx, db.FailDreamRunAfterWorkflowParams{EnterpriseID: result.EnterpriseID, WorkflowRunID: wfID, Error: truncateRunes(result.Error, 1000)})
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
+	expected := make(map[string]struct{}, len(input.Inputs))
+	for _, item := range input.Inputs {
+		key := string(item.SourceType) + "\x00" + item.SourceID
+		if item.SourceID == "" || len([]rune(item.SourceID)) > 256 {
+			return fmt.Errorf("workflow Dream input identity is invalid")
 		}
-		return err
-	case workflow.RunSucceeded:
-	default:
-		return nil
+		expected[key] = struct{}{}
 	}
-	run, err := r.store.GetDreamRunByWorkflowRun(ctx, db.GetDreamRunByWorkflowRunParams{EnterpriseID: result.EnterpriseID, WorkflowRunID: pgtype.Text{String: result.RunID, Valid: true}})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
+	if len(expected) != len(input.Inputs) {
+		return fmt.Errorf("workflow Dream inputs contain duplicate identities")
 	}
-	if err != nil {
-		return err
-	}
-	if _, err := r.store.RequeueDreamRunAfterWorkflow(ctx, db.RequeueDreamRunAfterWorkflowParams{EnterpriseID: run.EnterpriseID, WorkflowRunID: pgtype.Text{String: result.RunID, Valid: true}}); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
+	for _, row := range rows {
+		key := row.SourceType + "\x00" + row.SourceID
+		if _, ok := expected[key]; !ok {
+			return fmt.Errorf("persisted Dream inputs disagree with workflow input")
 		}
-		return err
+		delete(expected, key)
 	}
-	if err := r.tasks.Enqueue(ctx, JobTypeDream, run.ID); err != nil {
-		_, _ = r.store.FailDreamRunAfterWorkflow(ctx, db.FailDreamRunAfterWorkflowParams{EnterpriseID: run.EnterpriseID, WorkflowRunID: wfID, Error: "Dream redispatch failed: " + truncateRunes(err.Error(), 900)})
-		return nil
+	if len(expected) != 0 {
+		return fmt.Errorf("persisted Dream inputs disagree with workflow input")
 	}
 	return nil
+}
+
+// WorkflowLifecycle is an eager drain hint. Correctness comes from the
+// PostgreSQL outbox written in the same statement as the workflow transition.
+func (r *Runner) WorkflowLifecycle(ctx context.Context, _ workflow.RunResult) error {
+	return r.ReconcileWorkflowLifecycle(ctx)
+}
+
+// ReconcileWorkflowLifecycle idempotently drains durable paired workflow/Dream
+// transitions. Failed store or publish work remains pending with retry metadata.
+func (r *Runner) ReconcileWorkflowLifecycle(ctx context.Context) error {
+	events, err := r.store.ListPendingDreamWorkflowLifecycle(ctx, 100)
+	if err != nil {
+		return fmt.Errorf("list Dream workflow lifecycle: %w", err)
+	}
+	var failures []error
+	for _, event := range events {
+		if err := r.reconcileWorkflowLifecycleEvent(ctx, event); err != nil {
+			recorded := r.store.RecordDreamWorkflowLifecycleFailure(ctx, db.RecordDreamWorkflowLifecycleFailureParams{
+				ID: event.ID, LastError: truncateRunes(err.Error(), 1000),
+			})
+			failures = append(failures, errors.Join(err, recorded))
+			continue
+		}
+		if err := r.store.CompleteDreamWorkflowLifecycle(ctx, event.ID); err != nil {
+			completionErr := fmt.Errorf("complete Dream workflow lifecycle %d: %w", event.ID, err)
+			recorded := r.store.RecordDreamWorkflowLifecycleFailure(ctx, db.RecordDreamWorkflowLifecycleFailureParams{
+				ID: event.ID, LastError: truncateRunes(completionErr.Error(), 1000),
+			})
+			failures = append(failures, errors.Join(completionErr, recorded))
+		}
+	}
+	return errors.Join(failures...)
+}
+
+func (r *Runner) reconcileWorkflowLifecycleEvent(ctx context.Context, event db.DreamWorkflowLifecycleOutbox) error {
+	wfID := pgtype.Text{String: event.WorkflowRunID, Valid: true}
+	switch event.Status {
+	case workflow.RunWaitingConfirmation:
+		_, err := r.store.PublishDreamWorkflowWait(ctx, db.PublishDreamWorkflowWaitParams{
+			EnterpriseID: event.EnterpriseID, RunID: event.DreamRunID, WorkflowRunID: wfID,
+		})
+		return err
+	case workflow.RunFailed, workflow.RunCancelled:
+		message := event.LifecycleError
+		if message == "" {
+			message = "Dream workflow " + event.Status
+		}
+		_, err := r.store.FailDreamRunAfterWorkflow(ctx, db.FailDreamRunAfterWorkflowParams{
+			EnterpriseID: event.EnterpriseID, WorkflowRunID: wfID, Error: truncateRunes(message, 1000),
+		})
+		return err
+	case workflow.RunSucceeded:
+		run, err := r.store.GetDreamRunByWorkflowRun(ctx, db.GetDreamRunByWorkflowRunParams{
+			EnterpriseID: event.EnterpriseID, WorkflowRunID: wfID,
+		})
+		if err != nil {
+			return err
+		}
+		switch run.Status {
+		case "waiting_confirmation":
+			if _, err := r.store.RequeueDreamRunAfterWorkflow(ctx, db.RequeueDreamRunAfterWorkflowParams{
+				EnterpriseID: event.EnterpriseID, WorkflowRunID: wfID,
+			}); err != nil {
+				return err
+			}
+		case "pending":
+		case "running", "succeeded", "failed":
+			return nil
+		default:
+			return fmt.Errorf("Dream %s has invalid lifecycle state %s", run.ID, run.Status)
+		}
+		if err := r.tasks.Enqueue(ctx, JobTypeDream, run.ID); err != nil {
+			return fmt.Errorf("publish Dream redispatch: %w", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported Dream workflow lifecycle status %q", event.Status)
+	}
 }

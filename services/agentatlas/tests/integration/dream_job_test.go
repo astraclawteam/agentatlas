@@ -31,6 +31,28 @@ type failingPublishBus struct{}
 func (failingPublishBus) Publish(context.Context, string, string) error {
 	return fmt.Errorf("injected publish failure")
 }
+
+type countingPublishBus struct{ publishes int }
+
+func (b *countingPublishBus) Publish(context.Context, string, string) error {
+	b.publishes++
+	return nil
+}
+
+type failingLifecycleStore struct{ *db.Queries }
+
+func (s failingLifecycleStore) PublishDreamWorkflowWait(context.Context, db.PublishDreamWorkflowWaitParams) (db.DreamRun, error) {
+	return db.DreamRun{}, fmt.Errorf("injected lifecycle store failure")
+}
+
+type failingLifecycleCompletionStore struct{ *db.Queries }
+
+func (s failingLifecycleCompletionStore) CompleteDreamWorkflowLifecycle(context.Context, int64) error {
+	return fmt.Errorf("injected lifecycle completion failure")
+}
+func (b *countingPublishBus) Subscribe(context.Context, string, func(context.Context, string)) (func(), error) {
+	return func() {}, nil
+}
 func (failingPublishBus) Subscribe(context.Context, string, func(context.Context, string)) (func(), error) {
 	return func() {}, nil
 }
@@ -170,6 +192,42 @@ func TestDreamJob(t *testing.T) {
 	if dreamRun.Status != "waiting_confirmation" || !dreamRun.WorkflowRunID.Valid {
 		t.Fatalf("paused Dream=%+v", dreamRun)
 	}
+	// Re-open the durable wait record and simulate a process dying while its
+	// Dream-side store transition is unavailable. A fresh runner recovers it.
+	if _, err := q.UpdateDreamRunStatus(ctx, db.UpdateDreamRunStatusParams{ID: dreamRun.ID, Status: "running", Error: ""}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `update dream_workflow_lifecycle_outbox set processed_at=null,attempts=0,last_error='' where workflow_run_id=$1 and status='waiting_confirmation'`, dreamRun.WorkflowRunID); err != nil {
+		t.Fatal(err)
+	}
+	storeFailureRunner := dream.NewRunner(failingLifecycleStore{Queries: q}, objects, policySvc, runner, dream.NewOrchestrator(wfRuntime))
+	if err := storeFailureRunner.ReconcileWorkflowLifecycle(ctx); err == nil {
+		t.Fatal("injected lifecycle store failure was discarded")
+	}
+	if err := dream.NewRunner(q, objects, policySvc, runner, dream.NewOrchestrator(wfRuntime)).ReconcileWorkflowLifecycle(ctx); err != nil {
+		t.Fatalf("restart wait recovery: %v", err)
+	}
+	dreamRun, err = q.GetDreamRun(ctx, dreamRun.ID)
+	if err != nil || dreamRun.Status != "waiting_confirmation" {
+		t.Fatalf("wait recovery stranded Dream=%+v err=%v", dreamRun, err)
+	}
+	if _, err := pool.Exec(ctx, `update dream_workflow_lifecycle_outbox set processed_at=null,attempts=0,last_error='' where workflow_run_id=$1 and status='waiting_confirmation'`, dreamRun.WorkflowRunID); err != nil {
+		t.Fatal(err)
+	}
+	completionFailureRunner := dream.NewRunner(failingLifecycleCompletionStore{Queries: q}, objects, policySvc, runner, dream.NewOrchestrator(wfRuntime))
+	if err := completionFailureRunner.ReconcileWorkflowLifecycle(ctx); err == nil {
+		t.Fatal("injected lifecycle completion failure was discarded")
+	}
+	var completionAttempts int32
+	if err := pool.QueryRow(ctx, `select attempts from dream_workflow_lifecycle_outbox where workflow_run_id=$1 and status='waiting_confirmation'`, dreamRun.WorkflowRunID).Scan(&completionAttempts); err != nil {
+		t.Fatal(err)
+	}
+	if completionAttempts != 1 {
+		t.Fatalf("completion failure attempts=%d, want 1", completionAttempts)
+	}
+	if err := dream.NewRunner(q, objects, policySvc, runner, dream.NewOrchestrator(wfRuntime)).ReconcileWorkflowLifecycle(ctx); err != nil {
+		t.Fatalf("restart completion recovery: %v", err)
+	}
 	if sums, _ := q.ListDreamSummariesBySpace(ctx, db.ListDreamSummariesBySpaceParams{SpaceID: spaceID, Layer: "display", Limit: 5}); len(sums) != 0 {
 		t.Fatal("paused Dream exposed output")
 	}
@@ -295,20 +353,48 @@ func TestDreamJob(t *testing.T) {
 	if err != nil || !bytes.Equal(raw, afterConflict) {
 		t.Fatal("conflicting retry overwrote referenced sealed object")
 	}
-	// A redispatch publication failure terminalizes Dream instead of leaving an
-	// undispatchable pending row.
+	// A redispatch publication failure remains durable in the lifecycle outbox.
+	// A newly instantiated runner can recover it without rewriting workflow success.
 	if _, err := q.UpdateDreamRunStatus(ctx, db.UpdateDreamRunStatusParams{ID: dreamRun.ID, Status: "waiting_confirmation", Error: ""}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `update dream_workflow_lifecycle_outbox set processed_at=null,attempts=0,last_error='' where workflow_run_id=$1 and status='succeeded'`, dreamRun.WorkflowRunID); err != nil {
 		t.Fatal(err)
 	}
 	failingTasks := tasks.NewRunner(failingPublishBus{})
 	failingTasks.AllowEnqueue(dream.JobTypeDream)
 	failingRunner := dream.NewRunner(q, objects, policySvc, failingTasks, dream.NewOrchestrator(wfRuntime))
-	if err := failingRunner.WorkflowLifecycle(ctx, workflow.RunResult{RunID: dreamRun.WorkflowRunID.String, EnterpriseID: entID, Status: workflow.RunSucceeded, Dream: &workflow.VerifiedDreamContext{DreamRunID: dreamRun.ID}}); err != nil {
-		t.Fatal(err)
+	if err := failingRunner.ReconcileWorkflowLifecycle(ctx); err == nil {
+		t.Fatal("injected publication failure was discarded")
 	}
 	undispatched, err := q.GetDreamRun(ctx, dreamRun.ID)
-	if err != nil || undispatched.Status != "failed" || !strings.Contains(undispatched.Error, "redispatch failed") {
+	if err != nil || undispatched.Status != "pending" {
 		t.Fatalf("undispatched Dream=%+v err=%v", undispatched, err)
+	}
+	var attempts int32
+	var lastError, workflowStatus string
+	var processed bool
+	if err := pool.QueryRow(ctx, `select attempts,last_error,processed_at is not null from dream_workflow_lifecycle_outbox where workflow_run_id=$1 and status='succeeded'`, dreamRun.WorkflowRunID).Scan(&attempts, &lastError, &processed); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `select status from workflow_runs where id=$1`, dreamRun.WorkflowRunID).Scan(&workflowStatus); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 1 || lastError == "" || processed || workflowStatus != workflow.RunSucceeded {
+		t.Fatalf("failed lifecycle was not durable: attempts=%d error=%q processed=%v workflow=%s", attempts, lastError, processed, workflowStatus)
+	}
+	recoveredBus := &countingPublishBus{}
+	recoveredTasks := tasks.NewRunner(recoveredBus)
+	recoveredTasks.AllowEnqueue(dream.JobTypeDream)
+	recoveredRunner := dream.NewRunner(q, objects, policySvc, recoveredTasks, dream.NewOrchestrator(wfRuntime))
+	if err := recoveredRunner.ReconcileWorkflowLifecycle(ctx); err != nil {
+		t.Fatalf("restart recovery: %v", err)
+	}
+	if recoveredBus.publishes != 1 {
+		t.Fatalf("restart recovery publications=%d", recoveredBus.publishes)
+	}
+	if err := pool.QueryRow(ctx, `select processed_at is not null from dream_workflow_lifecycle_outbox where workflow_run_id=$1 and status='succeeded'`, dreamRun.WorkflowRunID).Scan(&processed); err != nil || !processed {
+		t.Fatalf("recovered event not completed: processed=%v err=%v", processed, err)
 	}
 	// Rejection terminalizes the next bound Dream instead of stranding waiting.
 	nextNow := now.Add(24 * time.Hour)

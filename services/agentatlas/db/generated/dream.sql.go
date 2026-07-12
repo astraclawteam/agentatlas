@@ -70,6 +70,17 @@ func (q *Queries) ClaimDreamRun(ctx context.Context, id string) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const completeDreamWorkflowLifecycle = `-- name: CompleteDreamWorkflowLifecycle :exec
+UPDATE dream_workflow_lifecycle_outbox
+SET processed_at = now(), last_error = '', updated_at = now()
+WHERE id = $1 AND processed_at IS NULL
+`
+
+func (q *Queries) CompleteDreamWorkflowLifecycle(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, completeDreamWorkflowLifecycle, id)
+	return err
+}
+
 const createDreamAnnotation = `-- name: CreateDreamAnnotation :one
 INSERT INTO dream_run_annotations (
     id, enterprise_id, run_id, annotation_type, body, created_by
@@ -331,9 +342,9 @@ func (q *Queries) CreateDreamSummary(ctx context.Context, arg CreateDreamSummary
 }
 
 const failDreamRunAfterWorkflow = `-- name: FailDreamRunAfterWorkflow :one
-UPDATE dream_runs SET status='failed', error=$1
+UPDATE dream_runs SET status='failed', error=$1, finished_at=COALESCE(finished_at, now())
 WHERE enterprise_id=$2 AND workflow_run_id=$3
-  AND status IN ('running','waiting_confirmation','pending')
+  AND status IN ('running','waiting_confirmation','pending','failed')
 RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash
 `
 
@@ -1132,6 +1143,36 @@ func (q *Queries) ListDreamImmediateChildren(ctx context.Context, arg ListDreamI
 	return items, nil
 }
 
+const listDreamInputsForRun = `-- name: ListDreamInputsForRun :many
+SELECT id, run_id, source_type, source_id, created_at FROM dream_inputs WHERE run_id = $1 ORDER BY source_type, source_id
+`
+
+func (q *Queries) ListDreamInputsForRun(ctx context.Context, runID string) ([]DreamInput, error) {
+	rows, err := q.db.Query(ctx, listDreamInputsForRun, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DreamInput
+	for rows.Next() {
+		var i DreamInput
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunID,
+			&i.SourceType,
+			&i.SourceID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDreamRunsByOrg = `-- name: ListDreamRunsByOrg :many
 SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash
 FROM dream_runs
@@ -1242,6 +1283,45 @@ func (q *Queries) ListDreamSummariesBySpace(ctx context.Context, arg ListDreamSu
 	return items, nil
 }
 
+const listPendingDreamWorkflowLifecycle = `-- name: ListPendingDreamWorkflowLifecycle :many
+SELECT id, enterprise_id, dream_run_id, workflow_run_id, status, lifecycle_error, attempts, last_error, created_at, updated_at, processed_at FROM dream_workflow_lifecycle_outbox
+WHERE processed_at IS NULL
+ORDER BY id
+LIMIT $1
+`
+
+func (q *Queries) ListPendingDreamWorkflowLifecycle(ctx context.Context, resultLimit int32) ([]DreamWorkflowLifecycleOutbox, error) {
+	rows, err := q.db.Query(ctx, listPendingDreamWorkflowLifecycle, resultLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DreamWorkflowLifecycleOutbox
+	for rows.Next() {
+		var i DreamWorkflowLifecycleOutbox
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnterpriseID,
+			&i.DreamRunID,
+			&i.WorkflowRunID,
+			&i.Status,
+			&i.LifecycleError,
+			&i.Attempts,
+			&i.LastError,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ProcessedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPublishedDreamPolicies = `-- name: ListPublishedDreamPolicies :many
 SELECT id, enterprise_id, org_scope, status, draft, created_at, updated_at FROM dream_policies WHERE enterprise_id = $1 AND status = 'published' ORDER BY id
 `
@@ -1301,7 +1381,7 @@ func (q *Queries) PublishDreamPolicyVersion(ctx context.Context, arg PublishDrea
 const publishDreamWorkflowWait = `-- name: PublishDreamWorkflowWait :one
 UPDATE dream_runs SET workflow_run_id=$1, status='waiting_confirmation', error=''
 WHERE enterprise_id=$2 AND id=$3
-  AND status='running' AND (workflow_run_id IS NULL OR workflow_run_id=$1)
+  AND status IN ('running','waiting_confirmation') AND (workflow_run_id IS NULL OR workflow_run_id=$1)
 RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash
 `
 
@@ -1345,10 +1425,26 @@ func (q *Queries) PublishDreamWorkflowWait(ctx context.Context, arg PublishDream
 	return i, err
 }
 
+const recordDreamWorkflowLifecycleFailure = `-- name: RecordDreamWorkflowLifecycleFailure :exec
+UPDATE dream_workflow_lifecycle_outbox
+SET attempts = attempts + 1, last_error = $1, updated_at = now()
+WHERE id = $2 AND processed_at IS NULL
+`
+
+type RecordDreamWorkflowLifecycleFailureParams struct {
+	LastError string `json:"last_error"`
+	ID        int64  `json:"id"`
+}
+
+func (q *Queries) RecordDreamWorkflowLifecycleFailure(ctx context.Context, arg RecordDreamWorkflowLifecycleFailureParams) error {
+	_, err := q.db.Exec(ctx, recordDreamWorkflowLifecycleFailure, arg.LastError, arg.ID)
+	return err
+}
+
 const requeueDreamRunAfterWorkflow = `-- name: RequeueDreamRunAfterWorkflow :one
 UPDATE dream_runs SET status = 'pending', error = ''
 WHERE enterprise_id = $1 AND workflow_run_id = $2
-  AND status = 'waiting_confirmation'
+  AND status IN ('waiting_confirmation','pending')
 RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash
 `
 

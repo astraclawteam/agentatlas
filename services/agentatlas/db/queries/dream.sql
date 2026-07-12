@@ -53,7 +53,7 @@ RETURNING *;
 -- name: PublishDreamWorkflowWait :one
 UPDATE dream_runs SET workflow_run_id=sqlc.arg(workflow_run_id), status='waiting_confirmation', error=''
 WHERE enterprise_id=sqlc.arg(enterprise_id) AND id=sqlc.arg(run_id)
-  AND status='running' AND (workflow_run_id IS NULL OR workflow_run_id=sqlc.arg(workflow_run_id))
+  AND status IN ('running','waiting_confirmation') AND (workflow_run_id IS NULL OR workflow_run_id=sqlc.arg(workflow_run_id))
 RETURNING *;
 
 -- name: GetDreamRunByWorkflowRun :one
@@ -62,14 +62,30 @@ SELECT * FROM dream_runs WHERE enterprise_id = sqlc.arg(enterprise_id) AND workf
 -- name: RequeueDreamRunAfterWorkflow :one
 UPDATE dream_runs SET status = 'pending', error = ''
 WHERE enterprise_id = sqlc.arg(enterprise_id) AND workflow_run_id = sqlc.arg(workflow_run_id)
-  AND status = 'waiting_confirmation'
+  AND status IN ('waiting_confirmation','pending')
 RETURNING *;
 
 -- name: FailDreamRunAfterWorkflow :one
-UPDATE dream_runs SET status='failed', error=sqlc.arg(error)
+UPDATE dream_runs SET status='failed', error=sqlc.arg(error), finished_at=COALESCE(finished_at, now())
 WHERE enterprise_id=sqlc.arg(enterprise_id) AND workflow_run_id=sqlc.arg(workflow_run_id)
-  AND status IN ('running','waiting_confirmation','pending')
+  AND status IN ('running','waiting_confirmation','pending','failed')
 RETURNING *;
+
+-- name: ListPendingDreamWorkflowLifecycle :many
+SELECT * FROM dream_workflow_lifecycle_outbox
+WHERE processed_at IS NULL
+ORDER BY id
+LIMIT sqlc.arg(result_limit);
+
+-- name: RecordDreamWorkflowLifecycleFailure :exec
+UPDATE dream_workflow_lifecycle_outbox
+SET attempts = attempts + 1, last_error = sqlc.arg(last_error), updated_at = now()
+WHERE id = sqlc.arg(id) AND processed_at IS NULL;
+
+-- name: CompleteDreamWorkflowLifecycle :exec
+UPDATE dream_workflow_lifecycle_outbox
+SET processed_at = now(), last_error = '', updated_at = now()
+WHERE id = sqlc.arg(id) AND processed_at IS NULL;
 
 -- name: ReserveDreamOutputHash :one
 UPDATE dream_runs SET output_hash=sqlc.arg(output_hash)
@@ -93,6 +109,9 @@ WHERE id = $1;
 INSERT INTO dream_inputs (run_id, source_type, source_id)
 VALUES ($1, $2, $3)
 ON CONFLICT (run_id, source_type, source_id) DO NOTHING;
+
+-- name: ListDreamInputsForRun :many
+SELECT * FROM dream_inputs WHERE run_id = sqlc.arg(run_id) ORDER BY source_type, source_id;
 
 -- name: CreateDreamSummary :one
 INSERT INTO dream_summaries (id, run_id, enterprise_id, space_id, layer, summary_text, sealed_object_key, evidence_pointer_id, risk_signals, facts, themes, trends, todos)

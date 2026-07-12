@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	sdkworkflow "github.com/astraclawteam/agentatlas/sdk/go/workflow"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
@@ -22,6 +23,8 @@ type fakeStore struct {
 	runs      map[string]db.WorkflowRun
 	events    []db.WorkflowRunEvent
 	nextEvent int64
+	dreamRuns map[string]db.DreamRun
+	outbox    []db.DreamWorkflowLifecycleOutbox
 }
 
 func newFakeStore() *fakeStore {
@@ -29,6 +32,68 @@ func newFakeStore() *fakeStore {
 		workflows: map[string]db.Workflow{},
 		versions:  map[string]db.WorkflowVersion{},
 		runs:      map[string]db.WorkflowRun{},
+		dreamRuns: map[string]db.DreamRun{},
+	}
+}
+
+func TestDreamPauseRemainsDurableWhenEagerLifecycleFails(t *testing.T) {
+	store, svc, rt := setup(t)
+	ctx := context.Background()
+	def := Definition{WorkflowID: "wf_durable_pause", Kind: sdkworkflow.KindDream,
+		Nodes: []sdkworkflow.Node{{ID: "confirm", Type: sdkworkflow.NodeHumanConfirm}}, Edges: []sdkworkflow.Edge{}, RiskLevel: sdkworkflow.RiskLow}
+	id, err := svc.CreateDraft(ctx, "ent_1", "Dream pause", "admin", def)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Publish(ctx, "ent_1", id, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	store.dreamRuns["dr_pause"] = db.DreamRun{ID: "dr_pause", EnterpriseID: "ent_1", PolicyID: "p_1", PolicyVersion: 1,
+		OrgUnitID: "department:one", WorkflowID: pgtype.Text{String: id, Valid: true}, WorkflowVersion: pgtype.Int4{Int32: 1, Valid: true}, Status: "running"}
+	rt.SetDreamLifecycleHook(func(_ context.Context, result RunResult) error {
+		if result.Status == RunWaitingConfirmation {
+			return errors.New("injected reconciliation failure")
+		}
+		return nil
+	})
+	result, err := rt.RunDreamPublished(ctx, "ent_1", id, 1, map[string]any{}, VerifiedDreamContext{
+		EnterpriseID: "ent_1", DreamRunID: "dr_pause", PolicyID: "p_1", PolicyVersion: 1,
+		WorkflowID: id, WorkflowVersion: 1, OrgUnitID: "department:one",
+	})
+	if err != nil || result.Status != RunWaitingConfirmation || store.runs[result.RunID].Status != RunWaitingConfirmation {
+		t.Fatalf("pause was not durably persisted: result=%+v row=%+v err=%v", result, store.runs[result.RunID], err)
+	}
+}
+
+func TestDreamWorkflowBindingRejectsForgedPolicyOrOrg(t *testing.T) {
+	store, svc, rt := setup(t)
+	ctx := context.Background()
+	def := Definition{WorkflowID: "wf_bound_context", Kind: sdkworkflow.KindDream,
+		Nodes: []sdkworkflow.Node{{ID: "confirm", Type: sdkworkflow.NodeHumanConfirm}}, Edges: []sdkworkflow.Edge{}, RiskLevel: sdkworkflow.RiskLow}
+	id, err := svc.CreateDraft(ctx, "ent_1", "Dream binding", "admin", def)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Publish(ctx, "ent_1", id, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	store.dreamRuns["dr_bound"] = db.DreamRun{ID: "dr_bound", EnterpriseID: "ent_1", PolicyID: "p_real", PolicyVersion: 7,
+		OrgUnitID: "department:real", WorkflowID: pgtype.Text{String: id, Valid: true}, WorkflowVersion: pgtype.Int4{Int32: 1, Valid: true}, Status: "running"}
+	for name, mutate := range map[string]func(*VerifiedDreamContext){
+		"policy": func(d *VerifiedDreamContext) { d.PolicyID = "p_forged" },
+		"org":    func(d *VerifiedDreamContext) { d.OrgUnitID = "department:forged" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			dream := VerifiedDreamContext{EnterpriseID: "ent_1", DreamRunID: "dr_bound", PolicyID: "p_real", PolicyVersion: 7,
+				WorkflowID: id, WorkflowVersion: 1, OrgUnitID: "department:real"}
+			mutate(&dream)
+			if _, err := rt.RunDreamPublished(ctx, "ent_1", id, 1, map[string]any{}, dream); err == nil {
+				t.Fatal("forged Dream context created a workflow run")
+			}
+		})
+	}
+	if len(store.runs) != 0 {
+		t.Fatalf("forged contexts persisted workflow runs: %d", len(store.runs))
 	}
 }
 
@@ -105,6 +170,43 @@ func (f *fakeStore) CreateWorkflowRun(_ context.Context, arg db.CreateWorkflowRu
 		EnterpriseID: arg.EnterpriseID, Status: arg.Status, Input: arg.Input}
 	f.runs[arg.ID] = r
 	return r, nil
+}
+
+func (f *fakeStore) CreateBoundDreamWorkflowRun(_ context.Context, arg db.CreateBoundDreamWorkflowRunParams) (db.CreateBoundDreamWorkflowRunRow, error) {
+	dream, ok := f.dreamRuns[arg.DreamRunID]
+	if !ok || dream.EnterpriseID != arg.EnterpriseID || dream.PolicyID != arg.PolicyID || dream.PolicyVersion != arg.PolicyVersion ||
+		dream.OrgUnitID != arg.OrgUnitID || dream.WorkflowID != arg.WorkflowID || dream.WorkflowVersion != arg.Version || dream.Status != "running" || dream.WorkflowRunID.Valid {
+		return db.CreateBoundDreamWorkflowRunRow{}, pgx.ErrNoRows
+	}
+	run := db.WorkflowRun{ID: arg.ID, WorkflowID: arg.WorkflowID.String, Version: arg.Version.Int32,
+		EnterpriseID: arg.EnterpriseID, Status: arg.Status, Input: arg.Input, Output: arg.Output}
+	f.runs[arg.ID] = run
+	dream.WorkflowRunID = pgtype.Text{String: arg.ID, Valid: true}
+	f.dreamRuns[dream.ID] = dream
+	return db.CreateBoundDreamWorkflowRunRow{ID: run.ID, WorkflowID: run.WorkflowID, Version: run.Version,
+		EnterpriseID: run.EnterpriseID, Status: run.Status, Input: run.Input, Output: run.Output}, nil
+}
+
+func (f *fakeStore) TransitionDreamWorkflowRun(_ context.Context, arg db.TransitionDreamWorkflowRunParams) (int64, error) {
+	run, ok := f.runs[arg.ID]
+	if !ok || run.EnterpriseID != arg.EnterpriseID {
+		return 0, nil
+	}
+	run.Status, run.Output = arg.Status, arg.RunOutput
+	f.runs[arg.ID] = run
+	for _, event := range f.outbox {
+		if event.WorkflowRunID == arg.ID && event.Status == arg.Status {
+			return 1, nil
+		}
+	}
+	for _, dream := range f.dreamRuns {
+		if dream.WorkflowRunID.Valid && dream.WorkflowRunID.String == arg.ID && dream.EnterpriseID == arg.EnterpriseID {
+			f.outbox = append(f.outbox, db.DreamWorkflowLifecycleOutbox{ID: int64(len(f.outbox) + 1), EnterpriseID: arg.EnterpriseID,
+				DreamRunID: dream.ID, WorkflowRunID: arg.ID, Status: arg.Status, LifecycleError: arg.LifecycleError})
+			return 1, nil
+		}
+	}
+	return 0, nil
 }
 
 func (f *fakeStore) UpdateWorkflowRunStatus(_ context.Context, arg db.UpdateWorkflowRunStatusParams) (int64, error) {
@@ -391,13 +493,15 @@ func TestFailedDreamWorkflowNotifiesTerminalLifecycle(t *testing.T) {
 	if _, err := svc.Publish(ctx, "ent_1", id, "admin"); err != nil {
 		t.Fatal(err)
 	}
+	store.dreamRuns["dr_1"] = db.DreamRun{ID: "dr_1", EnterpriseID: "ent_1", PolicyID: "p_1", PolicyVersion: 1,
+		OrgUnitID: "department:one", WorkflowID: pgtype.Text{String: id, Valid: true}, WorkflowVersion: pgtype.Int4{Int32: 1, Valid: true}, Status: "running"}
 	var statuses []string
 	rt.SetDreamLifecycleHook(func(_ context.Context, result RunResult) error {
 		statuses = append(statuses, result.Status)
 		return nil
 	})
-	_, err = rt.RunDreamPublished(ctx, "ent_1", id, 1, map[string]any{}, VerifiedDreamContext{EnterpriseID: "ent_1", DreamRunID: "dr_1", PolicyID: "p_1", PolicyVersion: 1, WorkflowID: id, WorkflowVersion: 1})
-	if err == nil || !reflect.DeepEqual(statuses, []string{RunRunning, RunFailed}) {
+	_, err = rt.RunDreamPublished(ctx, "ent_1", id, 1, map[string]any{}, VerifiedDreamContext{EnterpriseID: "ent_1", DreamRunID: "dr_1", PolicyID: "p_1", PolicyVersion: 1, WorkflowID: id, WorkflowVersion: 1, OrgUnitID: "department:one"})
+	if err == nil || !reflect.DeepEqual(statuses, []string{RunFailed}) {
 		t.Fatalf("statuses=%v err=%v runs=%d", statuses, err, len(store.runs))
 	}
 }

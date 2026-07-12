@@ -111,6 +111,124 @@ insert into dream_runs(id,policy_id,version,enterprise_id,status,window_start,wi
 	})
 }
 
+func TestDreamWorkflowLifecycleOutbox(t *testing.T) {
+	dsn := os.Getenv("ATLAS_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("set ATLAS_TEST_POSTGRES_DSN")
+	}
+	ctx, conn, queries := openDreamMigrationQueries(t, dsn, 5)
+	seed := `insert into enterprises(id,name) values('outbox-ent','Outbox');
+insert into workflows(id,enterprise_id,name,kind,draft,created_by) values('outbox-wf','outbox-ent','Dream','dream','{}','x');
+insert into workflow_versions(workflow_id,version,definition,risk_level,published_by) values('outbox-wf',1,'{"workflow_id":"outbox-wf","version":1,"kind":"dream","nodes":[{"id":"confirm","type":"human.confirm"}],"edges":[],"risk_level":"low"}','low','x');
+insert into dream_policies(id,enterprise_id,org_scope,status,draft) values('outbox-policy','outbox-ent','department:outbox','published','{}');
+insert into dream_policy_versions(policy_id,version,definition) values('outbox-policy',1,'{}');
+insert into dream_runs(id,policy_id,version,enterprise_id,status,window_start,window_end,org_unit_id,policy_version,workflow_id,workflow_version,timezone,input_snapshot,visibility_snapshot,model_route,model_version,attempt,coverage,missing_inputs,idempotency_key)
+values('outbox-dream','outbox-policy',1,'outbox-ent','running',now()-interval '1 day',now(),'department:outbox',1,'outbox-wf',1,'UTC','{"source_counts":[],"sanitized_input_ids":[]}','{"visibility_level":"members","org_unit_ids":["department:outbox"],"masked_field_count":0}','workflow/outbox-wf','v1',1,'{"expected_children":0,"completed_children":0,"input_count":0}','[]','outbox-dream');`
+	if _, err := conn.Exec(ctx, seed); err != nil {
+		t.Fatal(err)
+	}
+	state := []byte(`{"next_index":0,"outputs":{},"input":{},"dream":{"enterprise_id":"outbox-ent","dream_run_id":"outbox-dream","policy_id":"outbox-policy","policy_version":1,"workflow_id":"outbox-wf","workflow_version":1,"org_unit_id":"department:outbox"}}`)
+	created, err := queries.CreateBoundDreamWorkflowRun(ctx, db.CreateBoundDreamWorkflowRunParams{
+		ID: "outbox-run", WorkflowID: pgtype.Text{String: "outbox-wf", Valid: true}, Version: pgtype.Int4{Int32: 1, Valid: true}, EnterpriseID: "outbox-ent",
+		Status: "running", Input: []byte(`{}`), Output: state, DreamRunID: "outbox-dream",
+		PolicyID: "outbox-policy", PolicyVersion: 1, OrgUnitID: "department:outbox",
+	})
+	if err != nil || created.ID != "outbox-run" {
+		t.Fatalf("atomic create/bind: run=%+v err=%v", created, err)
+	}
+	if _, err := queries.CreateBoundDreamWorkflowRun(ctx, db.CreateBoundDreamWorkflowRunParams{
+		ID: "forged-run", WorkflowID: pgtype.Text{String: "outbox-wf", Valid: true}, Version: pgtype.Int4{Int32: 1, Valid: true}, EnterpriseID: "outbox-ent",
+		Status: "running", Input: []byte(`{}`), Output: state, DreamRunID: "outbox-dream",
+		PolicyID: "forged-policy", PolicyVersion: 1, OrgUnitID: "department:outbox",
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("forged bound context created workflow run: %v", err)
+	}
+	if _, err := queries.TransitionDreamWorkflowRun(ctx, db.TransitionDreamWorkflowRunParams{
+		ID: "outbox-run", EnterpriseID: "outbox-ent", Status: "failed", RunOutput: state,
+		LifecycleError: strings.Repeat("x", 1001),
+	}); err == nil {
+		t.Fatal("outbox constraint failure did not roll back workflow transition")
+	}
+	var status string
+	if err := conn.QueryRow(ctx, `select status from workflow_runs where id='outbox-run'`).Scan(&status); err != nil || status != "running" {
+		t.Fatalf("failed atomic transition leaked workflow status=%s err=%v", status, err)
+	}
+	if _, err := queries.TransitionDreamWorkflowRun(ctx, db.TransitionDreamWorkflowRunParams{
+		ID: "outbox-run", EnterpriseID: "outbox-ent", Status: "waiting_confirmation", RunOutput: state,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.TransitionDreamWorkflowRun(ctx, db.TransitionDreamWorkflowRunParams{
+		ID: "outbox-run", EnterpriseID: "outbox-ent", Status: "waiting_confirmation", RunOutput: state,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := queries.ListPendingDreamWorkflowLifecycle(ctx, 10)
+	if err != nil || len(pending) != 1 || pending[0].Status != "waiting_confirmation" {
+		t.Fatalf("pending=%+v err=%v", pending, err)
+	}
+	if err := queries.RecordDreamWorkflowLifecycleFailure(ctx, db.RecordDreamWorkflowLifecycleFailureParams{ID: pending[0].ID, LastError: "injected"}); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = queries.ListPendingDreamWorkflowLifecycle(ctx, 10)
+	if err != nil || len(pending) != 1 || pending[0].Attempts != 1 || pending[0].LastError != "injected" {
+		t.Fatalf("retry metadata not durable: pending=%+v err=%v", pending, err)
+	}
+	if err := queries.CompleteDreamWorkflowLifecycle(ctx, pending[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = queries.ListPendingDreamWorkflowLifecycle(ctx, 10)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("completed lifecycle remained pending: %+v err=%v", pending, err)
+	}
+}
+
+func openDreamMigrationQueries(t *testing.T, dsn string, version int64) (context.Context, *pgx.Conn, *db.Queries) {
+	t.Helper()
+	ctx := context.Background()
+	admin, err := storage.NewPool(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := newID("migration_queries")
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err := admin.Exec(ctx, "create schema "+quotedSchema); err != nil {
+		admin.Close()
+		t.Fatal(err)
+	}
+	sqldb, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqldb.SetMaxOpenConns(1)
+	if _, err := sqldb.ExecContext(ctx, "set search_path to "+quotedSchema); err != nil {
+		t.Fatal(err)
+	}
+	goose.SetBaseFS(dbfs.Migrations)
+	if err := goose.SetDialect("postgres"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.UpToContext(ctx, sqldb, "migrations", version); err != nil {
+		t.Fatalf("migrate to %d: %v", version, err)
+	}
+	_ = sqldb.Close()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.RuntimeParams["search_path"] = schema
+	conn, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close(ctx)
+		_, _ = admin.Exec(ctx, "drop schema "+quotedSchema+" cascade")
+		admin.Close()
+	})
+	return ctx, conn, db.New(conn)
+}
+
 func openDreamMigrationDB(t *testing.T, dsn string, version int64) (context.Context, *sql.DB) {
 	t.Helper()
 	ctx := context.Background()
