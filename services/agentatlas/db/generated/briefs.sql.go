@@ -106,6 +106,61 @@ func (q *Queries) GetWorkBriefBySourceHash(ctx context.Context, arg GetWorkBrief
 	return i, err
 }
 
+const listDreamWorkBriefsForWindow = `-- name: ListDreamWorkBriefsForWindow :many
+SELECT id, enterprise_id, employee_user_id, brief_date, summary, topics, project_refs, source_hash, evidence_pointer_id, created_at FROM work_briefs
+WHERE enterprise_id = $1
+  AND employee_user_id = ANY($2::text[])
+  AND brief_date >= $3
+  AND brief_date < $4
+ORDER BY employee_user_id, brief_date, id
+LIMIT $5
+`
+
+type ListDreamWorkBriefsForWindowParams struct {
+	EnterpriseID    string      `json:"enterprise_id"`
+	EmployeeUserIds []string    `json:"employee_user_ids"`
+	WindowStart     pgtype.Date `json:"window_start"`
+	WindowEnd       pgtype.Date `json:"window_end"`
+	ResultLimit     int32       `json:"result_limit"`
+}
+
+func (q *Queries) ListDreamWorkBriefsForWindow(ctx context.Context, arg ListDreamWorkBriefsForWindowParams) ([]WorkBrief, error) {
+	rows, err := q.db.Query(ctx, listDreamWorkBriefsForWindow,
+		arg.EnterpriseID,
+		arg.EmployeeUserIds,
+		arg.WindowStart,
+		arg.WindowEnd,
+		arg.ResultLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []WorkBrief
+	for rows.Next() {
+		var i WorkBrief
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnterpriseID,
+			&i.EmployeeUserID,
+			&i.BriefDate,
+			&i.Summary,
+			&i.Topics,
+			&i.ProjectRefs,
+			&i.SourceHash,
+			&i.EvidencePointerID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWorkBriefsByEmployee = `-- name: ListWorkBriefsByEmployee :many
 SELECT id, enterprise_id, employee_user_id, brief_date, summary, topics, project_refs, source_hash, evidence_pointer_id, created_at FROM work_briefs
 WHERE enterprise_id = $1 AND employee_user_id = $2 AND brief_date >= $3 AND brief_date <= $4

@@ -3,42 +3,52 @@ package dream
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 
 	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type childSummaryResolver struct{ store InputStore }
 
 type childVisibilitySnapshot struct {
-	VisibilityLevel string   `json:"visibility_level"`
-	OrgUnitIDs      []string `json:"org_unit_ids"`
+	VisibilityLevel sdkdream.VisibilityLevel `json:"visibility_level"`
+	OrgUnitIDs      []string                 `json:"org_unit_ids"`
 }
 
-func (r childSummaryResolver) ResolveSource(ctx context.Context, req ResolveRequest, masker *Masker) ([]ResolvedInput, Coverage, []MissingInput, error) {
-	children, err := r.store.ListChildSpaces(ctx, db.ListChildSpacesParams{
-		EnterpriseID: req.EnterpriseID, ParentOrgUnitID: req.OrgUnitID,
+func (r childSummaryResolver) ResolveSource(ctx context.Context, req ResolveRequest, masker *Masker) ([]SourceInput, Coverage, []MissingInput, error) {
+	limit := effectiveInputLimit(req.MaxInputs)
+	children, err := r.store.ListDreamImmediateChildren(ctx, db.ListDreamImmediateChildrenParams{
+		EnterpriseID: req.EnterpriseID, ParentOrgUnitID: req.OrgUnitID, ResultLimit: int32(limit + 1),
 	})
 	if err != nil {
 		return nil, Coverage{}, nil, fmt.Errorf("list immediate child spaces: %w", err)
 	}
+	if len(children) > limit {
+		return nil, Coverage{}, nil, fmt.Errorf("immediate child spaces exceed bound %d", limit)
+	}
 	children = scopedChildren(children, req)
 	coverage := Coverage{ExpectedChildren: len(children)}
-	runs, err := r.store.ListCompletedChildDreamRuns(ctx, db.ListCompletedChildDreamRunsParams{
+	runs, err := r.store.ListDreamCompletedChildRuns(ctx, db.ListDreamCompletedChildRunsParams{
 		EnterpriseID: req.EnterpriseID, ParentOrgUnitID: req.OrgUnitID,
-		WindowStart: pgtype.Timestamptz{Time: req.WindowStart, Valid: !req.WindowStart.IsZero()},
-		WindowEnd:   pgtype.Timestamptz{Time: req.WindowEnd, Valid: !req.WindowEnd.IsZero()},
+		WindowStart: pgtype.Timestamptz{Time: req.WindowStart, Valid: true},
+		WindowEnd:   pgtype.Timestamptz{Time: req.WindowEnd, Valid: true},
+		ResultLimit: int32(limit + 1),
 	})
 	if err != nil {
 		return nil, Coverage{}, nil, fmt.Errorf("list successful child Dream runs: %w", err)
 	}
+	if len(runs) > limit {
+		return nil, Coverage{}, nil, fmt.Errorf("successful child Dream runs exceed bound %d", limit)
+	}
 	runs = scopedSuccessfulRuns(runs, req)
 
-	inputs := make([]ResolvedInput, 0, len(children))
-	missing := make([]MissingInput, 0)
+	inputs := make([]SourceInput, 0, len(children))
+	missing := make([]MissingInput, 0, len(children))
 	for _, child := range children {
 		run, ok := runForChild(runs, child)
 		if !ok {
@@ -54,32 +64,45 @@ func (r childSummaryResolver) ResolveSource(ctx context.Context, req ResolveRequ
 			missing = append(missing, MissingInput{SourceType: sdkdream.SourceChildDreamSummary, SourceID: child.OrgScope, Reason: sdkdream.MissingNotFound})
 			continue
 		}
-		visibility := childVisibility(run.VisibilitySnapshot, child.OrgScope)
+		visibility, valid := childVisibility(run.VisibilitySnapshot)
+		if !valid {
+			missing = append(missing, MissingInput{SourceType: sdkdream.SourceChildDreamSummary, SourceID: child.OrgScope, Reason: sdkdream.MissingNotAuthorized})
+			continue
+		}
 		pointer := ""
 		if summary.EvidencePointerID.Valid {
 			pointer = summary.EvidencePointerID.String
 		}
-		input, reason := makeResolvedInput(req, sdkdream.SourceChildDreamSummary, summary.ID, child.OrgScope, pointer, run.ID, summary.SummaryText, visibility, masker)
+		input, reason := makeSourceInput(req, child.ID, sdkdream.SourceChildDreamSummary, summary.ID, child.OrgScope, pointer, run.ID, summary.SummaryText, visibility, masker)
 		if reason != "" {
 			missing = append(missing, MissingInput{SourceType: sdkdream.SourceChildDreamSummary, SourceID: child.OrgScope, Reason: reason})
 			continue
 		}
 		inputs = append(inputs, input)
 	}
+	coverage.InputCount = len(inputs)
 	return inputs, coverage, missing, nil
 }
 
-func scopedChildren(children []db.KnowledgeSpace, req ResolveRequest) []db.KnowledgeSpace {
+func scopedChildren(children []db.ListDreamImmediateChildrenRow, req ResolveRequest) []db.ListDreamImmediateChildrenRow {
 	seen := make(map[string]struct{}, len(children))
-	result := make([]db.KnowledgeSpace, 0, len(children))
+	result := make([]db.ListDreamImmediateChildrenRow, 0, len(children))
 	for _, child := range children {
-		if child.EnterpriseID != req.EnterpriseID || child.ID == "" || child.OrgScope == "" {
+		if child.EnterpriseID != req.EnterpriseID || child.ID == "" || child.OrgScope == "" ||
+			(!sameOrgUnit(child.ParentScopeID, req.OrgUnitID) && !sameOrgUnit(child.ParentOrgScope, req.OrgUnitID)) ||
+			(req.SpaceID != "" && child.ParentSpaceID != req.SpaceID) {
 			continue
 		}
-		if _, ok := seen[child.OrgScope]; ok {
+		if _, ok := parseScopeRef(child.OrgScope); !ok {
 			continue
 		}
-		seen[child.OrgScope] = struct{}{}
+		if !scopeKindMatches(child.Kind, child.OrgScope) && child.Kind != "" {
+			continue
+		}
+		if _, ok := seen[child.ID]; ok {
+			continue
+		}
+		seen[child.ID] = struct{}{}
 		result = append(result, child)
 	}
 	sort.Slice(result, func(i, j int) bool {
@@ -91,67 +114,72 @@ func scopedChildren(children []db.KnowledgeSpace, req ResolveRequest) []db.Knowl
 	return result
 }
 
-func scopedSuccessfulRuns(runs []db.DreamRun, req ResolveRequest) []db.DreamRun {
-	result := make([]db.DreamRun, 0, len(runs))
+func scopedSuccessfulRuns(runs []db.ListDreamCompletedChildRunsRow, req ResolveRequest) []db.ListDreamCompletedChildRunsRow {
+	result := make([]db.ListDreamCompletedChildRunsRow, 0, len(runs))
 	for _, run := range runs {
-		if run.EnterpriseID != req.EnterpriseID || run.Status != "succeeded" {
+		if run.EnterpriseID != req.EnterpriseID || run.Status != "succeeded" || run.ChildSpaceID == "" || run.ChildOrgScope == "" ||
+			(!sameOrgUnit(run.ParentScopeID, req.OrgUnitID) && !sameOrgUnit(run.ParentOrgScope, req.OrgUnitID)) ||
+			(req.SpaceID != "" && run.ParentSpaceID != req.SpaceID) {
 			continue
 		}
-		if !req.WindowStart.IsZero() && (!run.WindowStart.Valid || !run.WindowStart.Time.Equal(req.WindowStart)) {
+		if !run.WindowStart.Valid || !run.WindowEnd.Valid || !run.WindowStart.Time.Equal(req.WindowStart) || !run.WindowEnd.Time.Equal(req.WindowEnd) {
 			continue
 		}
-		if !req.WindowEnd.IsZero() && (!run.WindowEnd.Valid || !run.WindowEnd.Time.Equal(req.WindowEnd)) {
+		if !sameOrgUnit(run.ChildOrgScope, run.OrgUnitID) {
 			continue
 		}
 		result = append(result, run)
 	}
 	sort.Slice(result, func(i, j int) bool {
-		if result[i].OrgUnitID != result[j].OrgUnitID {
-			return result[i].OrgUnitID < result[j].OrgUnitID
+		if result[i].ChildSpaceID != result[j].ChildSpaceID {
+			return result[i].ChildSpaceID < result[j].ChildSpaceID
 		}
 		return result[i].ID < result[j].ID
 	})
 	return result
 }
 
-func runForChild(runs []db.DreamRun, child db.KnowledgeSpace) (db.DreamRun, bool) {
+func runForChild(runs []db.ListDreamCompletedChildRunsRow, child db.ListDreamImmediateChildrenRow) (db.ListDreamCompletedChildRunsRow, bool) {
 	for _, run := range runs {
-		if sameOrgUnit(child.OrgScope, run.OrgUnitID) {
+		if run.ChildSpaceID == child.ID && sameOrgUnit(run.ChildOrgScope, child.OrgScope) && sameOrgUnit(run.OrgUnitID, child.OrgScope) {
 			return run, true
 		}
 	}
-	return db.DreamRun{}, false
+	return db.ListDreamCompletedChildRunsRow{}, false
 }
 
 func (r childSummaryResolver) summaryForRun(ctx context.Context, enterpriseID, spaceID, runID string) (db.DreamSummary, bool, error) {
 	for _, layer := range []string{"retrieval", "display"} {
-		summaries, err := r.store.ListDreamSummariesBySpace(ctx, db.ListDreamSummariesBySpaceParams{
-			SpaceID: spaceID, Layer: layer, Limit: defaultMaxResolvedInputs,
+		summary, err := r.store.GetDreamSummaryForRunLayer(ctx, db.GetDreamSummaryForRunLayerParams{
+			EnterpriseID: enterpriseID, RunID: runID, SpaceID: spaceID, Layer: layer,
 		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
 		if err != nil {
-			return db.DreamSummary{}, false, fmt.Errorf("list child %s summaries: %w", layer, err)
+			return db.DreamSummary{}, false, fmt.Errorf("get child %s summary: %w", layer, err)
 		}
-		sort.Slice(summaries, func(i, j int) bool { return summaries[i].ID < summaries[j].ID })
-		for _, summary := range summaries {
-			if summary.EnterpriseID == enterpriseID && summary.SpaceID == spaceID && summary.RunID == runID && summary.Layer == layer && summary.SummaryText != "" {
-				return summary, true, nil
-			}
+		if summary.EnterpriseID != enterpriseID || summary.SpaceID != spaceID || summary.RunID != runID || summary.Layer != layer || summary.SummaryText == "" {
+			return db.DreamSummary{}, false, fmt.Errorf("child %s summary returned invalid provenance", layer)
 		}
+		return summary, true, nil
 	}
 	return db.DreamSummary{}, false, nil
 }
 
-func childVisibility(raw []byte, fallbackOrg string) []string {
+func childVisibility(raw []byte) ([]string, bool) {
 	var snapshot childVisibilitySnapshot
-	if len(raw) == 0 || json.Unmarshal(raw, &snapshot) != nil {
-		return []string{fallbackOrg}
+	if len(raw) == 0 || json.Unmarshal(raw, &snapshot) != nil || !visibilityLevelToken(string(snapshot.VisibilityLevel)) || len(snapshot.OrgUnitIDs) == 0 {
+		return nil, false
 	}
-	visibility := append([]string(nil), snapshot.OrgUnitIDs...)
-	if snapshot.VisibilityLevel != "" {
-		visibility = append(visibility, snapshot.VisibilityLevel)
+	visibility := make([]string, 0, len(snapshot.OrgUnitIDs)+1)
+	for _, orgUnitID := range snapshot.OrgUnitIDs {
+		if _, ok := parseScopeRef(orgUnitID); !ok {
+			return nil, false
+		}
+		visibility = append(visibility, orgUnitID)
 	}
-	if len(visibility) == 0 {
-		visibility = append(visibility, fallbackOrg)
-	}
-	return visibility
+	visibility = append(visibility, string(snapshot.VisibilityLevel))
+	visibility = normalizeStrings(visibility, maxVisibilityEntries+1)
+	return visibility, len(visibility) >= 2 && len(visibility) <= maxVisibilityEntries
 }

@@ -154,6 +154,44 @@ func (q *Queries) InsertKnowledgeSpaceVersion(ctx context.Context, arg InsertKno
 	return err
 }
 
+const listDreamSpaceMembers = `-- name: ListDreamSpaceMembers :many
+SELECT space_id, user_id, display_name, org_version, updated_at FROM space_membership_cache
+WHERE space_id = $1
+ORDER BY user_id
+LIMIT $2
+`
+
+type ListDreamSpaceMembersParams struct {
+	SpaceID     string `json:"space_id"`
+	ResultLimit int32  `json:"result_limit"`
+}
+
+func (q *Queries) ListDreamSpaceMembers(ctx context.Context, arg ListDreamSpaceMembersParams) ([]SpaceMembershipCache, error) {
+	rows, err := q.db.Query(ctx, listDreamSpaceMembers, arg.SpaceID, arg.ResultLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SpaceMembershipCache
+	for rows.Next() {
+		var i SpaceMembershipCache
+		if err := rows.Scan(
+			&i.SpaceID,
+			&i.UserID,
+			&i.DisplayName,
+			&i.OrgVersion,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEnterprises = `-- name: ListEnterprises :many
 SELECT id, name, created_at FROM enterprises ORDER BY created_at
 `

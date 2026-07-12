@@ -13,3 +13,14 @@ WHERE space_id = $1
   AND ($3::timestamptz IS NULL OR node_time <= $3)
 ORDER BY node_time DESC
 LIMIT $4;
+
+-- name: ListDreamTimelineNodes :many
+SELECT * FROM timeline_nodes
+WHERE enterprise_id = sqlc.arg(enterprise_id)
+  AND space_id = sqlc.arg(space_id)
+  AND org_scope = sqlc.arg(org_scope)
+  AND source_type = sqlc.arg(source_type)
+  AND node_time >= sqlc.arg(window_start)
+  AND node_time < sqlc.arg(window_end)
+ORDER BY node_time, id
+LIMIT sqlc.arg(result_limit);

@@ -18,3 +18,12 @@ ORDER BY brief_date DESC;
 SELECT * FROM work_briefs
 WHERE enterprise_id = $1 AND employee_user_id = ANY($2::text[]) AND brief_date >= $3 AND brief_date <= $4
 ORDER BY employee_user_id, brief_date;
+
+-- name: ListDreamWorkBriefsForWindow :many
+SELECT * FROM work_briefs
+WHERE enterprise_id = sqlc.arg(enterprise_id)
+  AND employee_user_id = ANY(sqlc.arg(employee_user_ids)::text[])
+  AND brief_date >= sqlc.arg(window_start)
+  AND brief_date < sqlc.arg(window_end)
+ORDER BY employee_user_id, brief_date, id
+LIMIT sqlc.arg(result_limit);

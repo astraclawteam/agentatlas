@@ -71,6 +71,15 @@ WHERE space_id = $1 AND layer = $2
 ORDER BY created_at DESC
 LIMIT $3;
 
+-- name: GetDreamSummaryForRunLayer :one
+SELECT * FROM dream_summaries
+WHERE enterprise_id = sqlc.arg(enterprise_id)
+  AND run_id = sqlc.arg(run_id)
+  AND space_id = sqlc.arg(space_id)
+  AND layer = sqlc.arg(layer)
+ORDER BY created_at DESC, id DESC
+LIMIT 1;
+
 -- name: InsertDreamEvidencePointer :exec
 INSERT INTO dream_evidence_pointers (dream_summary_id, evidence_pointer_id)
 VALUES ($1, $2)
@@ -93,6 +102,29 @@ WHERE spaces.enterprise_id = sqlc.arg(enterprise_id)
       OR parent_space.org_scope = sqlc.arg(parent_org_unit_id)::text
   )
 ORDER BY spaces.kind, spaces.name, spaces.id;
+
+-- name: ListDreamImmediateChildren :many
+SELECT DISTINCT spaces.*,
+       parent_space.id::text AS parent_space_id,
+       parent_binding.scope_id::text AS parent_scope_id,
+       parent_space.org_scope::text AS parent_org_scope
+FROM knowledge_spaces AS spaces
+JOIN org_scope_bindings AS bindings
+  ON bindings.enterprise_id = spaces.enterprise_id
+ AND bindings.space_id = spaces.id
+JOIN org_scope_bindings AS parent_binding
+  ON parent_binding.enterprise_id = bindings.enterprise_id
+ AND parent_binding.scope_id = bindings.parent_scope_id
+JOIN knowledge_spaces AS parent_space
+  ON parent_space.enterprise_id = parent_binding.enterprise_id
+ AND parent_space.id = parent_binding.space_id
+WHERE spaces.enterprise_id = sqlc.arg(enterprise_id)
+  AND (
+      parent_binding.scope_id = sqlc.arg(parent_org_unit_id)::text
+      OR parent_space.org_scope = sqlc.arg(parent_org_unit_id)::text
+  )
+ORDER BY spaces.kind, spaces.name, spaces.id, parent_space.id, parent_binding.scope_id, parent_space.org_scope
+LIMIT sqlc.arg(result_limit);
 
 -- name: ListCompletedChildDreamRuns :many
 SELECT runs.*
@@ -118,6 +150,38 @@ WHERE runs.enterprise_id = sqlc.arg(enterprise_id)
   AND runs.window_start = sqlc.arg(window_start)
   AND runs.window_end = sqlc.arg(window_end)
 ORDER BY runs.org_unit_id, runs.id;
+
+-- name: ListDreamCompletedChildRuns :many
+SELECT DISTINCT runs.*,
+       child_space.id::text AS child_space_id,
+       child_space.org_scope::text AS child_org_scope,
+       parent_space.id::text AS parent_space_id,
+       parent_binding.scope_id::text AS parent_scope_id,
+       parent_space.org_scope::text AS parent_org_scope
+FROM dream_runs AS runs
+JOIN org_scope_bindings AS bindings
+  ON bindings.enterprise_id = runs.enterprise_id
+JOIN knowledge_spaces AS child_space
+  ON child_space.id = bindings.space_id
+ AND child_space.enterprise_id = runs.enterprise_id
+ AND (bindings.scope_id = runs.org_unit_id OR child_space.org_scope = runs.org_unit_id)
+JOIN org_scope_bindings AS parent_binding
+  ON parent_binding.enterprise_id = bindings.enterprise_id
+ AND parent_binding.scope_id = bindings.parent_scope_id
+JOIN knowledge_spaces AS parent_space
+  ON parent_space.id = parent_binding.space_id
+ AND parent_space.enterprise_id = bindings.enterprise_id
+WHERE runs.enterprise_id = sqlc.arg(enterprise_id)
+  AND (
+      parent_binding.scope_id = sqlc.arg(parent_org_unit_id)::text
+      OR parent_space.org_scope = sqlc.arg(parent_org_unit_id)::text
+  )
+  AND runs.status = 'succeeded'
+  AND runs.window_start = sqlc.arg(window_start)
+  AND runs.window_end = sqlc.arg(window_end)
+ORDER BY runs.org_unit_id, runs.id, child_space.id, child_space.org_scope,
+         parent_space.id, parent_binding.scope_id, parent_space.org_scope
+LIMIT sqlc.arg(result_limit);
 
 -- name: ListDreamRunsByOrg :many
 SELECT *

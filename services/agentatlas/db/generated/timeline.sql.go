@@ -79,6 +79,67 @@ func (q *Queries) InsertTimelineNode(ctx context.Context, arg InsertTimelineNode
 	return i, err
 }
 
+const listDreamTimelineNodes = `-- name: ListDreamTimelineNodes :many
+SELECT id, enterprise_id, space_id, org_scope, node_time, source_type, summary_text, tags, evidence_pointer_id, created_at FROM timeline_nodes
+WHERE enterprise_id = $1
+  AND space_id = $2
+  AND org_scope = $3
+  AND source_type = $4
+  AND node_time >= $5
+  AND node_time < $6
+ORDER BY node_time, id
+LIMIT $7
+`
+
+type ListDreamTimelineNodesParams struct {
+	EnterpriseID string             `json:"enterprise_id"`
+	SpaceID      string             `json:"space_id"`
+	OrgScope     string             `json:"org_scope"`
+	SourceType   string             `json:"source_type"`
+	WindowStart  pgtype.Timestamptz `json:"window_start"`
+	WindowEnd    pgtype.Timestamptz `json:"window_end"`
+	ResultLimit  int32              `json:"result_limit"`
+}
+
+func (q *Queries) ListDreamTimelineNodes(ctx context.Context, arg ListDreamTimelineNodesParams) ([]TimelineNode, error) {
+	rows, err := q.db.Query(ctx, listDreamTimelineNodes,
+		arg.EnterpriseID,
+		arg.SpaceID,
+		arg.OrgScope,
+		arg.SourceType,
+		arg.WindowStart,
+		arg.WindowEnd,
+		arg.ResultLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TimelineNode
+	for rows.Next() {
+		var i TimelineNode
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnterpriseID,
+			&i.SpaceID,
+			&i.OrgScope,
+			&i.NodeTime,
+			&i.SourceType,
+			&i.SummaryText,
+			&i.Tags,
+			&i.EvidencePointerID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTimelineNodes = `-- name: ListTimelineNodes :many
 SELECT id, enterprise_id, space_id, org_scope, node_time, source_type, summary_text, tags, evidence_pointer_id, created_at FROM timeline_nodes
 WHERE space_id = $1

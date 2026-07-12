@@ -59,5 +59,11 @@ DELETE FROM space_membership_cache WHERE space_id = $1 AND org_version < $2;
 -- name: ListSpaceMembers :many
 SELECT * FROM space_membership_cache WHERE space_id = $1 ORDER BY user_id;
 
+-- name: ListDreamSpaceMembers :many
+SELECT * FROM space_membership_cache
+WHERE space_id = sqlc.arg(space_id)
+ORDER BY user_id
+LIMIT sqlc.arg(result_limit);
+
 -- name: ListEnterprises :many
 SELECT * FROM enterprises ORDER BY created_at;

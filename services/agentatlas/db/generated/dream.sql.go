@@ -464,6 +464,50 @@ func (q *Queries) GetDreamSummary(ctx context.Context, id string) (DreamSummary,
 	return i, err
 }
 
+const getDreamSummaryForRunLayer = `-- name: GetDreamSummaryForRunLayer :one
+SELECT id, run_id, enterprise_id, space_id, layer, summary_text, sealed_object_key, evidence_pointer_id, risk_signals, created_at, facts, themes, trends, todos FROM dream_summaries
+WHERE enterprise_id = $1
+  AND run_id = $2
+  AND space_id = $3
+  AND layer = $4
+ORDER BY created_at DESC, id DESC
+LIMIT 1
+`
+
+type GetDreamSummaryForRunLayerParams struct {
+	EnterpriseID string `json:"enterprise_id"`
+	RunID        string `json:"run_id"`
+	SpaceID      string `json:"space_id"`
+	Layer        string `json:"layer"`
+}
+
+func (q *Queries) GetDreamSummaryForRunLayer(ctx context.Context, arg GetDreamSummaryForRunLayerParams) (DreamSummary, error) {
+	row := q.db.QueryRow(ctx, getDreamSummaryForRunLayer,
+		arg.EnterpriseID,
+		arg.RunID,
+		arg.SpaceID,
+		arg.Layer,
+	)
+	var i DreamSummary
+	err := row.Scan(
+		&i.ID,
+		&i.RunID,
+		&i.EnterpriseID,
+		&i.SpaceID,
+		&i.Layer,
+		&i.SummaryText,
+		&i.SealedObjectKey,
+		&i.EvidencePointerID,
+		&i.RiskSignals,
+		&i.CreatedAt,
+		&i.Facts,
+		&i.Themes,
+		&i.Trends,
+		&i.Todos,
+	)
+	return i, err
+}
+
 const getLatestDreamPolicyVersion = `-- name: GetLatestDreamPolicyVersion :one
 SELECT policy_id, version, definition, published_at FROM dream_policy_versions WHERE policy_id = $1 ORDER BY version DESC LIMIT 1
 `
@@ -673,6 +717,211 @@ func (q *Queries) ListCompletedChildDreamRuns(ctx context.Context, arg ListCompl
 			&i.Coverage,
 			&i.MissingInputs,
 			&i.IdempotencyKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDreamCompletedChildRuns = `-- name: ListDreamCompletedChildRuns :many
+SELECT DISTINCT runs.id, runs.policy_id, runs.version, runs.enterprise_id, runs.status, runs.window_start, runs.window_end, runs.error, runs.created_at, runs.finished_at, runs.org_unit_id, runs.policy_version, runs.workflow_id, runs.workflow_version, runs.timezone, runs.input_snapshot, runs.visibility_snapshot, runs.model_route, runs.model_version, runs.attempt, runs.rerun_of_run_id, runs.coverage, runs.missing_inputs, runs.idempotency_key,
+       child_space.id::text AS child_space_id,
+       child_space.org_scope::text AS child_org_scope,
+       parent_space.id::text AS parent_space_id,
+       parent_binding.scope_id::text AS parent_scope_id,
+       parent_space.org_scope::text AS parent_org_scope
+FROM dream_runs AS runs
+JOIN org_scope_bindings AS bindings
+  ON bindings.enterprise_id = runs.enterprise_id
+JOIN knowledge_spaces AS child_space
+  ON child_space.id = bindings.space_id
+ AND child_space.enterprise_id = runs.enterprise_id
+ AND (bindings.scope_id = runs.org_unit_id OR child_space.org_scope = runs.org_unit_id)
+JOIN org_scope_bindings AS parent_binding
+  ON parent_binding.enterprise_id = bindings.enterprise_id
+ AND parent_binding.scope_id = bindings.parent_scope_id
+JOIN knowledge_spaces AS parent_space
+  ON parent_space.id = parent_binding.space_id
+ AND parent_space.enterprise_id = bindings.enterprise_id
+WHERE runs.enterprise_id = $1
+  AND (
+      parent_binding.scope_id = $2::text
+      OR parent_space.org_scope = $2::text
+  )
+  AND runs.status = 'succeeded'
+  AND runs.window_start = $3
+  AND runs.window_end = $4
+ORDER BY runs.org_unit_id, runs.id, child_space.id, child_space.org_scope,
+         parent_space.id, parent_binding.scope_id, parent_space.org_scope
+LIMIT $5
+`
+
+type ListDreamCompletedChildRunsParams struct {
+	EnterpriseID    string             `json:"enterprise_id"`
+	ParentOrgUnitID string             `json:"parent_org_unit_id"`
+	WindowStart     pgtype.Timestamptz `json:"window_start"`
+	WindowEnd       pgtype.Timestamptz `json:"window_end"`
+	ResultLimit     int32              `json:"result_limit"`
+}
+
+type ListDreamCompletedChildRunsRow struct {
+	ID                 string             `json:"id"`
+	PolicyID           string             `json:"policy_id"`
+	Version            int32              `json:"version"`
+	EnterpriseID       string             `json:"enterprise_id"`
+	Status             string             `json:"status"`
+	WindowStart        pgtype.Timestamptz `json:"window_start"`
+	WindowEnd          pgtype.Timestamptz `json:"window_end"`
+	Error              string             `json:"error"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	FinishedAt         pgtype.Timestamptz `json:"finished_at"`
+	OrgUnitID          string             `json:"org_unit_id"`
+	PolicyVersion      int32              `json:"policy_version"`
+	WorkflowID         pgtype.Text        `json:"workflow_id"`
+	WorkflowVersion    pgtype.Int4        `json:"workflow_version"`
+	Timezone           string             `json:"timezone"`
+	InputSnapshot      []byte             `json:"input_snapshot"`
+	VisibilitySnapshot []byte             `json:"visibility_snapshot"`
+	ModelRoute         string             `json:"model_route"`
+	ModelVersion       string             `json:"model_version"`
+	Attempt            int32              `json:"attempt"`
+	RerunOfRunID       pgtype.Text        `json:"rerun_of_run_id"`
+	Coverage           []byte             `json:"coverage"`
+	MissingInputs      []byte             `json:"missing_inputs"`
+	IdempotencyKey     string             `json:"idempotency_key"`
+	ChildSpaceID       string             `json:"child_space_id"`
+	ChildOrgScope      string             `json:"child_org_scope"`
+	ParentSpaceID      string             `json:"parent_space_id"`
+	ParentScopeID      string             `json:"parent_scope_id"`
+	ParentOrgScope     string             `json:"parent_org_scope"`
+}
+
+func (q *Queries) ListDreamCompletedChildRuns(ctx context.Context, arg ListDreamCompletedChildRunsParams) ([]ListDreamCompletedChildRunsRow, error) {
+	rows, err := q.db.Query(ctx, listDreamCompletedChildRuns,
+		arg.EnterpriseID,
+		arg.ParentOrgUnitID,
+		arg.WindowStart,
+		arg.WindowEnd,
+		arg.ResultLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListDreamCompletedChildRunsRow
+	for rows.Next() {
+		var i ListDreamCompletedChildRunsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.PolicyID,
+			&i.Version,
+			&i.EnterpriseID,
+			&i.Status,
+			&i.WindowStart,
+			&i.WindowEnd,
+			&i.Error,
+			&i.CreatedAt,
+			&i.FinishedAt,
+			&i.OrgUnitID,
+			&i.PolicyVersion,
+			&i.WorkflowID,
+			&i.WorkflowVersion,
+			&i.Timezone,
+			&i.InputSnapshot,
+			&i.VisibilitySnapshot,
+			&i.ModelRoute,
+			&i.ModelVersion,
+			&i.Attempt,
+			&i.RerunOfRunID,
+			&i.Coverage,
+			&i.MissingInputs,
+			&i.IdempotencyKey,
+			&i.ChildSpaceID,
+			&i.ChildOrgScope,
+			&i.ParentSpaceID,
+			&i.ParentScopeID,
+			&i.ParentOrgScope,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDreamImmediateChildren = `-- name: ListDreamImmediateChildren :many
+SELECT DISTINCT spaces.id, spaces.enterprise_id, spaces.kind, spaces.name, spaces.org_scope, spaces.org_version, spaces.created_at, spaces.updated_at,
+       parent_space.id::text AS parent_space_id,
+       parent_binding.scope_id::text AS parent_scope_id,
+       parent_space.org_scope::text AS parent_org_scope
+FROM knowledge_spaces AS spaces
+JOIN org_scope_bindings AS bindings
+  ON bindings.enterprise_id = spaces.enterprise_id
+ AND bindings.space_id = spaces.id
+JOIN org_scope_bindings AS parent_binding
+  ON parent_binding.enterprise_id = bindings.enterprise_id
+ AND parent_binding.scope_id = bindings.parent_scope_id
+JOIN knowledge_spaces AS parent_space
+  ON parent_space.enterprise_id = parent_binding.enterprise_id
+ AND parent_space.id = parent_binding.space_id
+WHERE spaces.enterprise_id = $1
+  AND (
+      parent_binding.scope_id = $2::text
+      OR parent_space.org_scope = $2::text
+  )
+ORDER BY spaces.kind, spaces.name, spaces.id, parent_space.id, parent_binding.scope_id, parent_space.org_scope
+LIMIT $3
+`
+
+type ListDreamImmediateChildrenParams struct {
+	EnterpriseID    string `json:"enterprise_id"`
+	ParentOrgUnitID string `json:"parent_org_unit_id"`
+	ResultLimit     int32  `json:"result_limit"`
+}
+
+type ListDreamImmediateChildrenRow struct {
+	ID             string             `json:"id"`
+	EnterpriseID   string             `json:"enterprise_id"`
+	Kind           string             `json:"kind"`
+	Name           string             `json:"name"`
+	OrgScope       string             `json:"org_scope"`
+	OrgVersion     int64              `json:"org_version"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	ParentSpaceID  string             `json:"parent_space_id"`
+	ParentScopeID  string             `json:"parent_scope_id"`
+	ParentOrgScope string             `json:"parent_org_scope"`
+}
+
+func (q *Queries) ListDreamImmediateChildren(ctx context.Context, arg ListDreamImmediateChildrenParams) ([]ListDreamImmediateChildrenRow, error) {
+	rows, err := q.db.Query(ctx, listDreamImmediateChildren, arg.EnterpriseID, arg.ParentOrgUnitID, arg.ResultLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListDreamImmediateChildrenRow
+	for rows.Next() {
+		var i ListDreamImmediateChildrenRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnterpriseID,
+			&i.Kind,
+			&i.Name,
+			&i.OrgScope,
+			&i.OrgVersion,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ParentSpaceID,
+			&i.ParentScopeID,
+			&i.ParentOrgScope,
 		); err != nil {
 			return nil, err
 		}
