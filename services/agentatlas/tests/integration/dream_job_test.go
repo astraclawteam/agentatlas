@@ -93,6 +93,18 @@ func TestDreamJob(t *testing.T) {
 			t.Fatalf("brief %d: %v", i, err)
 		}
 	}
+	if _, err := q.CreateWorkflowDraft(ctx, db.CreateWorkflowDraftParams{
+		ID: "legacy-direct-dream", EnterpriseID: entID, Name: "Legacy direct Dream",
+		Kind: "dream", CreatedBy: "integration", Draft: []byte(`{"nodes":[]}`),
+	}); err != nil {
+		t.Fatalf("Dream workflow: %v", err)
+	}
+	if _, err := q.PublishWorkflowVersion(ctx, db.PublishWorkflowVersionParams{
+		WorkflowID: "legacy-direct-dream", Version: 1, Definition: []byte(`{"nodes":[]}`),
+		RiskLevel: "low", PublishedBy: "integration",
+	}); err != nil {
+		t.Fatalf("Dream workflow version: %v", err)
+	}
 
 	// policy: draft -> publish
 	policySvc := dream.NewPolicyService(q)

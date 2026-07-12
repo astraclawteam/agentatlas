@@ -9,6 +9,13 @@ ALTER TABLE dream_policies
 ALTER TABLE workflows
     ADD CONSTRAINT workflows_enterprise_id_id_uniq UNIQUE (enterprise_id, id);
 
+ALTER TABLE knowledge_spaces
+    ADD CONSTRAINT knowledge_spaces_enterprise_id_id_uniq UNIQUE (enterprise_id, id);
+
+ALTER TABLE org_scope_bindings
+    ADD CONSTRAINT org_scope_bindings_enterprise_space_fk
+    FOREIGN KEY (enterprise_id, space_id) REFERENCES knowledge_spaces (enterprise_id, id);
+
 ALTER TABLE dream_runs
     ADD COLUMN org_unit_id text NOT NULL DEFAULT '',
     ADD COLUMN policy_version integer NOT NULL DEFAULT 1 CHECK (policy_version > 0),
@@ -44,7 +51,8 @@ WHERE policies.id = runs.policy_id;
 
 ALTER TABLE dream_runs
     ADD CONSTRAINT dream_runs_policy_version_fk
-    FOREIGN KEY (policy_id, policy_version) REFERENCES dream_policy_versions (policy_id, version);
+    FOREIGN KEY (policy_id, policy_version) REFERENCES dream_policy_versions (policy_id, version)
+    NOT VALID;
 
 ALTER TABLE dream_runs DROP CONSTRAINT dream_runs_status_check;
 ALTER TABLE dream_runs
@@ -61,6 +69,12 @@ ALTER TABLE dream_summaries
     ADD COLUMN trends jsonb NOT NULL DEFAULT '[]',
     ADD COLUMN todos jsonb NOT NULL DEFAULT '[]';
 
+ALTER TABLE dream_summaries
+    ADD CONSTRAINT dream_summaries_enterprise_run_fk
+        FOREIGN KEY (enterprise_id, run_id) REFERENCES dream_runs (enterprise_id, id),
+    ADD CONSTRAINT dream_summaries_enterprise_space_fk
+        FOREIGN KEY (enterprise_id, space_id) REFERENCES knowledge_spaces (enterprise_id, id);
+
 -- +goose StatementBegin
 CREATE FUNCTION reject_immutable_dream_policy_version_update() RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -73,6 +87,19 @@ $$;
 CREATE TRIGGER dream_policy_versions_immutable
 BEFORE UPDATE OR DELETE ON dream_policy_versions
 FOR EACH ROW EXECUTE FUNCTION reject_immutable_dream_policy_version_update();
+
+-- +goose StatementBegin
+CREATE FUNCTION reject_immutable_workflow_version_update() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'Published workflow versions are immutable';
+END;
+$$;
+-- +goose StatementEnd
+
+CREATE TRIGGER workflow_versions_immutable
+BEFORE UPDATE OR DELETE ON workflow_versions
+FOR EACH ROW EXECUTE FUNCTION reject_immutable_workflow_version_update();
 
 -- +goose StatementBegin
 CREATE FUNCTION reject_immutable_dream_run_update() RETURNS trigger
@@ -139,6 +166,19 @@ $$;
 CREATE TRIGGER dream_run_lineage_enterprise_guard
 BEFORE INSERT OR UPDATE ON dream_run_lineage
 FOR EACH ROW EXECUTE FUNCTION validate_dream_run_lineage();
+
+-- +goose StatementBegin
+CREATE FUNCTION reject_immutable_dream_run_lineage_change() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'Dream run lineage is immutable';
+END;
+$$;
+-- +goose StatementEnd
+
+CREATE TRIGGER dream_run_lineage_immutable
+BEFORE UPDATE OR DELETE ON dream_run_lineage
+FOR EACH ROW EXECUTE FUNCTION reject_immutable_dream_run_lineage_change();
 
 CREATE TABLE dream_run_annotations (
     id              text PRIMARY KEY,
@@ -231,6 +271,32 @@ CREATE TABLE change_reviews (
     )
 );
 
+-- +goose StatementBegin
+CREATE FUNCTION validate_change_review_revision() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+    current_revision integer;
+    requester text;
+BEGIN
+    SELECT revision, requester_user_id
+      INTO current_revision, requester
+      FROM change_drafts
+     WHERE enterprise_id = NEW.enterprise_id AND id = NEW.change_id;
+    IF current_revision IS NULL OR NEW.change_revision <> current_revision THEN
+        RAISE EXCEPTION 'Change review revision is stale or outside the enterprise';
+    END IF;
+    IF NEW.review_mode = 'upward_review' AND NEW.reviewer_user_id = requester THEN
+        RAISE EXCEPTION 'Requester cannot approve their own upward review';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+-- +goose StatementEnd
+
+CREATE TRIGGER change_reviews_revision_guard
+BEFORE INSERT OR UPDATE ON change_reviews
+FOR EACH ROW EXECUTE FUNCTION validate_change_review_revision();
+
 CREATE TABLE publish_operations (
     id               text PRIMARY KEY,
     enterprise_id    text NOT NULL REFERENCES enterprises(id),
@@ -245,15 +311,43 @@ CREATE TABLE publish_operations (
     FOREIGN KEY (enterprise_id, change_id) REFERENCES change_drafts (enterprise_id, id)
 );
 
+-- +goose StatementBegin
+CREATE FUNCTION validate_publish_operation_revision() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+    current_revision integer;
+BEGIN
+    SELECT revision
+      INTO current_revision
+      FROM change_drafts
+     WHERE enterprise_id = NEW.enterprise_id AND id = NEW.change_id;
+    IF current_revision IS NULL OR NEW.change_revision <> current_revision THEN
+        RAISE EXCEPTION 'Publish operation revision is stale or outside the enterprise';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+-- +goose StatementEnd
+
+CREATE TRIGGER publish_operations_revision_guard
+BEFORE INSERT OR UPDATE ON publish_operations
+FOR EACH ROW EXECUTE FUNCTION validate_publish_operation_revision();
+
 -- +goose Down
 
+DROP TRIGGER publish_operations_revision_guard ON publish_operations;
+DROP FUNCTION validate_publish_operation_revision();
 DROP TABLE publish_operations;
+DROP TRIGGER change_reviews_revision_guard ON change_reviews;
+DROP FUNCTION validate_change_review_revision();
 DROP TABLE change_reviews;
 DROP TRIGGER change_versions_immutable ON change_versions;
 DROP FUNCTION reject_immutable_change_version_update();
 DROP TABLE change_versions;
 DROP TABLE change_drafts;
 DROP TABLE dream_run_annotations;
+DROP TRIGGER dream_run_lineage_immutable ON dream_run_lineage;
+DROP FUNCTION reject_immutable_dream_run_lineage_change();
 DROP TRIGGER dream_run_lineage_enterprise_guard ON dream_run_lineage;
 DROP FUNCTION validate_dream_run_lineage();
 DROP TABLE dream_run_lineage;
@@ -261,7 +355,12 @@ DROP TRIGGER dream_runs_immutable_fields ON dream_runs;
 DROP FUNCTION reject_immutable_dream_run_update();
 DROP TRIGGER dream_policy_versions_immutable ON dream_policy_versions;
 DROP FUNCTION reject_immutable_dream_policy_version_update();
+DROP TRIGGER workflow_versions_immutable ON workflow_versions;
+DROP FUNCTION reject_immutable_workflow_version_update();
 
+ALTER TABLE dream_summaries
+    DROP CONSTRAINT dream_summaries_enterprise_space_fk,
+    DROP CONSTRAINT dream_summaries_enterprise_run_fk;
 ALTER TABLE dream_summaries
     DROP COLUMN todos,
     DROP COLUMN trends,
@@ -298,3 +397,5 @@ ALTER TABLE dream_runs
 
 ALTER TABLE workflows DROP CONSTRAINT workflows_enterprise_id_id_uniq;
 ALTER TABLE dream_policies DROP CONSTRAINT dream_policies_enterprise_id_id_uniq;
+ALTER TABLE org_scope_bindings DROP CONSTRAINT org_scope_bindings_enterprise_space_fk;
+ALTER TABLE knowledge_spaces DROP CONSTRAINT knowledge_spaces_enterprise_id_id_uniq;

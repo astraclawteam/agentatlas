@@ -191,26 +191,18 @@ func (q *Queries) CreateChangeVersion(ctx context.Context, arg CreateChangeVersi
 }
 
 const getOrCreatePublishOperation = `-- name: GetOrCreatePublishOperation :one
-WITH inserted AS (
-    INSERT INTO publish_operations (
-        id, enterprise_id, change_id, change_revision, idempotency_key, status
-    )
-    VALUES (
-        $1, $2, $3,
-        $4, $5, $6
-    )
-    ON CONFLICT (enterprise_id, idempotency_key) DO NOTHING
-    RETURNING id, enterprise_id, change_id, change_revision, idempotency_key, status, result, created_at, finished_at
+INSERT INTO publish_operations (
+    id, enterprise_id, change_id, change_revision, idempotency_key, status
 )
-SELECT id, enterprise_id, change_id, change_revision, idempotency_key, status, result, created_at, finished_at FROM inserted
-UNION ALL
-SELECT id, enterprise_id, change_id, change_revision, idempotency_key, status, result, created_at, finished_at
-FROM publish_operations
-WHERE enterprise_id = $2
-  AND idempotency_key = $5
-  AND change_id = $3
-  AND change_revision = $4
-LIMIT 1
+VALUES (
+    $1, $2, $3,
+    $4, $5, $6
+)
+ON CONFLICT (enterprise_id, idempotency_key) DO UPDATE
+SET idempotency_key = publish_operations.idempotency_key
+WHERE publish_operations.change_id = EXCLUDED.change_id
+  AND publish_operations.change_revision = EXCLUDED.change_revision
+RETURNING id, enterprise_id, change_id, change_revision, idempotency_key, status, result, created_at, finished_at
 `
 
 type GetOrCreatePublishOperationParams struct {
@@ -222,19 +214,7 @@ type GetOrCreatePublishOperationParams struct {
 	Status         string `json:"status"`
 }
 
-type GetOrCreatePublishOperationRow struct {
-	ID             string             `json:"id"`
-	EnterpriseID   string             `json:"enterprise_id"`
-	ChangeID       string             `json:"change_id"`
-	ChangeRevision int32              `json:"change_revision"`
-	IdempotencyKey string             `json:"idempotency_key"`
-	Status         string             `json:"status"`
-	Result         []byte             `json:"result"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
-}
-
-func (q *Queries) GetOrCreatePublishOperation(ctx context.Context, arg GetOrCreatePublishOperationParams) (GetOrCreatePublishOperationRow, error) {
+func (q *Queries) GetOrCreatePublishOperation(ctx context.Context, arg GetOrCreatePublishOperationParams) (PublishOperation, error) {
 	row := q.db.QueryRow(ctx, getOrCreatePublishOperation,
 		arg.ID,
 		arg.EnterpriseID,
@@ -243,7 +223,7 @@ func (q *Queries) GetOrCreatePublishOperation(ctx context.Context, arg GetOrCrea
 		arg.IdempotencyKey,
 		arg.Status,
 	)
-	var i GetOrCreatePublishOperationRow
+	var i PublishOperation
 	err := row.Scan(
 		&i.ID,
 		&i.EnterpriseID,

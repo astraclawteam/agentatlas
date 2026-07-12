@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -99,11 +100,36 @@ func (s *Scheduler) Tick(ctx context.Context, enterpriseID string, now time.Time
 			continue
 		}
 		runID := runIDFor(row.ID, end)
+		sourceCounts := make([]map[string]any, 0, len(p.InputSources))
+		for _, source := range p.InputSources {
+			sourceCounts = append(sourceCounts, map[string]any{"source_type": source, "count": 0})
+		}
+		inputSnapshot, err := json.Marshal(map[string]any{
+			"source_counts": sourceCounts, "sanitized_input_ids": []string{},
+		})
+		if err != nil {
+			return dispatched, fmt.Errorf("snapshot Dream inputs: %w", err)
+		}
+		visibilitySnapshot, err := json.Marshal(map[string]any{
+			"visibility_level": p.VisibilityLevel, "org_unit_ids": []string{p.OrgUnitID},
+			"masked_field_count": 0,
+		})
+		if err != nil {
+			return dispatched, fmt.Errorf("snapshot Dream visibility: %w", err)
+		}
 		if _, err := s.store.CreateDreamRun(ctx, db.CreateDreamRunParams{
 			ID: runID, PolicyID: row.ID, Version: version,
 			EnterpriseID: enterpriseID, Status: "pending",
 			WindowStart: pgtype.Timestamptz{Time: start, Valid: true},
 			WindowEnd:   pgtype.Timestamptz{Time: end, Valid: true},
+			OrgUnitID:   p.OrgUnitID, PolicyVersion: version,
+			WorkflowID: p.Workflow.ID, WorkflowVersion: p.Workflow.Version,
+			Timezone: p.Timezone, InputSnapshot: inputSnapshot,
+			VisibilitySnapshot: visibilitySnapshot,
+			ModelRoute:         fmt.Sprintf("workflow/%s", p.Workflow.ID),
+			ModelVersion:       fmt.Sprintf("v%d", p.Workflow.Version), Attempt: 1,
+			Coverage:      []byte(`{"expected_children":0,"completed_children":0,"input_count":0}`),
+			MissingInputs: []byte(`[]`), IdempotencyKey: runID,
 		}); err != nil {
 			// Only a duplicate PK means another scheduler already created this
 			// window's run; any other error is a real failure — fail loud, do

@@ -8,16 +8,154 @@ package integration
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/pressly/goose/v3"
 
+	dbfs "github.com/astraclawteam/agentatlas/services/agentatlas/db"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/storage"
 )
+
+func TestDreamGovernanceSchemaUpgradeFromPopulatedV1(t *testing.T) {
+	dsn := os.Getenv("ATLAS_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("set ATLAS_TEST_POSTGRES_DSN (production-standard postgres from deploy/compose)")
+	}
+	ctx := context.Background()
+	admin, err := storage.NewPool(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	schema := newID("upgrade")
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err := admin.Exec(ctx, "create schema "+quotedSchema); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = admin.Exec(ctx, "drop schema "+quotedSchema+" cascade") })
+
+	sqldb, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqldb.Close()
+	sqldb.SetMaxOpenConns(1)
+	if _, err := sqldb.ExecContext(ctx, "set search_path to "+quotedSchema); err != nil {
+		t.Fatal(err)
+	}
+	goose.SetBaseFS(dbfs.Migrations)
+	if err := goose.SetDialect("postgres"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.UpToContext(ctx, sqldb, "migrations", 1); err != nil {
+		t.Fatalf("migrate v1: %v", err)
+	}
+	if _, err := sqldb.ExecContext(ctx, `
+		insert into enterprises(id,name) values('upgrade-ent','Upgrade');
+		insert into dream_policies(id,enterprise_id,org_scope,status,draft)
+		values('upgrade-policy','upgrade-ent','department:upgrade','published','{}');
+		insert into dream_runs(id,policy_id,version,enterprise_id,status,window_start,window_end)
+		values('upgrade-run','upgrade-policy',7,'upgrade-ent','succeeded',now()-interval '1 day',now());
+	`); err != nil {
+		t.Fatalf("seed populated v1: %v", err)
+	}
+	if err := goose.UpContext(ctx, sqldb, "migrations"); err != nil {
+		t.Fatalf("upgrade populated v1: %v", err)
+	}
+}
+
+func TestDreamGovernancePublishOperationConcurrency(t *testing.T) {
+	dsn := os.Getenv("ATLAS_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("set ATLAS_TEST_POSTGRES_DSN (production-standard postgres from deploy/compose)")
+	}
+	ctx := context.Background()
+	if err := storage.Migrate(ctx, dsn); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := storage.NewPool(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	q := db.New(pool)
+	enterpriseID, changeID := newID("concurrent_ent"), newID("concurrent_change")
+	if _, err := pool.Exec(ctx, `insert into enterprises(id,name) values($1,'Concurrency')`, enterpriseID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `delete from publish_operations where enterprise_id=$1`, enterpriseID)
+		_, _ = pool.Exec(ctx, `delete from change_drafts where enterprise_id=$1`, enterpriseID)
+		_, _ = pool.Exec(ctx, `delete from enterprises where id=$1`, enterpriseID)
+	})
+	if _, err := q.CreateChangeDraft(ctx, db.CreateChangeDraftParams{
+		ID: changeID, EnterpriseID: enterpriseID, OrgUnitID: "department:concurrency",
+		ResourceType: "dream_policy", ResourceID: "policy-concurrency", Action: "publish",
+		RequesterUserID: "requester", Origin: "direct_edit", PermissionMode: "direct_edit",
+		Revision: 1, State: "approved", BaseVersion: 0, ProposedContent: []byte(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txq := db.New(tx)
+	first, err := txq.GetOrCreatePublishOperation(ctx, db.GetOrCreatePublishOperationParams{
+		ID: newID("publish"), EnterpriseID: enterpriseID, ChangeID: changeID,
+		ChangeRevision: 1, IdempotencyKey: "same-key", Status: "pending",
+	})
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	type result struct {
+		row db.PublishOperation
+		err error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		row, err := q.GetOrCreatePublishOperation(ctx, db.GetOrCreatePublishOperationParams{
+			ID: newID("publish"), EnterpriseID: enterpriseID, ChangeID: changeID,
+			ChangeRevision: 1, IdempotencyKey: "same-key", Status: "pending",
+		})
+		resultCh <- result{row: row, err: err}
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	blocked := false
+	for time.Now().Before(deadline) {
+		if err := pool.QueryRow(ctx, `select exists(
+			select 1 from pg_stat_activity
+			where pid <> pg_backend_pid()
+			  and wait_event_type = 'Lock'
+			  and query like '%publish_operations%'
+		)`).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !blocked {
+		_ = tx.Rollback(ctx)
+		t.Fatal("concurrent publish operation did not reach conflict wait")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	second := <-resultCh
+	if second.err != nil || second.row.ID != first.ID {
+		t.Fatalf("concurrent get-or-create: first=%+v second=%+v err=%v", first, second.row, second.err)
+	}
+}
 
 func TestDreamGovernanceSchema(t *testing.T) {
 	dsn := os.Getenv("ATLAS_TEST_POSTGRES_DSN")
@@ -51,7 +189,7 @@ func TestDreamGovernanceSchema(t *testing.T) {
 			t.Fatalf("%s release: %v", label, err)
 		}
 		if execErr == nil {
-			t.Fatal(label)
+			t.Error(label)
 		}
 	}
 
@@ -121,6 +259,12 @@ func TestDreamGovernanceSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("structured child summary: %v", err)
 	}
+	assertRejected("cross-enterprise Dream summary accepted", `insert into dream_summaries(
+		id,run_id,enterprise_id,space_id,layer,summary_text,risk_signals
+	) values('summary-cross','child','ent-dream-b','space-foreign','display','injected','[]')`)
+	assertRejected("cross-enterprise org binding accepted", `insert into org_scope_bindings(
+		enterprise_id,space_id,scope_kind,scope_id,parent_scope_id
+	) values('ent-dream-a','space-foreign','project_group','malformed-child','parent')`)
 
 	_, err = pool.Exec(ctx, `insert into dream_run_lineage(run_id,parent_run_id,relation) values('parent','child','child_summary')`)
 	if err != nil {
@@ -132,6 +276,9 @@ func TestDreamGovernanceSchema(t *testing.T) {
 		t.Fatalf("mutable run lifecycle fields rejected: %v", err)
 	}
 	assertRejected("cross-enterprise Dream lineage accepted", `insert into dream_run_lineage(run_id,parent_run_id,relation) values('parent','foreign','child_summary')`)
+	assertRejected("Dream lineage accepted update", `update dream_run_lineage set relation='child_summary' where run_id='parent' and parent_run_id='child'`)
+	assertRejected("Dream lineage accepted delete", `delete from dream_run_lineage where run_id='parent' and parent_run_id='child'`)
+	assertRejected("published workflow version accepted update", `update workflow_versions set definition='{"changed":true}' where workflow_id='dream-workflow' and version=1`)
 
 	queries := db.New(pool)
 	children, err := queries.ListChildSpaces(ctx, db.ListChildSpacesParams{
@@ -151,6 +298,49 @@ func TestDreamGovernanceSchema(t *testing.T) {
 		EnterpriseID: "ent-dream-b", RunID: "parent",
 	}); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("cross-enterprise Dream run view returned err=%v", err)
+	}
+	view, err := queries.GetDreamRunView(ctx, db.GetDreamRunViewParams{
+		EnterpriseID: "ent-dream-a", RunID: "parent",
+	})
+	if err != nil {
+		t.Fatalf("Dream run view: %v", err)
+	}
+	var parentRunIDs []string = view.ParentRunIds
+	if len(parentRunIDs) != 1 || parentRunIDs[0] != "child" {
+		t.Fatalf("typed parent run IDs: %+v", parentRunIDs)
+	}
+	fullRun, err := queries.CreateDreamRun(ctx, db.CreateDreamRunParams{
+		ID: "created-full", PolicyID: "policy-child", Version: 1,
+		EnterpriseID: "ent-dream-a", Status: "pending",
+		WindowStart: ts(windowStart), WindowEnd: ts(windowEnd),
+		OrgUnitID: "child", PolicyVersion: 1,
+		WorkflowID: "dream-workflow", WorkflowVersion: 1, Timezone: "UTC",
+		InputSnapshot:      []byte(`{"source_counts":[],"sanitized_input_ids":[]}`),
+		VisibilitySnapshot: []byte(`{"visibility_level":"managers","org_unit_ids":["child"],"masked_field_count":0}`),
+		ModelRoute:         "reasoning", ModelVersion: "v1", Attempt: 1,
+		RerunOfRunID:  pgtype.Text{},
+		Coverage:      []byte(`{"expected_children":0,"completed_children":0,"input_count":0}`),
+		MissingInputs: []byte(`[]`), IdempotencyKey: "full-create-key",
+	})
+	if err != nil || fullRun.InputSnapshot == nil || fullRun.WorkflowID.String != "dream-workflow" {
+		t.Fatalf("full Dream run create: run=%+v err=%v", fullRun, err)
+	}
+	orgRuns, err := queries.ListDreamRunsByOrg(ctx, db.ListDreamRunsByOrgParams{
+		EnterpriseID: "ent-dream-a", OrgUnitID: "child", ResultLimit: 10,
+	})
+	if err != nil || len(orgRuns) != 2 {
+		t.Fatalf("list Dream runs by org: runs=%+v err=%v", orgRuns, err)
+	}
+	for _, run := range orgRuns {
+		if run.EnterpriseID != "ent-dream-a" || run.OrgUnitID != "child" {
+			t.Fatalf("list Dream runs by org leaked scope: %+v", run)
+		}
+	}
+	foreignOrgRuns, err := queries.ListDreamRunsByOrg(ctx, db.ListDreamRunsByOrgParams{
+		EnterpriseID: "ent-dream-b", OrgUnitID: "child", ResultLimit: 10,
+	})
+	if err != nil || len(foreignOrgRuns) != 0 {
+		t.Fatalf("cross-enterprise org run query: runs=%+v err=%v", foreignOrgRuns, err)
 	}
 
 	_, err = pool.Exec(ctx, `insert into dream_run_annotations(
@@ -218,6 +408,16 @@ func TestDreamGovernanceSchema(t *testing.T) {
 		review_mode,state,org_path,decision
 	) values('review-invalid','ent-dream-a','change-1',2,'reviewer-1','low','[]',
 		'upward_review','pending','["parent"]','')`)
+	assertRejected("stale change revision review accepted", `insert into change_reviews(
+		id,enterprise_id,change_id,change_revision,reviewer_user_id,risk_level,risk_reasons,
+		review_mode,state,org_path,decision
+	) values('review-stale','ent-dream-a','change-1',1,'reviewer-1','high','[]',
+		'upward_review','pending','["parent"]','')`)
+	assertRejected("requester accepted as upward reviewer", `insert into change_reviews(
+		id,enterprise_id,change_id,change_revision,reviewer_user_id,risk_level,risk_reasons,
+		review_mode,state,org_path,decision
+	) values('review-self','ent-dream-a','change-1',2,'requester-1','high','[]',
+		'upward_review','pending','["parent"]','')`)
 
 	_, err = pool.Exec(ctx, `insert into publish_operations(
 		id,enterprise_id,change_id,change_revision,idempotency_key,status
@@ -231,4 +431,7 @@ func TestDreamGovernanceSchema(t *testing.T) {
 	assertRejected("cross-enterprise publish operation accepted", `insert into publish_operations(
 		id,enterprise_id,change_id,change_revision,idempotency_key,status
 	) values('publish-cross','ent-dream-b','change-1',2,'publish-key-2','pending')`)
+	assertRejected("stale change revision publish accepted", `insert into publish_operations(
+		id,enterprise_id,change_id,change_revision,idempotency_key,status
+	) values('publish-stale','ent-dream-a','change-1',1,'publish-key-stale','pending')`)
 }

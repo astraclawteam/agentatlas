@@ -103,22 +103,44 @@ func (q *Queries) CreateDreamPolicy(ctx context.Context, arg CreateDreamPolicyPa
 const createDreamRun = `-- name: CreateDreamRun :one
 INSERT INTO dream_runs (
     id, policy_id, version, enterprise_id, status, window_start, window_end,
-    org_unit_id, policy_version
+    org_unit_id, policy_version, workflow_id, workflow_version, timezone,
+    input_snapshot, visibility_snapshot, model_route, model_version, attempt,
+    rerun_of_run_id, coverage, missing_inputs, idempotency_key
 )
-SELECT $1, $2, $3, $4, $5, $6, $7, policies.org_scope, $3
-FROM dream_policies AS policies
-WHERE policies.id = $2 AND policies.enterprise_id = $4
+VALUES (
+    $1, $2, $3, $4,
+    $5, $6, $7,
+    $8, $9, $10::text,
+    $11::integer, $12,
+    $13, $14, $15,
+    $16, $17, $18,
+    $19, $20, $21
+)
 RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key
 `
 
 type CreateDreamRunParams struct {
-	ID           string             `json:"id"`
-	PolicyID     string             `json:"policy_id"`
-	Version      int32              `json:"version"`
-	EnterpriseID string             `json:"enterprise_id"`
-	Status       string             `json:"status"`
-	WindowStart  pgtype.Timestamptz `json:"window_start"`
-	WindowEnd    pgtype.Timestamptz `json:"window_end"`
+	ID                 string             `json:"id"`
+	PolicyID           string             `json:"policy_id"`
+	Version            int32              `json:"version"`
+	EnterpriseID       string             `json:"enterprise_id"`
+	Status             string             `json:"status"`
+	WindowStart        pgtype.Timestamptz `json:"window_start"`
+	WindowEnd          pgtype.Timestamptz `json:"window_end"`
+	OrgUnitID          string             `json:"org_unit_id"`
+	PolicyVersion      int32              `json:"policy_version"`
+	WorkflowID         string             `json:"workflow_id"`
+	WorkflowVersion    int32              `json:"workflow_version"`
+	Timezone           string             `json:"timezone"`
+	InputSnapshot      []byte             `json:"input_snapshot"`
+	VisibilitySnapshot []byte             `json:"visibility_snapshot"`
+	ModelRoute         string             `json:"model_route"`
+	ModelVersion       string             `json:"model_version"`
+	Attempt            int32              `json:"attempt"`
+	RerunOfRunID       pgtype.Text        `json:"rerun_of_run_id"`
+	Coverage           []byte             `json:"coverage"`
+	MissingInputs      []byte             `json:"missing_inputs"`
+	IdempotencyKey     string             `json:"idempotency_key"`
 }
 
 func (q *Queries) CreateDreamRun(ctx context.Context, arg CreateDreamRunParams) (DreamRun, error) {
@@ -130,6 +152,20 @@ func (q *Queries) CreateDreamRun(ctx context.Context, arg CreateDreamRunParams) 
 		arg.Status,
 		arg.WindowStart,
 		arg.WindowEnd,
+		arg.OrgUnitID,
+		arg.PolicyVersion,
+		arg.WorkflowID,
+		arg.WorkflowVersion,
+		arg.Timezone,
+		arg.InputSnapshot,
+		arg.VisibilitySnapshot,
+		arg.ModelRoute,
+		arg.ModelVersion,
+		arg.Attempt,
+		arg.RerunOfRunID,
+		arg.Coverage,
+		arg.MissingInputs,
+		arg.IdempotencyKey,
 	)
 	var i DreamRun
 	err := row.Scan(
@@ -292,12 +328,12 @@ func (q *Queries) GetDreamRun(ctx context.Context, id string) (DreamRun, error) 
 
 const getDreamRunView = `-- name: GetDreamRunView :one
 SELECT runs.id, runs.policy_id, runs.version, runs.enterprise_id, runs.status, runs.window_start, runs.window_end, runs.error, runs.created_at, runs.finished_at, runs.org_unit_id, runs.policy_version, runs.workflow_id, runs.workflow_version, runs.timezone, runs.input_snapshot, runs.visibility_snapshot, runs.model_route, runs.model_version, runs.attempt, runs.rerun_of_run_id, runs.coverage, runs.missing_inputs, runs.idempotency_key,
-       COALESCE(
-           (SELECT array_agg(lineage.parent_run_id ORDER BY lineage.parent_run_id)
-            FROM dream_run_lineage AS lineage
-            WHERE lineage.run_id = runs.id AND lineage.relation = 'child_summary'),
-           ARRAY[]::text[]
-       ) AS parent_run_ids,
+       ARRAY(
+           SELECT lineage.parent_run_id
+           FROM dream_run_lineage AS lineage
+           WHERE lineage.run_id = runs.id AND lineage.relation = 'child_summary'
+           ORDER BY lineage.parent_run_id
+       )::text[] AS parent_run_ids,
        (SELECT count(*) FROM dream_inputs AS inputs WHERE inputs.run_id = runs.id) AS input_count,
        COALESCE(summary.summary_text, '') AS display_summary,
        COALESCE(summary.facts, '[]'::jsonb) AS facts,
@@ -310,7 +346,9 @@ FROM dream_runs AS runs
 LEFT JOIN LATERAL (
     SELECT dream_summaries.id, dream_summaries.run_id, dream_summaries.enterprise_id, dream_summaries.space_id, dream_summaries.layer, dream_summaries.summary_text, dream_summaries.sealed_object_key, dream_summaries.evidence_pointer_id, dream_summaries.risk_signals, dream_summaries.created_at, dream_summaries.facts, dream_summaries.themes, dream_summaries.trends, dream_summaries.todos
     FROM dream_summaries
-    WHERE dream_summaries.run_id = runs.id AND dream_summaries.layer = 'display'
+    WHERE dream_summaries.run_id = runs.id
+      AND dream_summaries.enterprise_id = runs.enterprise_id
+      AND dream_summaries.layer = 'display'
     ORDER BY dream_summaries.created_at DESC, dream_summaries.id DESC
     LIMIT 1
 ) AS summary ON true
@@ -348,7 +386,7 @@ type GetDreamRunViewRow struct {
 	Coverage           []byte             `json:"coverage"`
 	MissingInputs      []byte             `json:"missing_inputs"`
 	IdempotencyKey     string             `json:"idempotency_key"`
-	ParentRunIds       interface{}        `json:"parent_run_ids"`
+	ParentRunIds       []string           `json:"parent_run_ids"`
 	InputCount         int64              `json:"input_count"`
 	DisplaySummary     string             `json:"display_summary"`
 	Facts              []byte             `json:"facts"`
@@ -517,7 +555,9 @@ JOIN org_scope_bindings AS bindings ON bindings.space_id = spaces.id
 JOIN org_scope_bindings AS parent_binding
   ON parent_binding.enterprise_id = bindings.enterprise_id
  AND parent_binding.scope_id = bindings.parent_scope_id
-JOIN knowledge_spaces AS parent_space ON parent_space.id = parent_binding.space_id
+JOIN knowledge_spaces AS parent_space
+  ON parent_space.id = parent_binding.space_id
+ AND parent_space.enterprise_id = bindings.enterprise_id
 WHERE spaces.enterprise_id = $1
   AND bindings.enterprise_id = $1
   AND (
@@ -573,7 +613,9 @@ JOIN knowledge_spaces AS child_space
 JOIN org_scope_bindings AS parent_binding
   ON parent_binding.enterprise_id = bindings.enterprise_id
  AND parent_binding.scope_id = bindings.parent_scope_id
-JOIN knowledge_spaces AS parent_space ON parent_space.id = parent_binding.space_id
+JOIN knowledge_spaces AS parent_space
+  ON parent_space.id = parent_binding.space_id
+ AND parent_space.enterprise_id = bindings.enterprise_id
 WHERE runs.enterprise_id = $1
   AND (
       parent_binding.scope_id = $2::text

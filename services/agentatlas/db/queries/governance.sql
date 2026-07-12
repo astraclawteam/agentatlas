@@ -50,23 +50,15 @@ VALUES (
 RETURNING *;
 
 -- name: GetOrCreatePublishOperation :one
-WITH inserted AS (
-    INSERT INTO publish_operations (
-        id, enterprise_id, change_id, change_revision, idempotency_key, status
-    )
-    VALUES (
-        sqlc.arg(id), sqlc.arg(enterprise_id), sqlc.arg(change_id),
-        sqlc.arg(change_revision), sqlc.arg(idempotency_key), sqlc.arg(status)
-    )
-    ON CONFLICT (enterprise_id, idempotency_key) DO NOTHING
-    RETURNING *
+INSERT INTO publish_operations (
+    id, enterprise_id, change_id, change_revision, idempotency_key, status
 )
-SELECT * FROM inserted
-UNION ALL
-SELECT *
-FROM publish_operations
-WHERE enterprise_id = sqlc.arg(enterprise_id)
-  AND idempotency_key = sqlc.arg(idempotency_key)
-  AND change_id = sqlc.arg(change_id)
-  AND change_revision = sqlc.arg(change_revision)
-LIMIT 1;
+VALUES (
+    sqlc.arg(id), sqlc.arg(enterprise_id), sqlc.arg(change_id),
+    sqlc.arg(change_revision), sqlc.arg(idempotency_key), sqlc.arg(status)
+)
+ON CONFLICT (enterprise_id, idempotency_key) DO UPDATE
+SET idempotency_key = publish_operations.idempotency_key
+WHERE publish_operations.change_id = EXCLUDED.change_id
+  AND publish_operations.change_revision = EXCLUDED.change_revision
+RETURNING *;

@@ -23,11 +23,19 @@ SELECT * FROM dream_policies WHERE enterprise_id = $1 AND status = 'published' O
 -- name: CreateDreamRun :one
 INSERT INTO dream_runs (
     id, policy_id, version, enterprise_id, status, window_start, window_end,
-    org_unit_id, policy_version
+    org_unit_id, policy_version, workflow_id, workflow_version, timezone,
+    input_snapshot, visibility_snapshot, model_route, model_version, attempt,
+    rerun_of_run_id, coverage, missing_inputs, idempotency_key
 )
-SELECT $1, $2, $3, $4, $5, $6, $7, policies.org_scope, $3
-FROM dream_policies AS policies
-WHERE policies.id = $2 AND policies.enterprise_id = $4
+VALUES (
+    sqlc.arg(id), sqlc.arg(policy_id), sqlc.arg(version), sqlc.arg(enterprise_id),
+    sqlc.arg(status), sqlc.arg(window_start), sqlc.arg(window_end),
+    sqlc.arg(org_unit_id), sqlc.arg(policy_version), sqlc.arg(workflow_id)::text,
+    sqlc.arg(workflow_version)::integer, sqlc.arg(timezone),
+    sqlc.arg(input_snapshot), sqlc.arg(visibility_snapshot), sqlc.arg(model_route),
+    sqlc.arg(model_version), sqlc.arg(attempt), sqlc.narg(rerun_of_run_id),
+    sqlc.arg(coverage), sqlc.arg(missing_inputs), sqlc.arg(idempotency_key)
+)
 RETURNING *;
 
 -- name: GetDreamRun :one
@@ -75,7 +83,9 @@ JOIN org_scope_bindings AS bindings ON bindings.space_id = spaces.id
 JOIN org_scope_bindings AS parent_binding
   ON parent_binding.enterprise_id = bindings.enterprise_id
  AND parent_binding.scope_id = bindings.parent_scope_id
-JOIN knowledge_spaces AS parent_space ON parent_space.id = parent_binding.space_id
+JOIN knowledge_spaces AS parent_space
+  ON parent_space.id = parent_binding.space_id
+ AND parent_space.enterprise_id = bindings.enterprise_id
 WHERE spaces.enterprise_id = sqlc.arg(enterprise_id)
   AND bindings.enterprise_id = sqlc.arg(enterprise_id)
   AND (
@@ -96,7 +106,9 @@ JOIN knowledge_spaces AS child_space
 JOIN org_scope_bindings AS parent_binding
   ON parent_binding.enterprise_id = bindings.enterprise_id
  AND parent_binding.scope_id = bindings.parent_scope_id
-JOIN knowledge_spaces AS parent_space ON parent_space.id = parent_binding.space_id
+JOIN knowledge_spaces AS parent_space
+  ON parent_space.id = parent_binding.space_id
+ AND parent_space.enterprise_id = bindings.enterprise_id
 WHERE runs.enterprise_id = sqlc.arg(enterprise_id)
   AND (
       parent_binding.scope_id = sqlc.arg(parent_org_unit_id)::text
@@ -117,12 +129,12 @@ LIMIT sqlc.arg(result_limit);
 
 -- name: GetDreamRunView :one
 SELECT runs.*,
-       COALESCE(
-           (SELECT array_agg(lineage.parent_run_id ORDER BY lineage.parent_run_id)
-            FROM dream_run_lineage AS lineage
-            WHERE lineage.run_id = runs.id AND lineage.relation = 'child_summary'),
-           ARRAY[]::text[]
-       ) AS parent_run_ids,
+       ARRAY(
+           SELECT lineage.parent_run_id
+           FROM dream_run_lineage AS lineage
+           WHERE lineage.run_id = runs.id AND lineage.relation = 'child_summary'
+           ORDER BY lineage.parent_run_id
+       )::text[] AS parent_run_ids,
        (SELECT count(*) FROM dream_inputs AS inputs WHERE inputs.run_id = runs.id) AS input_count,
        COALESCE(summary.summary_text, '') AS display_summary,
        COALESCE(summary.facts, '[]'::jsonb) AS facts,
@@ -135,7 +147,9 @@ FROM dream_runs AS runs
 LEFT JOIN LATERAL (
     SELECT dream_summaries.*
     FROM dream_summaries
-    WHERE dream_summaries.run_id = runs.id AND dream_summaries.layer = 'display'
+    WHERE dream_summaries.run_id = runs.id
+      AND dream_summaries.enterprise_id = runs.enterprise_id
+      AND dream_summaries.layer = 'display'
     ORDER BY dream_summaries.created_at DESC, dream_summaries.id DESC
     LIMIT 1
 ) AS summary ON true

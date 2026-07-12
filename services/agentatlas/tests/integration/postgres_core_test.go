@@ -202,6 +202,13 @@ func TestPostgresCore(t *testing.T) {
 	if _, err := q.CreateDreamRun(ctx, db.CreateDreamRunParams{
 		ID: drID, PolicyID: polID, Version: 1, EnterpriseID: entID, Status: "running",
 		WindowStart: ts(time.Now().Add(-24 * time.Hour)), WindowEnd: ts(time.Now()),
+		OrgUnitID: "department:鐮斿彂涓€閮?", PolicyVersion: 1,
+		WorkflowID: wfID, WorkflowVersion: 1, Timezone: "UTC",
+		InputSnapshot:      []byte(`{"source_counts":[],"sanitized_input_ids":[]}`),
+		VisibilitySnapshot: []byte(`{"visibility_level":"members","org_unit_ids":[],"masked_field_count":0}`),
+		ModelRoute:         "workflow/" + wfID, ModelVersion: "v1", Attempt: 1,
+		Coverage:      []byte(`{"expected_children":0,"completed_children":0,"input_count":0}`),
+		MissingInputs: []byte(`[]`), IdempotencyKey: drID,
 	}); err != nil {
 		t.Fatalf("dream run: %v", err)
 	}
