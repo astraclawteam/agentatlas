@@ -1,4 +1,4 @@
-import { AlertTriangle, BookOpen, ChevronRight, CircleCheck, FileText, ShieldCheck } from "lucide-react";
+import { AlertTriangle, BookOpen, ChevronRight, CircleCheck, FileText, Plus, ShieldCheck, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 
@@ -96,7 +96,8 @@ export function KnowledgeEditor({ kind = "knowledge_entry" }: { kind?: ChangeRes
         });
         changeIDRef.current = saved.change_id;
         skipLoadChangeIDRef.current = saved.change_id;
-        navigate(`/knowledge/${encodeURIComponent(orgUnitID)}/changes/${encodeURIComponent(saved.change_id)}/edit`, { replace: true });
+        const kindSegment = kind === "sop" ? "/sop" : "";
+        navigate(`/knowledge/${encodeURIComponent(orgUnitID)}/changes/${encodeURIComponent(saved.change_id)}${kindSegment}/edit`, { replace: true });
       }
       setDraft(saved);
       revisionRef.current = saved.revision;
@@ -205,13 +206,13 @@ export function KnowledgeEditor({ kind = "knowledge_entry" }: { kind?: ChangeRes
             </section>
             <div id="content">
               {kind === "sop" ? <SOPStepsEditor steps={content.steps ?? [{ title: "", instruction: "" }]} onChange={(steps) => updateContent({ ...content, steps })} />
-                : <section className="knowledge-editor-card glass-rest"><p className="knowledge-eyebrow">处理方法</p><label>具体说明<textarea aria-label="具体说明" value={content.sections?.[0]?.body ?? ""} onChange={(event) => updateContent({ ...content, sections: [{ heading: "处理方法", body: event.currentTarget.value }] })} /></label></section>}
+                : <KnowledgeSectionsEditor sections={content.sections?.length ? content.sections : [{ heading: "处理方法", body: "" }]} onChange={(sections) => updateContent({ ...content, sections })} />}
             </div>
           </main>
           <aside id="scope" className="knowledge-editor-context" aria-label="范围与依据">
             <section className="glass-rest"><h2>适用组织范围</h2><p>{organization.name || "未命名组织"}</p></section>
             <section className="glass-rest"><h2>影响范围</h2><p>发布前会再次检查受影响的员工、Agent 回答和 SOP。</p></section>
-            <section className="glass-rest"><h2>参考资料</h2><label>资料名称（每行一项）<textarea aria-label="参考资料" value={(content.references ?? []).join("\n")} onChange={(event) => updateContent({ ...content, references: event.currentTarget.value.split("\n").filter(Boolean) })} /></label></section>
+            <ReferenceEditor references={content.references ?? []} onChange={(references) => updateContent({ ...content, references })} />
             {session.advanced_mode_allowed && advancedMode ? <Link className="knowledge-advanced-link" to="/advanced/legacy/knowledge">高级维护 <ChevronRight aria-hidden size={16} /></Link> : null}
           </aside>
         </div>
@@ -235,3 +236,28 @@ export function KnowledgeEditor({ kind = "knowledge_entry" }: { kind?: ChangeRes
 
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function asContent(value: unknown): KnowledgeContent { return isRecord(value) ? value as unknown as KnowledgeContent : emptyContent(); }
+
+function KnowledgeSectionsEditor({ sections, onChange }: { sections: NonNullable<KnowledgeContent["sections"]>; onChange(sections: NonNullable<KnowledgeContent["sections"]>): void }) {
+  const update = (index: number, patch: { heading?: string; body?: string }) => onChange(sections.map((section, candidate) => candidate === index ? { ...section, ...patch } : section));
+  return (
+    <section className="knowledge-section-editor" aria-labelledby="knowledge-sections-title">
+      <div className="knowledge-editor-section-heading"><div><p className="knowledge-eyebrow">可读内容</p><h2 id="knowledge-sections-title">内容说明</h2></div><button className="knowledge-secondary-button" type="button" onClick={() => onChange([...sections, { heading: "", body: "" }])}><Plus aria-hidden size={17} />添加内容部分</button></div>
+      <div className="knowledge-section-list">
+        {sections.map((section, index) => <section className="knowledge-editor-card glass-rest" key={index}>
+          <div className="knowledge-section-card-heading"><strong>第 {index + 1} 部分</strong><button type="button" aria-label={`删除第 ${index + 1} 部分`} disabled={sections.length === 1} onClick={() => onChange(sections.filter((_, candidate) => candidate !== index))}><Trash2 aria-hidden size={16} /></button></div>
+          <label>小标题<input aria-label={`第 ${index + 1} 部分标题`} value={section.heading} onChange={(event) => update(index, { heading: event.currentTarget.value })} /></label>
+          <label>具体内容<textarea aria-label={`第 ${index + 1} 部分内容`} value={section.body} onChange={(event) => update(index, { body: event.currentTarget.value })} /></label>
+        </section>)}
+      </div>
+    </section>
+  );
+}
+
+function ReferenceEditor({ references, onChange }: { references: string[]; onChange(references: string[]): void }) {
+  return (
+    <section className="glass-rest knowledge-reference-editor">
+      <div className="knowledge-reference-heading"><h2>参考资料</h2><button type="button" aria-label="添加参考资料" onClick={() => onChange([...references, ""])}><Plus aria-hidden size={16} /></button></div>
+      {references.length === 0 ? <p>还没有参考资料，可以按上方按钮添加。</p> : references.map((reference, index) => <div className="knowledge-reference-row" key={index}><label>第 {index + 1} 项<input aria-label={`第 ${index + 1} 项参考资料`} value={reference} onChange={(event) => onChange(references.map((item, candidate) => candidate === index ? event.currentTarget.value : item))} /></label><button type="button" aria-label={`删除第 ${index + 1} 项参考资料`} onClick={() => onChange(references.filter((_, candidate) => candidate !== index))}><Trash2 aria-hidden size={16} /></button></div>)}
+    </section>
+  );
+}

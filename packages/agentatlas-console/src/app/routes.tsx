@@ -82,6 +82,7 @@ export function ConsoleRoutes() {
       <Route path="/knowledge/:orgUnitID/edit" element={<KnowledgeEditor />} />
       <Route path="/knowledge/:orgUnitID/sop" element={<KnowledgeEditor kind="sop" />} />
       <Route path="/knowledge/:orgUnitID/reviews" element={<ChangeReviewListPage />} />
+      <Route path="/knowledge/:orgUnitID/changes/:changeID/sop/edit" element={<KnowledgeEditor kind="sop" />} />
       <Route path="/knowledge/:orgUnitID/changes/:changeID/edit" element={<KnowledgeEditor />} />
       <Route path="/knowledge/:orgUnitID/changes/:changeID/review" element={<ChangeReviewPage />} />
       <Route path="/knowledge/:orgUnitID/:task" element={<KnowledgeTaskHandoff />} />

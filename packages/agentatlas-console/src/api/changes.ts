@@ -4,8 +4,8 @@ export type ChangeResourceType = "knowledge_entry" | "sop" | "workflow" | "dream
 export type ChangeState = "draft" | "submitted" | "approved" | "rejected" | "published" | "withdrawn";
 export type ReviewMode = "single_confirmation" | "upward_review" | "enterprise_knowledge_admin_queue";
 
-export interface KnowledgeSection { heading: string; body: string }
-export interface SOPStep { title: string; instruction: string; evidence?: string; completion?: string }
+export interface KnowledgeSection { heading: string; body: string; [key: string]: unknown }
+export interface SOPStep { title: string; instruction: string; evidence?: string; completion?: string; [key: string]: unknown }
 export interface KnowledgeContent {
   title: string;
   summary: string;
@@ -13,6 +13,7 @@ export interface KnowledgeContent {
   steps?: SOPStep[];
   references?: string[];
   impact?: { people?: number; agent_answers?: boolean; sops?: string[]; organizations?: string[] };
+  [key: string]: unknown;
 }
 
 export interface ChangeDraft {
@@ -82,7 +83,10 @@ export async function listChanges(orgUnitID: string): Promise<ChangeRecord[]> {
 }
 
 export function diffChange(changeID: string) {
-  return api<ChangeDiffValue>(`${changePath(changeID)}/diff`);
+  return api<{ before?: unknown; after?: unknown }>(`${changePath(changeID)}/diff`).then((raw) => ({
+    before: normalizeContent(raw.before),
+    after: normalizeContent(raw.after),
+  }));
 }
 
 export function assessChange(changeID: string) {
@@ -118,22 +122,53 @@ function changePath(changeID: string) {
 
 function normalizeRecord(value: unknown): ChangeRecord {
   const raw = isRecord(value) ? value : {};
-  const draft = (raw.draft ?? raw.Draft) as ChangeDraft | undefined;
-  if (!draft) throw new Error("变更记录缺少草稿信息");
+  const draftRaw = raw.draft ?? raw.Draft;
+  if (!isRecord(draftRaw)) throw new Error("变更记录缺少草稿信息");
+  const draft = { ...draftRaw, proposed_content: normalizeContent(draftRaw.proposed_content) } as unknown as ChangeDraft;
   return {
     draft,
-    content: asContent(raw.content ?? raw.Content ?? draft.proposed_content),
-    base_content: asContent(raw.base_content ?? raw.BaseContent ?? {}),
+    content: normalizeContent(raw.content ?? raw.Content ?? draft.proposed_content),
+    base_content: normalizeContent(raw.base_content ?? raw.BaseContent),
     assessment: (raw.assessment ?? raw.Assessment) as RiskAssessment | undefined,
     route: (raw.route ?? raw.Route) as Partial<ReviewRoute> | undefined,
   };
 }
 
-function asContent(value: unknown): KnowledgeContent {
+export function normalizeContent(value: unknown): KnowledgeContent {
   if (typeof value === "string") {
-    try { return asContent(JSON.parse(value) as unknown); } catch { return emptyContent(); }
+    try { return normalizeContent(JSON.parse(value) as unknown); } catch { return normalizedEmptyContent(); }
   }
-  return isRecord(value) ? value as unknown as KnowledgeContent : emptyContent();
+  const raw = isRecord(value) ? value : {};
+  const sections = Array.isArray(raw.sections) ? raw.sections.filter(isRecord).map((section) => ({
+    ...section,
+    heading: safeString(section.heading),
+    body: safeString(section.body),
+  })) : [];
+  const steps = Array.isArray(raw.steps) ? raw.steps.filter(isRecord).map((step) => ({
+    ...step,
+    title: safeString(step.title),
+    instruction: safeString(step.instruction),
+    evidence: safeString(step.evidence),
+    completion: safeString(step.completion),
+  })) : [];
+  const impactRaw = isRecord(raw.impact) ? raw.impact : {};
+  const { people, agent_answers: agentAnswers, sops, organizations, ...unknownImpact } = impactRaw;
+  const impact = {
+    ...unknownImpact,
+    ...(typeof people === "number" && Number.isFinite(people) && people >= 0 ? { people } : {}),
+    ...(typeof agentAnswers === "boolean" ? { agent_answers: agentAnswers } : {}),
+    sops: safeStringArray(sops),
+    organizations: safeStringArray(organizations),
+  };
+  return {
+    ...raw,
+    title: safeString(raw.title),
+    summary: safeString(raw.summary),
+    sections,
+    steps,
+    references: safeStringArray(raw.references),
+    impact,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -145,6 +180,13 @@ export function emptyContent(kind: ChangeResourceType = "knowledge_entry"): Know
     ? { title: "", summary: "", steps: [{ title: "", instruction: "" }], references: [], impact: {} }
     : { title: "", summary: "", sections: [{ heading: "处理方法", body: "" }], references: [], impact: {} };
 }
+
+function normalizedEmptyContent(): KnowledgeContent {
+  return { title: "", summary: "", sections: [], steps: [], references: [], impact: { sops: [], organizations: [] } };
+}
+
+function safeString(value: unknown) { return typeof value === "string" ? value : ""; }
+function safeStringArray(value: unknown) { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }
 
 export function newResourceID(kind: ChangeResourceType) {
   const suffix = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;

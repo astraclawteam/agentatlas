@@ -56,6 +56,60 @@ describe("ChangeReviewPage", () => {
     vi.restoreAllMocks();
   });
 
+  it("renders a nullable base and script-like text without crashing or creating markup", async () => {
+    const script = '<script data-testid="injected">alert(1)</script>';
+    const { fn } = makeFetch("low", {
+      "/api/changes/change-1": () => json({ draft, content: { ...draft.proposed_content, title: script }, base_content: null }),
+      "/api/changes/change-1/diff": () => json({ before: null, after: { ...draft.proposed_content, title: script } }),
+    });
+    vi.stubGlobal("fetch", fn);
+    render(<ConsoleShell initialPath="/knowledge/dept-rd/changes/change-1/review" />);
+    expect(await screen.findByText(script)).toBeVisible();
+    expect(document.querySelector("script[data-testid='injected']")).toBeNull();
+    expect(screen.getAllByText("未填写").length).toBeGreaterThan(0);
+  });
+
+  it("shows every publishable section, reference, and SOP step field", async () => {
+    const complete = {
+      title: "完整 SOP",
+      summary: "完整检查",
+      sections: [{ heading: "第一部分", body: "第一段内容" }, { heading: "第二部分", body: "第二段内容" }],
+      references: ["设备手册", "值班记录"],
+      steps: [{ title: "检查工单", instruction: "打开工单", evidence: "工单截图", completion: "状态正常" }],
+    };
+    const { fn } = makeFetch("high", {
+      "/api/changes/change-1": () => json({ draft: { ...draft, resource_type: "sop", proposed_content: complete }, content: complete, base_content: null }),
+      "/api/changes/change-1/diff": () => json({ before: null, after: complete }),
+    });
+    vi.stubGlobal("fetch", fn);
+    render(<ConsoleShell initialPath="/knowledge/dept-rd/changes/change-1/review" />);
+    for (const text of ["第一部分", "第一段内容", "第二部分", "第二段内容", "设备手册", "值班记录", "检查工单", "打开工单", "工单截图", "状态正常"]) {
+      expect(await screen.findByText(text)).toBeVisible();
+    }
+  });
+
+  it("does not promise low-risk confirmation without publish permission", async () => {
+    const limited = { ...session, permissions: ["edit"] };
+    const base = makeFetch("low");
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => String(input) === "/api/session" ? Promise.resolve(json(limited)) : base.fn(input, init)));
+    render(<ConsoleShell initialPath="/knowledge/dept-rd/changes/change-1/review" />);
+    expect(await screen.findByText("等待有发布权限的负责人处理")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "确认并发布" })).not.toBeInTheDocument();
+    expect(document.querySelectorAll(".knowledge-primary-button")).toHaveLength(0);
+  });
+
+  it.each([
+    ["another editor", { ...session, enterprise_user_id: "another-user", permissions: ["edit"] }, "knowledge_entry", "等待原发起人完成发布"],
+    ["workflow non-editor", { ...session, permissions: ["edit"] }, "workflow", "当前账号没有发布这项内容的权限"],
+  ])("does not offer approved publication to %s", async (_case, currentSession, resourceType, waitingCopy) => {
+    const approved = { ...draft, state: "approved", resource_type: resourceType };
+    const base = makeFetch("high", { "/api/changes/change-1": () => json({ draft: approved, content: draft.proposed_content, base_content: null }) });
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => String(input) === "/api/session" ? Promise.resolve(json(currentSession)) : base.fn(input, init)));
+    render(<ConsoleShell initialPath="/knowledge/dept-rd/changes/change-1/review" />);
+    expect(await screen.findByText(waitingCopy)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "发布已审核修改" })).not.toBeInTheDocument();
+  });
+
   it.each([
     ["low", "确认并发布"],
     ["high", "提交给上级负责人复核"],
@@ -129,6 +183,30 @@ describe("ChangeReviewPage", () => {
     expect(await screen.findByText("修改已发布")).toBeVisible();
     expect(decisionKeys).toHaveLength(2);
     expect(decisionKeys[0]).toBe(decisionKeys[1]);
+  });
+
+  it("recovers a committed low-risk submit after its response is lost", async () => {
+    let reads = 0;
+    const calls: string[] = [];
+    const submittedRoute = { change_id: "change-1", resource_type: "knowledge_entry", resource_id: "knowledge-1", requester_user_id: "editor-user", risk_level: "low", mode: "single_confirmation", state: "pending", org_path: [] };
+    const base = makeFetch("low", {
+      "/api/changes/change-1": () => {
+        reads += 1;
+        return json({ draft: reads === 1 ? draft : { ...draft, state: "submitted" }, content: draft.proposed_content, base_content: null, route: reads === 1 ? undefined : submittedRoute });
+      },
+      "/api/changes/change-1/submit": () => json({ message: "响应丢失" }, 503),
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push(`${init?.method ?? "GET"} ${String(input)}`);
+      return base.fn(input, init);
+    }));
+    render(<ConsoleShell initialPath="/knowledge/dept-rd/changes/change-1/review" />);
+    fireEvent.click(await screen.findByRole("button", { name: "确认并发布" }));
+    expect(await screen.findByText("修改已发布")).toBeVisible();
+    expect(reads).toBe(2);
+    expect(calls.filter((call) => call.endsWith("/decisions"))).toHaveLength(1);
+    expect(calls.filter((call) => call.endsWith("/publish"))).toHaveLength(1);
+    expect(screen.queryByText(/这一步暂时没有完成/)).not.toBeInTheDocument();
   });
 
   it("submits high risk upward without exposing reviewer IDs or allowing self-review", async () => {

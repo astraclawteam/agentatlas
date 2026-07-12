@@ -227,6 +227,10 @@ var (
 	_ = agentapi.ChangeDecisionInput{}
 	_ = agentapi.UpdateGovernedChangeJSONRequestBody{}
 	_ = agentapi.DecideGovernedChangeJSONRequestBody{}
+	_ agentapi.AnnotateDreamRunJSONBodyAction = agentapi.Comment
+	_ agentapi.AnnotateDreamRunJSONBodyAction = agentapi.Confirm
+	_ agentapi.AnnotateDreamRunJSONBodyAction = agentapi.MarkIncorrect
+	_ agentapi.AnnotateDreamRunJSONBodyAction = agentapi.Reject
 	_ = agentapi.RiskAssessment{}
 	_ = agentapi.ReviewRoute{}
 )

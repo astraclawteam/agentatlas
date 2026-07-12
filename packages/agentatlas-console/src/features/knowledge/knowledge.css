@@ -366,6 +366,17 @@
 .knowledge-editor-context h2,
 .change-review-context h2 { margin: 0 0 8px; font-family: var(--font-sans); font-size: 15px; }
 .knowledge-editor-context p { margin: 0; color: var(--color-muted-foreground); line-height: 1.55; }
+.knowledge-section-list { display: grid; gap: 12px; }
+.knowledge-section-card-heading,
+.knowledge-reference-heading,
+.knowledge-reference-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.knowledge-section-card-heading button,
+.knowledge-reference-heading button,
+.knowledge-reference-row > button { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-content: center; border: 1px solid var(--color-border); border-radius: var(--radius-field); background: var(--glass-bg); color: var(--color-muted-foreground); cursor: pointer; }
+.knowledge-section-card-heading button:disabled { opacity: .35; cursor: default; }
+.knowledge-reference-editor { display: grid; gap: 10px; }
+.knowledge-reference-row label { min-width: 0; flex: 1; }
+.knowledge-reference-row input { width: 100%; box-sizing: border-box; min-height: 40px; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: var(--radius-field); background: var(--glass-bg); color: var(--color-foreground); font: inherit; }
 .knowledge-advanced-link { justify-content: space-between; border: 1px solid var(--color-border); }
 
 .knowledge-editor-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
@@ -418,6 +429,12 @@
 .change-readable-block p,
 .change-readable-steps p { margin: 5px 0 0; color: var(--color-muted-foreground); line-height: 1.6; }
 .change-readable-steps { display: grid; gap: 10px; padding-left: 22px; }
+.change-step-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 10px 0 0; }
+.change-step-details div { display: grid; gap: 3px; }
+.change-step-details dt { color: var(--color-muted-foreground); font-size: 12px; }
+.change-step-details dd { margin: 0; }
+.change-readable-references { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--color-border); }
+.change-readable-references ul { margin: 8px 0 0; padding-left: 20px; color: var(--color-muted-foreground); }
 
 .change-review-context { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .change-review-context ul { margin: 10px 0 0; padding-left: 20px; color: var(--color-muted-foreground); line-height: 1.8; }

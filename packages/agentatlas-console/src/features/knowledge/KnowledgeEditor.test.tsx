@@ -76,6 +76,76 @@ describe("KnowledgeEditor", () => {
     expect(document.querySelectorAll(".knowledge-primary-button")).toHaveLength(1);
   });
 
+  it("preserves the SOP editor kind after first save and a route remount", async () => {
+    const sopDraft = {
+      ...initialDraft,
+      change_id: "change-sop",
+      resource_type: "sop",
+      resource_id: "sop-new",
+      proposed_content: { title: "异常处理", summary: "标准步骤", steps: [{ title: "检查工单", instruction: "打开工单" }], references: [] },
+    };
+    vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/session") return json(editorSession);
+      if (url === "/api/changes" && init?.method === "POST") return json(sopDraft, 201);
+      if (url === "/api/changes/change-sop") return json({ draft: sopDraft, content: sopDraft.proposed_content, base_content: null });
+      return json({ message: "not found" }, 404);
+    }));
+    const first = render(<ConsoleShell initialPath="/knowledge/dept-rd/sop" />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "知识名称" }), { target: { value: "异常处理" } });
+    await act(async () => { vi.advanceTimersByTime(800); });
+    expect(await screen.findByRole("heading", { name: "制作 SOP 流程" })).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "第 1 步名称" })).toBeVisible();
+
+    first.unmount();
+    render(<ConsoleShell initialPath="/knowledge/dept-rd/changes/change-sop/sop/edit" />);
+    expect(await screen.findByRole("heading", { name: "制作 SOP 流程" })).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "第 1 步名称" })).toHaveValue("检查工单");
+  });
+
+  it("edits every knowledge section and reference without dropping untouched content", async () => {
+    const content = {
+      title: "多段知识",
+      summary: "完整说明",
+      sections: [
+        { heading: "准备工作", body: "准备原文", retained: "section-one-metadata" },
+        { heading: "处理方法", body: "不能丢失的第二段", retained: "section-two-metadata" },
+      ],
+      references: ["设备手册", "值班记录"],
+      retained_top_level: "keep-me",
+    };
+    const multiDraft = { ...initialDraft, change_id: "change-multi", proposed_content: content };
+    let updateBody: Record<string, unknown> | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/session") return json(editorSession);
+      if (url === "/api/changes/change-multi" && init?.method === "PUT") {
+        updateBody = JSON.parse(String(init.body));
+        return json({ ...multiDraft, revision: 2, proposed_content: (updateBody as { proposed_content: unknown }).proposed_content });
+      }
+      if (url === "/api/changes/change-multi") return json({ draft: multiDraft, content, base_content: null });
+      return json({ message: "not found" }, 404);
+    }));
+    render(<ConsoleShell initialPath="/knowledge/dept-rd/changes/change-multi/edit" />);
+    const firstBody = await screen.findByRole("textbox", { name: "第 1 部分内容" });
+    expect(screen.getByRole("textbox", { name: "第 2 部分内容" })).toHaveValue("不能丢失的第二段");
+    fireEvent.change(firstBody, { target: { value: "准备新文" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加内容部分" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除第 3 部分" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "第 1 项参考资料" }), { target: { value: "设备手册新版" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加参考资料" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除第 3 项参考资料" }));
+    await act(async () => { vi.advanceTimersByTime(800); });
+    await waitFor(() => expect(updateBody).not.toBeNull());
+    const saved = (updateBody as unknown as { proposed_content: typeof content }).proposed_content;
+    expect(saved.sections).toEqual([
+      { heading: "准备工作", body: "准备新文", retained: "section-one-metadata" },
+      { heading: "处理方法", body: "不能丢失的第二段", retained: "section-two-metadata" },
+    ]);
+    expect(saved.references).toEqual(["设备手册新版", "值班记录"]);
+    expect(saved.retained_top_level).toBe("keep-me");
+  });
+
   it("waits 800ms, reports truthful autosave states, and warns only while unsaved", async () => {
     let resolveCreate!: (response: Response) => void;
     const fetchMock = vi.fn((input: RequestInfo | URL) => {

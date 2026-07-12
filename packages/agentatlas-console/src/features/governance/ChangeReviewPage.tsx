@@ -20,7 +20,7 @@ import { useSession } from "../../app/session";
 import { findOrgScopeNode } from "../knowledge/OrgScopeNav";
 import { ChangeDiff } from "./ChangeDiff";
 
-type ActionPhase = "ready" | "working" | "publish_retry" | "submitted" | "decided" | "published";
+type ActionPhase = "ready" | "working" | "submit_unknown" | "publish_retry" | "submitted" | "decided" | "published";
 
 export function ChangeReviewPage() {
   const { orgUnitID, changeID } = useParams();
@@ -84,7 +84,52 @@ export function ChangeReviewPage() {
         setPhase("decided");
         return;
       }
-      const submittedRoute = await submitChange(changeID);
+      let submittedRoute: ReviewRoute;
+      try {
+        submittedRoute = await submitChange(changeID);
+      } catch {
+        let recovered: ChangeRecord;
+        try {
+          recovered = await getChange(changeID);
+        } catch {
+          setPhase("submit_unknown");
+          setError("无法确认提交结果，请刷新页面后查看最新状态。");
+          return;
+        }
+
+        setRecord(recovered);
+        setRoute(recovered.route ?? null);
+        if (recovered.draft.state === "published") {
+          setPhase("published");
+          return;
+        }
+        if (recovered.draft.state === "approved") {
+          if (recovered.draft.requester_user_id === session.enterprise_user_id
+            && canEditResource(recovered.draft.resource_type, session.permissions)) {
+            await publish();
+          } else {
+            setPhase("ready");
+          }
+          return;
+        }
+        if (recovered.draft.state === "submitted") {
+          if (recovered.route?.mode === "single_confirmation"
+            && recovered.draft.requester_user_id === session.enterprise_user_id
+            && canEditResource(recovered.draft.resource_type, session.permissions)
+            && session.permissions.includes("publish_low_risk")) {
+            await decideChange(changeID, "approve", operationKey("approve", changeID, recovered.draft.revision));
+            setRecord((current) => current ? { ...current, draft: { ...current.draft, state: "approved" } } : current);
+            await publish();
+          } else {
+            setPhase("submitted");
+          }
+          return;
+        }
+
+        setPhase("ready");
+        setError("提交尚未完成，可以重试。");
+        return;
+      }
       setRoute(submittedRoute);
       setRecord((current) => current ? { ...current, draft: { ...current.draft, state: "submitted" }, route: submittedRoute } : current);
       if (submittedRoute.mode !== "single_confirmation") {
@@ -101,12 +146,16 @@ export function ChangeReviewPage() {
   };
 
   const primary = useMemo(() => {
-    if (!record || !assessment || phase === "submitted" || phase === "decided" || phase === "published") return null;
+    if (!record || !assessment || phase === "submit_unknown" || phase === "submitted" || phase === "decided" || phase === "published") return null;
     if (phase === "publish_retry") return { label: "重试发布", action: publish };
-    if (record.draft.state === "approved") return { label: "发布已审核修改", action: runPrimary };
+    const canEdit = canEditResource(record.draft.resource_type, session.permissions);
+    if (record.draft.state === "approved") {
+      const canPublish = record.draft.requester_user_id === session.enterprise_user_id && canEdit;
+      return canPublish ? { label: "发布已审核修改", action: runPrimary } : null;
+    }
     if (record.draft.state === "submitted") {
       if (route?.mode === "single_confirmation") {
-        const canConfirm = record.draft.requester_user_id === session.enterprise_user_id && session.permissions.includes("publish_low_risk");
+        const canConfirm = record.draft.requester_user_id === session.enterprise_user_id && canEdit && session.permissions.includes("publish_low_risk");
         return canConfirm ? { label: "继续确认并发布", action: runPrimary } : null;
       }
       const canReview = record.draft.requester_user_id !== session.enterprise_user_id
@@ -116,7 +165,7 @@ export function ChangeReviewPage() {
     }
     if (record.draft.requester_user_id !== session.enterprise_user_id || record.draft.permission_mode !== "direct_edit") return null;
     return assessment.risk_level === "low"
-      ? { label: "确认并发布", action: runPrimary }
+      ? canEdit && session.permissions.includes("publish_low_risk") ? { label: "确认并发布", action: runPrimary } : null
       : { label: "提交给上级负责人复核", action: runPrimary };
   }, [assessment, phase, record, route, session.enterprise_user_id, session.permissions]);
 
@@ -136,6 +185,7 @@ export function ChangeReviewPage() {
       {phase === "submitted" ? <div className="knowledge-editor-message" role="status">已提交给上级负责人复核</div> : null}
       {phase === "decided" ? <div className="knowledge-editor-message" role="status">复核结果已记录，发起人可以继续发布。</div> : null}
       {phase === "published" ? <div className="knowledge-editor-message" role="status"><CheckCircle2 aria-hidden size={18} />修改已发布</div> : null}
+      {!primary && phase === "ready" ? <div className="knowledge-editor-message" role="status">{waitingActionCopy(record, assessment, session.enterprise_user_id, session.permissions)}</div> : null}
 
       <ChangeDiff before={diff.before} after={diff.after} />
 
@@ -208,4 +258,19 @@ function statusCopy(state: string, phase: ActionPhase) {
   if (phase === "submitted" || state === "submitted") return "待复核";
   if (phase === "decided" || state === "approved") return "已审核";
   return "草稿";
+}
+
+function canEditResource(resourceType: string, permissions: string[]) {
+  return permissions.includes(resourceType === "workflow" ? "workflow_edit" : "edit");
+}
+
+function waitingActionCopy(record: ChangeRecord, assessment: RiskAssessment, userID: string, permissions: string[]) {
+  const requester = record.draft.requester_user_id === userID;
+  if (record.draft.state === "approved") {
+    if (!requester) return "等待原发起人完成发布";
+    if (!canEditResource(record.draft.resource_type, permissions)) return "当前账号没有发布这项内容的权限";
+  }
+  if (record.draft.state === "draft" && requester && assessment.risk_level === "low" && !permissions.includes("publish_low_risk")) return "等待有发布权限的负责人处理";
+  if (record.draft.state === "submitted" && requester) return "修改正在等待复核";
+  return "当前没有需要你执行的操作";
 }
