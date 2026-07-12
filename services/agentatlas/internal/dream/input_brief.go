@@ -48,11 +48,15 @@ func (r workBriefResolver) ResolveSource(ctx context.Context, req ResolveRequest
 		return nil, Coverage{}, nil, nil
 	}
 	sort.Strings(memberIDs)
+	windowStart, windowEnd, err := briefDateBounds(req.WindowStart, req.WindowEnd, req.Timezone)
+	if err != nil {
+		return nil, Coverage{}, nil, err
+	}
 	briefs, err := r.store.ListDreamWorkBriefsForWindow(ctx, db.ListDreamWorkBriefsForWindowParams{
 		EnterpriseID:    req.EnterpriseID,
 		EmployeeUserIds: memberIDs,
-		WindowStart:     pgtype.Date{Time: req.WindowStart, Valid: true},
-		WindowEnd:       pgtype.Date{Time: req.WindowEnd, Valid: true},
+		WindowStart:     pgtype.Date{Time: windowStart, Valid: true},
+		WindowEnd:       pgtype.Date{Time: windowEnd, Valid: true},
 		ResultLimit:     int32(limit + 1),
 	})
 	if err != nil {
@@ -67,7 +71,7 @@ func (r workBriefResolver) ResolveSource(ctx context.Context, req ResolveRequest
 		if brief.EnterpriseID != req.EnterpriseID {
 			continue
 		}
-		if !brief.BriefDate.Valid || !dateInWindow(brief.BriefDate.Time, req.WindowStart, req.WindowEnd) {
+		if !brief.BriefDate.Valid || !dateInWindow(brief.BriefDate.Time, windowStart, windowEnd) {
 			continue
 		}
 		if _, ok := memberSet[brief.EmployeeUserID]; !ok {
@@ -84,9 +88,36 @@ func (r workBriefResolver) ResolveSource(ctx context.Context, req ResolveRequest
 	return inputs, Coverage{InputCount: len(inputs)}, missing, nil
 }
 
-func dateInWindow(value, start, end time.Time) bool {
+func dateInWindow(value, startDate, endDate time.Time) bool {
 	date := time.Date(value.UTC().Year(), value.UTC().Month(), value.UTC().Day(), 0, 0, 0, 0, time.UTC)
-	startDate := time.Date(start.UTC().Year(), start.UTC().Month(), start.UTC().Day(), 0, 0, 0, 0, time.UTC)
-	endDate := time.Date(end.UTC().Year(), end.UTC().Month(), end.UTC().Day(), 0, 0, 0, 0, time.UTC)
 	return !date.Before(startDate) && date.Before(endDate)
+}
+
+func dreamLocation(name string) (*time.Location, error) {
+	if name == "" || name == "UTC" {
+		return time.UTC, nil
+	}
+	location, err := time.LoadLocation(name)
+	if err != nil {
+		return nil, fmt.Errorf("invalid Dream timezone %q: %w", name, err)
+	}
+	return location, nil
+}
+
+// briefDateBounds returns the half-open set of local calendar dates touched by
+// the exact run window. pgtype.Date carries those calendar values as UTC
+// midnights so SQL and the defensive row check use identical bounds.
+func briefDateBounds(start, end time.Time, timezone string) (time.Time, time.Time, error) {
+	location, err := dreamLocation(timezone)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	localStart, localEnd := start.In(location), end.In(location)
+	startDate := time.Date(localStart.Year(), localStart.Month(), localStart.Day(), 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(localEnd.Year(), localEnd.Month(), localEnd.Day(), 0, 0, 0, 0, time.UTC)
+	localEndMidnight := time.Date(localEnd.Year(), localEnd.Month(), localEnd.Day(), 0, 0, 0, 0, location)
+	if localEnd.After(localEndMidnight) {
+		endDate = endDate.AddDate(0, 0, 1)
+	}
+	return startDate, endDate, nil
 }

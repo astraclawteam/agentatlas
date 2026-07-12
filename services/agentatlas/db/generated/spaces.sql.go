@@ -325,18 +325,21 @@ func (q *Queries) UpsertEnterprise(ctx context.Context, arg UpsertEnterprisePara
 }
 
 const upsertOrgScopeBinding = `-- name: UpsertOrgScopeBinding :exec
-INSERT INTO org_scope_bindings (enterprise_id, space_id, scope_kind, scope_id, parent_scope_id)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO org_scope_bindings (enterprise_id, space_id, scope_kind, scope_id, parent_scope_kind, parent_scope_id)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (enterprise_id, scope_kind, scope_id)
-DO UPDATE SET space_id = EXCLUDED.space_id, parent_scope_id = EXCLUDED.parent_scope_id
+DO UPDATE SET space_id = EXCLUDED.space_id,
+              parent_scope_kind = EXCLUDED.parent_scope_kind,
+              parent_scope_id = EXCLUDED.parent_scope_id
 `
 
 type UpsertOrgScopeBindingParams struct {
-	EnterpriseID  string      `json:"enterprise_id"`
-	SpaceID       string      `json:"space_id"`
-	ScopeKind     string      `json:"scope_kind"`
-	ScopeID       string      `json:"scope_id"`
-	ParentScopeID pgtype.Text `json:"parent_scope_id"`
+	EnterpriseID    string      `json:"enterprise_id"`
+	SpaceID         string      `json:"space_id"`
+	ScopeKind       string      `json:"scope_kind"`
+	ScopeID         string      `json:"scope_id"`
+	ParentScopeKind pgtype.Text `json:"parent_scope_kind"`
+	ParentScopeID   pgtype.Text `json:"parent_scope_id"`
 }
 
 func (q *Queries) UpsertOrgScopeBinding(ctx context.Context, arg UpsertOrgScopeBindingParams) error {
@@ -345,6 +348,7 @@ func (q *Queries) UpsertOrgScopeBinding(ctx context.Context, arg UpsertOrgScopeB
 		arg.SpaceID,
 		arg.ScopeKind,
 		arg.ScopeID,
+		arg.ParentScopeKind,
 		arg.ParentScopeID,
 	)
 	return err

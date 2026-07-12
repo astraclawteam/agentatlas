@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -234,16 +235,25 @@ func TestInputResolverTimelineSourcesAreTypedWindowedScopedAndMasked(t *testing.
 }
 
 type staticSourceResolver struct {
-	inputs   []SourceInput
-	coverage Coverage
-	missing  []MissingInput
+	inputs         []SourceInput
+	coverage       Coverage
+	missing        []MissingInput
+	preserveMasked bool
 }
 
-func (s staticSourceResolver) ResolveSource(context.Context, ResolveRequest, *Masker) ([]SourceInput, Coverage, []MissingInput, error) {
-	if s.coverage == (Coverage{}) {
-		s.coverage.InputCount = len(s.inputs)
+func (s staticSourceResolver) ResolveSource(_ context.Context, _ ResolveRequest, masker *Masker) ([]SourceInput, Coverage, []MissingInput, error) {
+	inputs := append([]SourceInput(nil), s.inputs...)
+	if !s.preserveMasked {
+		for i := range inputs {
+			if inputs[i].MaskedText.owner == nil {
+				inputs[i].MaskedText = masker.Sanitize(inputs[i].MaskedText.text)
+			}
+		}
 	}
-	return s.inputs, s.coverage, s.missing, nil
+	if s.coverage == (Coverage{}) {
+		s.coverage.InputCount = len(inputs)
+	}
+	return inputs, s.coverage, s.missing, nil
 }
 
 func TestInputResolverSupportsPluggableSourcesAndBoundsOutput(t *testing.T) {
@@ -285,23 +295,39 @@ func dreamDate(value time.Time) pgtype.Date {
 }
 
 func immediateChild(id, orgScope, parent string) db.ListDreamImmediateChildrenRow {
+	parentScope := parent
+	parentKind := "company"
+	if parsed, ok := parseScopeRef(parent); ok && parsed.kind != "" {
+		parentKind, parent = parsed.kind, parsed.id
+	} else {
+		parentScope = "company:" + parent
+	}
 	return db.ListDreamImmediateChildrenRow{
-		ID: id, EnterpriseID: "ent-1", OrgScope: orgScope, ParentSpaceID: "company-space", ParentScopeID: parent, ParentOrgScope: parent,
+		ID: id, EnterpriseID: "ent-1", OrgScope: orgScope, ParentSpaceID: "company-space",
+		ParentScopeKind: parentKind, ParentScopeID: parent, ParentOrgScope: parentScope,
 	}
 }
 
 func completedChildRun(id, childSpaceID, childOrgScope, parent string, visibility []byte) db.ListDreamCompletedChildRunsRow {
+	parentScope := parent
+	parentKind := "company"
+	if parsed, ok := parseScopeRef(parent); ok && parsed.kind != "" {
+		parentKind, parent = parsed.kind, parsed.id
+	} else {
+		parentScope = "company:" + parent
+	}
 	return db.ListDreamCompletedChildRunsRow{
 		ID: id, EnterpriseID: "ent-1", OrgUnitID: childOrgScope, Status: "succeeded",
 		WindowStart: dreamTimestamp(inputWindowStart), WindowEnd: dreamTimestamp(inputWindowEnd), VisibilitySnapshot: visibility,
-		ChildSpaceID: childSpaceID, ChildOrgScope: childOrgScope, ParentSpaceID: "company-space", ParentScopeID: parent, ParentOrgScope: parent,
+		ChildSpaceID: childSpaceID, ChildOrgScope: childOrgScope, ParentSpaceID: "company-space",
+		ParentScopeKind: parentKind, ParentScopeID: parent, ParentOrgScope: parentScope,
 	}
 }
 
 func pluginSourceInput(source sdkdream.Source, id, text string, visibility []string) SourceInput {
 	return SourceInput{
-		ResolvedInput: ResolvedInput{SourceType: source, SourceID: id, OrgUnitID: "company", SanitizedText: text, Visibility: visibility},
-		EnterpriseID:  "ent-1", SpaceID: "company-space", WindowStart: inputWindowStart, WindowEnd: inputWindowEnd,
+		SourceType: source, SourceID: id, OrgUnitID: "company", MaskedText: MaskedText{text: text}, Visibility: visibility,
+		EnterpriseID: "ent-1", SpaceID: "company-space", WindowStart: inputWindowStart, WindowEnd: inputWindowEnd,
 	}
 }
 
@@ -438,7 +464,7 @@ func TestInputResolverProtectsBuiltinsAndPluginContract(t *testing.T) {
 	t.Run("unmasked plugin", func(t *testing.T) {
 		const custom sdkdream.Source = "custom"
 		r := NewInputResolver(&fakeInputStore{})
-		if err := r.Register(custom, staticSourceResolver{inputs: []SourceInput{pluginSourceInput(custom, "raw", "secret-123", []string{"company"})}}); err != nil {
+		if err := r.Register(custom, staticSourceResolver{inputs: []SourceInput{pluginSourceInput(custom, "raw", "secret-123", []string{"company"})}, preserveMasked: true}); err != nil {
 			t.Fatal(err)
 		}
 		_, _, _, err := r.Resolve(context.Background(), ResolveRequest{
@@ -447,6 +473,27 @@ func TestInputResolverProtectsBuiltinsAndPluginContract(t *testing.T) {
 		})
 		if err == nil {
 			t.Fatal("unmasked plugin output was repaired instead of rejected")
+		}
+	})
+
+	t.Run("foreign masker provenance", func(t *testing.T) {
+		const custom sdkdream.Source = "custom"
+		foreignMasker, err := NewMasker([]string{`secret-\d+`})
+		if err != nil {
+			t.Fatal(err)
+		}
+		item := pluginSourceInput(custom, "foreign-masker", "", []string{"company"})
+		item.MaskedText = foreignMasker.Sanitize("secret-123")
+		r := NewInputResolver(&fakeInputStore{})
+		if err := r.Register(custom, staticSourceResolver{inputs: []SourceInput{item}, preserveMasked: true}); err != nil {
+			t.Fatal(err)
+		}
+		_, _, _, err = r.Resolve(context.Background(), ResolveRequest{
+			EnterpriseID: "ent-1", OrgUnitID: "company", SpaceID: "company-space", Sources: []sdkdream.Source{custom}, WindowStart: inputWindowStart, WindowEnd: inputWindowEnd,
+			Visibility: []string{"company"}, MaskingRules: []string{`secret-\d+`},
+		})
+		if err == nil {
+			t.Fatal("text sanitized by a different masker instance was accepted")
 		}
 	})
 
@@ -683,4 +730,173 @@ func TestInputResolverBoundsBuiltinsBeforeAccumulation(t *testing.T) {
 			t.Fatal("oversized child runs accumulated")
 		}
 	})
+}
+
+func TestInputResolverRejectsReservedVisibilityLevelAsChildOrg(t *testing.T) {
+	store := &fakeInputStore{
+		children: []db.ListDreamImmediateChildrenRow{immediateChild("child", "department:child", "company")},
+		childRuns: []db.ListDreamCompletedChildRunsRow{completedChildRun(
+			"run", "child", "department:child", "company",
+			[]byte(`{"visibility_level":"members","org_unit_ids":["managers"]}`),
+		)},
+		summaries: map[string][]db.DreamSummary{
+			"child|retrieval": {{ID: "sum", RunID: "run", EnterpriseID: "ent-1", SpaceID: "child", Layer: "retrieval", SummaryText: "private"}},
+		},
+	}
+	inputs, _, missing, err := NewInputResolver(store).Resolve(context.Background(), ResolveRequest{
+		EnterpriseID: "ent-1", OrgUnitID: "company", Sources: []sdkdream.Source{sdkdream.SourceChildDreamSummary},
+		WindowStart: inputWindowStart, WindowEnd: inputWindowEnd, Visibility: []string{"members", "managers"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 0 || len(missing) != 1 || missing[0].Reason != sdkdream.MissingNotAuthorized {
+		t.Fatalf("reserved visibility token accepted as org scope: inputs=%+v missing=%+v", inputs, missing)
+	}
+}
+
+func TestInputResolverBroadRegexMaskingDoesNotRequireRemasking(t *testing.T) {
+	for _, rule := range []string{".", `\S+`} {
+		t.Run(rule, func(t *testing.T) {
+			store := &fakeInputStore{
+				space:   db.KnowledgeSpace{ID: "space", EnterpriseID: "ent-1", Kind: "employee", OrgScope: "employee:u1"},
+				members: []db.SpaceMembershipCache{{SpaceID: "space", UserID: "u1"}},
+				briefs: []db.WorkBrief{{
+					ID: "brief", EnterpriseID: "ent-1", EmployeeUserID: "u1", BriefDate: dreamDate(inputWindowStart), Summary: "raw",
+				}},
+			}
+			inputs, _, _, err := NewInputResolver(store).Resolve(context.Background(), ResolveRequest{
+				EnterpriseID: "ent-1", OrgUnitID: "employee:u1", Sources: []sdkdream.Source{sdkdream.SourceWorkBrief},
+				WindowStart: inputWindowStart, WindowEnd: inputWindowEnd, Visibility: []string{"employee:u1"}, MaskingRules: []string{rule},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(inputs) != 1 || strings.Contains(inputs[0].SanitizedText, "raw") {
+				t.Fatalf("broad-regex masking failed: %+v", inputs)
+			}
+		})
+	}
+}
+
+func TestInputResolverRejectsGlobalAggregateOverflow(t *testing.T) {
+	r := NewInputResolver(&fakeInputStore{})
+	sources := []sdkdream.Source{"custom-a", "custom-b", "custom-c"}
+	for _, source := range sources {
+		items := []SourceInput{
+			pluginSourceInput(source, string(source)+"-1", "safe", []string{"company"}),
+			pluginSourceInput(source, string(source)+"-2", "safe", []string{"company"}),
+		}
+		if err := r.Register(source, staticSourceResolver{inputs: items}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, _, _, err := r.Resolve(context.Background(), ResolveRequest{
+		EnterpriseID: "ent-1", OrgUnitID: "company", SpaceID: "company-space", Sources: sources, MaxInputs: 3,
+		WindowStart: inputWindowStart, WindowEnd: inputWindowEnd, Visibility: []string{"company"},
+	})
+	if err == nil {
+		t.Fatal("per-source bounds allowed aggregate overflow")
+	}
+}
+
+func TestInputResolverRejectsRawSourceOverflowBeforeDeduplication(t *testing.T) {
+	sources := make([]sdkdream.Source, maxResolvedInputs+1)
+	for i := range sources {
+		sources[i] = "custom"
+	}
+	r := NewInputResolver(&fakeInputStore{})
+	if err := r.Register("custom", staticSourceResolver{}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err := r.Resolve(context.Background(), ResolveRequest{
+		EnterpriseID: "ent-1", OrgUnitID: "company", SpaceID: "company-space", Sources: sources,
+		WindowStart: inputWindowStart, WindowEnd: inputWindowEnd, Visibility: []string{"company"},
+	})
+	if err == nil {
+		t.Fatal("oversized raw source slice was allocated and deduplicated")
+	}
+}
+
+func TestInputResolverRegistryIsRaceSafe(t *testing.T) {
+	const custom sdkdream.Source = "custom"
+	r := NewInputResolver(&fakeInputStore{})
+	resolver := func(text string) staticSourceResolver {
+		return staticSourceResolver{inputs: []SourceInput{pluginSourceInput(custom, "id", text, []string{"company"})}}
+	}
+	if err := r.Register(custom, resolver("initial")); err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 64)
+	for i := 0; i < 32; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			if err := r.Register(custom, resolver(fmt.Sprintf("value-%d", i))); err != nil {
+				errs <- err
+			}
+		}(i)
+		go func() {
+			defer wg.Done()
+			_, _, _, err := r.Resolve(context.Background(), ResolveRequest{
+				EnterpriseID: "ent-1", OrgUnitID: "company", SpaceID: "company-space", Sources: []sdkdream.Source{custom},
+				WindowStart: inputWindowStart, WindowEnd: inputWindowEnd, Visibility: []string{"company"},
+			})
+			if err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+func TestInputResolverBriefDateBoundsUsePolicyTimezone(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		timezone   string
+		start, end time.Time
+		wantStart  time.Time
+		wantEnd    time.Time
+	}{
+		{
+			name: "Asia Shanghai midnight window", timezone: "Asia/Shanghai",
+			start: time.Date(2026, 7, 10, 16, 0, 0, 0, time.UTC), end: time.Date(2026, 7, 11, 16, 0, 0, 0, time.UTC),
+			wantStart: time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC), wantEnd: time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "same local day nonaligned window", timezone: "Asia/Shanghai",
+			start: time.Date(2026, 7, 11, 1, 0, 0, 0, time.UTC), end: time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC),
+			wantStart: time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC), wantEnd: time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeInputStore{
+				space:   db.KnowledgeSpace{ID: "space", EnterpriseID: "ent-1", Kind: "employee", OrgScope: "employee:u1"},
+				members: []db.SpaceMembershipCache{{SpaceID: "space", UserID: "u1"}},
+				briefs: []db.WorkBrief{
+					{ID: "inside", EnterpriseID: "ent-1", EmployeeUserID: "u1", BriefDate: dreamDate(tc.wantStart), Summary: "inside"},
+					{ID: "outside", EnterpriseID: "ent-1", EmployeeUserID: "u1", BriefDate: dreamDate(tc.wantEnd), Summary: "outside"},
+				},
+			}
+			inputs, _, _, err := NewInputResolver(store).Resolve(context.Background(), ResolveRequest{
+				EnterpriseID: "ent-1", OrgUnitID: "employee:u1", Sources: []sdkdream.Source{sdkdream.SourceWorkBrief},
+				WindowStart: tc.start, WindowEnd: tc.end, Timezone: tc.timezone, Visibility: []string{"employee:u1"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(inputs) != 1 || inputs[0].SourceID != "inside" {
+				t.Fatalf("timezone brief selection: %+v", inputs)
+			}
+			if len(store.briefParams) != 1 || !store.briefParams[0].WindowStart.Time.Equal(tc.wantStart) || !store.briefParams[0].WindowEnd.Time.Equal(tc.wantEnd) {
+				t.Fatalf("SQL bounds differ: %+v", store.briefParams)
+			}
+		})
+	}
 }

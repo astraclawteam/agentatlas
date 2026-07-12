@@ -598,6 +598,7 @@ FROM knowledge_spaces AS spaces
 JOIN org_scope_bindings AS bindings ON bindings.space_id = spaces.id
 JOIN org_scope_bindings AS parent_binding
   ON parent_binding.enterprise_id = bindings.enterprise_id
+ AND parent_binding.scope_kind = bindings.parent_scope_kind
  AND parent_binding.scope_id = bindings.parent_scope_id
 JOIN knowledge_spaces AS parent_space
   ON parent_space.id = parent_binding.space_id
@@ -656,6 +657,7 @@ JOIN knowledge_spaces AS child_space
  AND (bindings.scope_id = runs.org_unit_id OR child_space.org_scope = runs.org_unit_id)
 JOIN org_scope_bindings AS parent_binding
   ON parent_binding.enterprise_id = bindings.enterprise_id
+ AND parent_binding.scope_kind = bindings.parent_scope_kind
  AND parent_binding.scope_id = bindings.parent_scope_id
 JOIN knowledge_spaces AS parent_space
   ON parent_space.id = parent_binding.space_id
@@ -733,6 +735,7 @@ SELECT DISTINCT runs.id, runs.policy_id, runs.version, runs.enterprise_id, runs.
        child_space.id::text AS child_space_id,
        child_space.org_scope::text AS child_org_scope,
        parent_space.id::text AS parent_space_id,
+       parent_binding.scope_kind::text AS parent_scope_kind,
        parent_binding.scope_id::text AS parent_scope_id,
        parent_space.org_scope::text AS parent_org_scope
 FROM dream_runs AS runs
@@ -744,6 +747,7 @@ JOIN knowledge_spaces AS child_space
  AND (bindings.scope_id = runs.org_unit_id OR child_space.org_scope = runs.org_unit_id)
 JOIN org_scope_bindings AS parent_binding
   ON parent_binding.enterprise_id = bindings.enterprise_id
+ AND parent_binding.scope_kind = bindings.parent_scope_kind
  AND parent_binding.scope_id = bindings.parent_scope_id
 JOIN knowledge_spaces AS parent_space
   ON parent_space.id = parent_binding.space_id
@@ -757,7 +761,7 @@ WHERE runs.enterprise_id = $1
   AND runs.window_start = $3
   AND runs.window_end = $4
 ORDER BY runs.org_unit_id, runs.id, child_space.id, child_space.org_scope,
-         parent_space.id, parent_binding.scope_id, parent_space.org_scope
+         parent_space.id, parent_binding.scope_kind, parent_binding.scope_id, parent_space.org_scope
 LIMIT $5
 `
 
@@ -797,6 +801,7 @@ type ListDreamCompletedChildRunsRow struct {
 	ChildSpaceID       string             `json:"child_space_id"`
 	ChildOrgScope      string             `json:"child_org_scope"`
 	ParentSpaceID      string             `json:"parent_space_id"`
+	ParentScopeKind    string             `json:"parent_scope_kind"`
 	ParentScopeID      string             `json:"parent_scope_id"`
 	ParentOrgScope     string             `json:"parent_org_scope"`
 }
@@ -844,6 +849,7 @@ func (q *Queries) ListDreamCompletedChildRuns(ctx context.Context, arg ListDream
 			&i.ChildSpaceID,
 			&i.ChildOrgScope,
 			&i.ParentSpaceID,
+			&i.ParentScopeKind,
 			&i.ParentScopeID,
 			&i.ParentOrgScope,
 		); err != nil {
@@ -860,6 +866,7 @@ func (q *Queries) ListDreamCompletedChildRuns(ctx context.Context, arg ListDream
 const listDreamImmediateChildren = `-- name: ListDreamImmediateChildren :many
 SELECT DISTINCT spaces.id, spaces.enterprise_id, spaces.kind, spaces.name, spaces.org_scope, spaces.org_version, spaces.created_at, spaces.updated_at,
        parent_space.id::text AS parent_space_id,
+       parent_binding.scope_kind::text AS parent_scope_kind,
        parent_binding.scope_id::text AS parent_scope_id,
        parent_space.org_scope::text AS parent_org_scope
 FROM knowledge_spaces AS spaces
@@ -868,6 +875,7 @@ JOIN org_scope_bindings AS bindings
  AND bindings.space_id = spaces.id
 JOIN org_scope_bindings AS parent_binding
   ON parent_binding.enterprise_id = bindings.enterprise_id
+ AND parent_binding.scope_kind = bindings.parent_scope_kind
  AND parent_binding.scope_id = bindings.parent_scope_id
 JOIN knowledge_spaces AS parent_space
   ON parent_space.enterprise_id = parent_binding.enterprise_id
@@ -877,7 +885,8 @@ WHERE spaces.enterprise_id = $1
       parent_binding.scope_id = $2::text
       OR parent_space.org_scope = $2::text
   )
-ORDER BY spaces.kind, spaces.name, spaces.id, parent_space.id, parent_binding.scope_id, parent_space.org_scope
+ORDER BY spaces.kind, spaces.name, spaces.id, parent_space.id,
+         parent_binding.scope_kind, parent_binding.scope_id, parent_space.org_scope
 LIMIT $3
 `
 
@@ -888,17 +897,18 @@ type ListDreamImmediateChildrenParams struct {
 }
 
 type ListDreamImmediateChildrenRow struct {
-	ID             string             `json:"id"`
-	EnterpriseID   string             `json:"enterprise_id"`
-	Kind           string             `json:"kind"`
-	Name           string             `json:"name"`
-	OrgScope       string             `json:"org_scope"`
-	OrgVersion     int64              `json:"org_version"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-	ParentSpaceID  string             `json:"parent_space_id"`
-	ParentScopeID  string             `json:"parent_scope_id"`
-	ParentOrgScope string             `json:"parent_org_scope"`
+	ID              string             `json:"id"`
+	EnterpriseID    string             `json:"enterprise_id"`
+	Kind            string             `json:"kind"`
+	Name            string             `json:"name"`
+	OrgScope        string             `json:"org_scope"`
+	OrgVersion      int64              `json:"org_version"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ParentSpaceID   string             `json:"parent_space_id"`
+	ParentScopeKind string             `json:"parent_scope_kind"`
+	ParentScopeID   string             `json:"parent_scope_id"`
+	ParentOrgScope  string             `json:"parent_org_scope"`
 }
 
 func (q *Queries) ListDreamImmediateChildren(ctx context.Context, arg ListDreamImmediateChildrenParams) ([]ListDreamImmediateChildrenRow, error) {
@@ -920,6 +930,7 @@ func (q *Queries) ListDreamImmediateChildren(ctx context.Context, arg ListDreamI
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ParentSpaceID,
+			&i.ParentScopeKind,
 			&i.ParentScopeID,
 			&i.ParentOrgScope,
 		); err != nil {

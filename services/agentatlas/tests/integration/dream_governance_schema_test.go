@@ -200,10 +200,10 @@ func TestDreamGovernanceSchema(t *testing.T) {
 			('space-child','ent-dream-a','project_group','Child','project_group:child'),
 			('space-foreign','ent-dream-b','project_group','Foreign','project_group:foreign')
 			on conflict (id) do nothing`,
-		`insert into org_scope_bindings(enterprise_id,space_id,scope_kind,scope_id,parent_scope_id) values
-			('ent-dream-a','space-parent','department','parent',null),
-			('ent-dream-a','space-child','project_group','child','parent'),
-			('ent-dream-b','space-foreign','project_group','foreign',null)
+		`insert into org_scope_bindings(enterprise_id,space_id,scope_kind,scope_id,parent_scope_kind,parent_scope_id) values
+			('ent-dream-a','space-parent','department','parent',null,null),
+			('ent-dream-a','space-child','project_group','child','department','parent'),
+			('ent-dream-b','space-foreign','project_group','foreign',null,null)
 			on conflict (enterprise_id,scope_kind,scope_id) do nothing`,
 		`insert into workflows(id,enterprise_id,name,kind,draft) values
 			('dream-workflow','ent-dream-a','Dream workflow','dream','{}'),
@@ -263,8 +263,8 @@ func TestDreamGovernanceSchema(t *testing.T) {
 		id,run_id,enterprise_id,space_id,layer,summary_text,risk_signals
 	) values('summary-cross','child','ent-dream-b','space-foreign','display','injected','[]')`)
 	assertRejected("cross-enterprise org binding accepted", `insert into org_scope_bindings(
-		enterprise_id,space_id,scope_kind,scope_id,parent_scope_id
-	) values('ent-dream-a','space-foreign','project_group','malformed-child','parent')`)
+		enterprise_id,space_id,scope_kind,scope_id,parent_scope_kind,parent_scope_id
+	) values('ent-dream-a','space-foreign','project_group','malformed-child','department','parent')`)
 
 	_, err = pool.Exec(ctx, `insert into dream_run_lineage(run_id,parent_run_id,relation) values('parent','child','child_summary')`)
 	if err != nil {

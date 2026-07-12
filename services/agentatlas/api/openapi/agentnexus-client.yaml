@@ -211,6 +211,7 @@ components:
             kind: { type: string, enum: [employee, project_group, department, business_unit, company] }
             id: { type: string }
             name: { type: string }
+            parent_kind: { type: string, enum: [employee, project_group, department, business_unit, company] }
             parent_id: { type: string }
         members:
           type: array

@@ -8,7 +8,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
+	dreamresolver "github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/storage"
 )
 
@@ -44,8 +46,8 @@ func TestDreamInputResolverPostgresContracts(t *testing.T) {
 	}
 	for _, binding := range []db.UpsertOrgScopeBindingParams{
 		{EnterpriseID: ent, SpaceID: parentID, ScopeKind: "company", ScopeID: "parent"},
-		{EnterpriseID: ent, SpaceID: childID, ScopeKind: "department", ScopeID: "child", ParentScopeID: pgtype.Text{String: "parent", Valid: true}},
-		{EnterpriseID: ent, SpaceID: grandchildID, ScopeKind: "department", ScopeID: "grandchild", ParentScopeID: pgtype.Text{String: "child", Valid: true}},
+		{EnterpriseID: ent, SpaceID: childID, ScopeKind: "department", ScopeID: "child", ParentScopeKind: pgtype.Text{String: "company", Valid: true}, ParentScopeID: pgtype.Text{String: "parent", Valid: true}},
+		{EnterpriseID: ent, SpaceID: grandchildID, ScopeKind: "department", ScopeID: "grandchild", ParentScopeKind: pgtype.Text{String: "department", Valid: true}, ParentScopeID: pgtype.Text{String: "child", Valid: true}},
 	} {
 		if err := q.UpsertOrgScopeBinding(ctx, binding); err != nil {
 			t.Fatal(err)
@@ -58,8 +60,38 @@ func TestDreamInputResolverPostgresContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(children) != 1 || children[0].ID != childID || children[0].ParentSpaceID != parentID || children[0].ParentScopeID != "parent" || children[0].ParentOrgScope != "company:parent" {
+	if len(children) != 1 || children[0].ID != childID || children[0].ParentSpaceID != parentID || children[0].ParentScopeKind != "company" || children[0].ParentScopeID != "parent" || children[0].ParentOrgScope != "company:parent" {
 		t.Fatalf("immediate-child provenance: %+v", children)
+	}
+
+	collisionCompanyID, collisionDepartmentID, collisionChildID := newID("space-collision-company"), newID("space-collision-department"), newID("space-collision-child")
+	for _, space := range []db.InsertKnowledgeSpaceParams{
+		{ID: collisionCompanyID, EnterpriseID: ent, Kind: "company", Name: "Collision company", OrgScope: "company:collision", OrgVersion: 1},
+		{ID: collisionDepartmentID, EnterpriseID: ent, Kind: "department", Name: "Collision department", OrgScope: "department:collision", OrgVersion: 1},
+		{ID: collisionChildID, EnterpriseID: ent, Kind: "employee", Name: "Department child", OrgScope: "employee:collision-child", OrgVersion: 1},
+	} {
+		if _, err := q.InsertKnowledgeSpace(ctx, space); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, binding := range []db.UpsertOrgScopeBindingParams{
+		{EnterpriseID: ent, SpaceID: collisionCompanyID, ScopeKind: "company", ScopeID: "collision"},
+		{EnterpriseID: ent, SpaceID: collisionDepartmentID, ScopeKind: "department", ScopeID: "collision"},
+		// This child belongs to department:collision, never company:collision.
+		{EnterpriseID: ent, SpaceID: collisionChildID, ScopeKind: "employee", ScopeID: "collision-child", ParentScopeKind: pgtype.Text{String: "department", Valid: true}, ParentScopeID: pgtype.Text{String: "collision", Valid: true}},
+	} {
+		if err := q.UpsertOrgScopeBinding(ctx, binding); err != nil {
+			t.Fatal(err)
+		}
+	}
+	collisionChildren, err := q.ListDreamImmediateChildren(ctx, db.ListDreamImmediateChildrenParams{
+		EnterpriseID: ent, ParentOrgUnitID: "company:collision", ResultLimit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(collisionChildren) != 0 {
+		t.Fatalf("cross-kind parent collision leaked child: %+v", collisionChildren)
 	}
 
 	workflowID := newID("wf-input")
@@ -112,7 +144,7 @@ func TestDreamInputResolverPostgresContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(runs) != 1 || runs[0].ID != runID || runs[0].ChildSpaceID != childID || runs[0].ParentSpaceID != parentID || runs[0].ParentScopeID != "parent" || runs[0].ParentOrgScope != "company:parent" {
+	if len(runs) != 1 || runs[0].ID != runID || runs[0].ChildSpaceID != childID || runs[0].ParentSpaceID != parentID || runs[0].ParentScopeKind != "company" || runs[0].ParentScopeID != "parent" || runs[0].ParentOrgScope != "company:parent" {
 		t.Fatalf("completed-run provenance: %+v", runs)
 	}
 
@@ -162,6 +194,41 @@ func TestDreamInputResolverPostgresContracts(t *testing.T) {
 	})
 	if err != nil || len(briefs) != 1 || !briefs[0].BriefDate.Time.Equal(windowStart) {
 		t.Fatalf("exact brief dates: %+v err=%v", briefs, err)
+	}
+
+	timezoneSpaceID := newID("space-timezone-employee")
+	if _, err := q.InsertKnowledgeSpace(ctx, db.InsertKnowledgeSpaceParams{
+		ID: timezoneSpaceID, EnterpriseID: ent, Kind: "employee", Name: "Timezone employee", OrgScope: "employee:tz-user", OrgVersion: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.UpsertOrgScopeBinding(ctx, db.UpsertOrgScopeBindingParams{
+		EnterpriseID: ent, SpaceID: timezoneSpaceID, ScopeKind: "employee", ScopeID: "tz-user",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.UpsertSpaceMember(ctx, db.UpsertSpaceMemberParams{SpaceID: timezoneSpaceID, UserID: "tz-user", DisplayName: "Timezone user", OrgVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	for i, date := range []time.Time{
+		time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC),
+	} {
+		if _, err := q.CreateWorkBrief(ctx, db.CreateWorkBriefParams{
+			ID: newID("brief-timezone"), EnterpriseID: ent, EmployeeUserID: "tz-user", BriefDate: pgtype.Date{Time: date, Valid: true},
+			Summary: date.Format("2006-01-02"), SourceHash: newID("hash-timezone"), EvidencePointerID: evidenceID, Topics: []string{}, ProjectRefs: []string{},
+		}); err != nil {
+			t.Fatalf("timezone brief %d: %v", i, err)
+		}
+	}
+	timezoneInputs, _, _, err := dreamresolver.NewInputResolver(q).Resolve(ctx, dreamresolver.ResolveRequest{
+		EnterpriseID: ent, OrgUnitID: "employee:tz-user", SpaceID: timezoneSpaceID, Sources: []sdkdream.Source{sdkdream.SourceWorkBrief},
+		WindowStart: time.Date(2026, 7, 11, 1, 0, 0, 0, time.UTC), WindowEnd: time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC),
+		Timezone: "Asia/Shanghai", Visibility: []string{"employee:tz-user"},
+	})
+	if err != nil || len(timezoneInputs) != 1 || timezoneInputs[0].SanitizedText != "2026-07-11" {
+		t.Fatalf("Asia/Shanghai non-midnight brief window: inputs=%+v err=%v", timezoneInputs, err)
 	}
 
 	for _, node := range []db.InsertTimelineNodeParams{

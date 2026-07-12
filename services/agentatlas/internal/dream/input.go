@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
@@ -29,14 +30,20 @@ type ResolvedInput struct {
 }
 
 // SourceInput is the internal, provenance-bearing value exchanged across a
-// pluggable source boundary. SanitizedText must already be masked; Resolver
-// rejects (rather than repairs) values that are not mask-idempotent.
+// pluggable source boundary. MaskedText can only be created by the exact
+// request Masker; Resolver rejects values without that opaque provenance.
 type SourceInput struct {
-	ResolvedInput
-	EnterpriseID string
-	SpaceID      string
-	WindowStart  time.Time
-	WindowEnd    time.Time
+	SourceType        sdkdream.Source
+	SourceID          string
+	OrgUnitID         string
+	EvidencePointerID string
+	MaskedText        MaskedText
+	Visibility        []string
+	ParentRunID       string
+	EnterpriseID      string
+	SpaceID           string
+	WindowStart       time.Time
+	WindowEnd         time.Time
 }
 
 type Coverage struct {
@@ -52,6 +59,7 @@ type ResolveRequest struct {
 	OrgUnitID    string
 	WindowStart  time.Time
 	WindowEnd    time.Time
+	Timezone     string
 	Sources      []sdkdream.Source
 	MaskingRules []string
 	Visibility   []string
@@ -86,6 +94,7 @@ type InputStore interface {
 }
 
 type Resolver struct {
+	mu        sync.RWMutex
 	store     InputStore
 	resolvers map[sdkdream.Source]SourceResolver
 	builtins  map[sdkdream.Source]struct{}
@@ -117,6 +126,8 @@ func (r *Resolver) Register(source sdkdream.Source, resolver SourceResolver) err
 	if source == "" || resolver == nil {
 		return fmt.Errorf("Dream source and resolver are required")
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if _, protected := r.builtins[source]; protected {
 		return fmt.Errorf("built-in Dream input source %q cannot be replaced", source)
 	}
@@ -133,6 +144,12 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) ([]ResolvedI
 	}
 	if req.WindowStart.IsZero() || req.WindowEnd.IsZero() || !req.WindowEnd.After(req.WindowStart) {
 		return nil, Coverage{}, nil, fmt.Errorf("Dream input window must have nonempty increasing endpoints")
+	}
+	if _, err := dreamLocation(req.Timezone); err != nil {
+		return nil, Coverage{}, nil, err
+	}
+	if len(req.Sources) > maxResolvedInputs {
+		return nil, Coverage{}, nil, fmt.Errorf("Dream input source count exceeds bound %d", maxResolvedInputs)
 	}
 	if _, ok := parseScopeRef(req.OrgUnitID); !ok {
 		return nil, Coverage{}, nil, fmt.Errorf("invalid Dream org unit %q", req.OrgUnitID)
@@ -156,8 +173,9 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) ([]ResolvedI
 	var coverage Coverage
 	var inputs []ResolvedInput
 	var missing []MissingInput
+	limit := effectiveInputLimit(req.MaxInputs)
 	for _, source := range sources {
-		resolver, ok := r.resolvers[source]
+		resolver, builtin, ok := r.sourceResolver(source)
 		if !ok {
 			return nil, Coverage{}, nil, fmt.Errorf("unsupported Dream input source %q", source)
 		}
@@ -165,36 +183,58 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) ([]ResolvedI
 		if err != nil {
 			return nil, Coverage{}, nil, fmt.Errorf("resolve %s: %w", source, err)
 		}
-		_, builtin := r.builtins[source]
-		if err := validateSourceMetadata(source, resolved, sourceCoverage, sourceMissing, req, builtin); err != nil {
+		if err := validateSourceMetadata(source, resolved, sourceCoverage, sourceMissing, req, builtin, masker); err != nil {
 			return nil, Coverage{}, nil, fmt.Errorf("resolve %s: %w", source, err)
+		}
+		if len(inputs)+len(resolved) > limit {
+			return nil, Coverage{}, nil, fmt.Errorf("Dream input sources returned aggregate inputs above bound %d", limit)
+		}
+		if len(missing)+len(sourceMissing) > maxResolvedInputs {
+			return nil, Coverage{}, nil, fmt.Errorf("Dream input sources returned aggregate missing inputs above bound %d", maxResolvedInputs)
+		}
+		if coverage.ExpectedChildren > maxResolvedInputs-sourceCoverage.ExpectedChildren || coverage.CompletedChildren > maxResolvedInputs-sourceCoverage.CompletedChildren {
+			return nil, Coverage{}, nil, fmt.Errorf("Dream input sources returned aggregate coverage above bound %d", maxResolvedInputs)
 		}
 		coverage.ExpectedChildren += sourceCoverage.ExpectedChildren
 		coverage.CompletedChildren += sourceCoverage.CompletedChildren
 		for _, input := range resolved {
 			visibility, ok := intersectVisibility(input.Visibility, req.Visibility)
 			if !ok {
+				if len(missing)+len(sourceMissing) >= maxResolvedInputs {
+					return nil, Coverage{}, nil, fmt.Errorf("Dream input sources returned aggregate missing inputs above bound %d", maxResolvedInputs)
+				}
 				sourceMissing = append(sourceMissing, MissingInput{SourceType: source, SourceID: input.SourceID, Reason: sdkdream.MissingNotAuthorized})
 				continue
 			}
 			input.Visibility = visibility
-			masked := strings.TrimSpace(masker.Apply(input.SanitizedText))
-			if masked != input.SanitizedText {
-				return nil, Coverage{}, nil, fmt.Errorf("resolve %s: source %s returned unmasked text", source, input.SourceID)
+			text, ok := masker.resolve(input.MaskedText)
+			if !ok {
+				return nil, Coverage{}, nil, fmt.Errorf("resolve %s: source %s returned text without masking provenance", source, input.SourceID)
 			}
-			inputs = append(inputs, input.ResolvedInput)
+			inputs = append(inputs, ResolvedInput{
+				SourceType: input.SourceType, SourceID: input.SourceID, OrgUnitID: input.OrgUnitID,
+				EvidencePointerID: input.EvidencePointerID, SanitizedText: text,
+				Visibility: input.Visibility, ParentRunID: input.ParentRunID,
+			})
 		}
 		missing = append(missing, sourceMissing...)
 	}
 
 	inputs = normalizeInputs(inputs)
-	limit := effectiveInputLimit(req.MaxInputs)
 	if len(inputs) > limit {
 		inputs = inputs[:limit]
 	}
 	missing = normalizeMissing(missing)
 	coverage.InputCount = len(inputs)
 	return inputs, coverage, missing, nil
+}
+
+func (r *Resolver) sourceResolver(source sdkdream.Source) (SourceResolver, bool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	resolver, ok := r.resolvers[source]
+	_, builtin := r.builtins[source]
+	return resolver, builtin, ok
 }
 
 func (r *Resolver) resolveSources(ctx context.Context, req ResolveRequest) ([]sdkdream.Source, error) {
@@ -217,7 +257,7 @@ func (r *Resolver) resolveSources(ctx context.Context, req ResolveRequest) ([]sd
 	return []sdkdream.Source{sdkdream.SourceChildDreamSummary}, nil
 }
 
-func validateSourceMetadata(source sdkdream.Source, inputs []SourceInput, coverage Coverage, missing []MissingInput, req ResolveRequest, builtin bool) error {
+func validateSourceMetadata(source sdkdream.Source, inputs []SourceInput, coverage Coverage, missing []MissingInput, req ResolveRequest, builtin bool, masker *Masker) error {
 	limit := effectiveInputLimit(req.MaxInputs)
 	if len(inputs) > limit {
 		return fmt.Errorf("source returned %d inputs above bound %d", len(inputs), limit)
@@ -250,7 +290,7 @@ func validateSourceMetadata(source sdkdream.Source, inputs []SourceInput, covera
 				return fmt.Errorf("source %s returned invalid space provenance for %q", source, input.SourceID)
 			}
 		}
-		if input.SanitizedText == "" || input.SanitizedText != strings.TrimSpace(input.SanitizedText) || len([]rune(input.SanitizedText)) > maxResolvedTextRunes {
+		if _, ok := masker.resolve(input.MaskedText); !ok {
 			return fmt.Errorf("source %s returned invalid sanitized text for %q", source, input.SourceID)
 		}
 		if visibility := normalizeStrings(input.Visibility, maxVisibilityEntries+1); len(visibility) == 0 || len(visibility) > maxVisibilityEntries {
@@ -302,16 +342,14 @@ func makeSourceInput(req ResolveRequest, spaceID string, source sdkdream.Source,
 	if !ok {
 		return SourceInput{}, sdkdream.MissingNotAuthorized
 	}
-	text := strings.TrimSpace(masker.Apply(rawText))
-	if text == "" {
+	masked := masker.Sanitize(rawText)
+	if _, ok := masker.resolve(masked); !ok {
 		return SourceInput{}, sdkdream.MissingMasked
 	}
 	return SourceInput{
-		ResolvedInput: ResolvedInput{
-			SourceType: source, SourceID: sourceID, OrgUnitID: orgUnitID,
-			EvidencePointerID: evidencePointerID, SanitizedText: truncateRunes(text, maxResolvedTextRunes),
-			Visibility: visibility, ParentRunID: parentRunID,
-		},
+		SourceType: source, SourceID: sourceID, OrgUnitID: orgUnitID,
+		EvidencePointerID: evidencePointerID, MaskedText: masked,
+		Visibility: visibility, ParentRunID: parentRunID,
 		EnterpriseID: req.EnterpriseID, SpaceID: spaceID, WindowStart: req.WindowStart, WindowEnd: req.WindowEnd,
 	}, ""
 }

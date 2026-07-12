@@ -89,7 +89,7 @@ func scopedChildren(children []db.ListDreamImmediateChildrenRow, req ResolveRequ
 	result := make([]db.ListDreamImmediateChildrenRow, 0, len(children))
 	for _, child := range children {
 		if child.EnterpriseID != req.EnterpriseID || child.ID == "" || child.OrgScope == "" ||
-			(!sameOrgUnit(child.ParentScopeID, req.OrgUnitID) && !sameOrgUnit(child.ParentOrgScope, req.OrgUnitID)) ||
+			!parentIdentityMatches(child.ParentScopeKind, child.ParentScopeID, child.ParentOrgScope, req.OrgUnitID) ||
 			(req.SpaceID != "" && child.ParentSpaceID != req.SpaceID) {
 			continue
 		}
@@ -118,7 +118,7 @@ func scopedSuccessfulRuns(runs []db.ListDreamCompletedChildRunsRow, req ResolveR
 	result := make([]db.ListDreamCompletedChildRunsRow, 0, len(runs))
 	for _, run := range runs {
 		if run.EnterpriseID != req.EnterpriseID || run.Status != "succeeded" || run.ChildSpaceID == "" || run.ChildOrgScope == "" ||
-			(!sameOrgUnit(run.ParentScopeID, req.OrgUnitID) && !sameOrgUnit(run.ParentOrgScope, req.OrgUnitID)) ||
+			!parentIdentityMatches(run.ParentScopeKind, run.ParentScopeID, run.ParentOrgScope, req.OrgUnitID) ||
 			(req.SpaceID != "" && run.ParentSpaceID != req.SpaceID) {
 			continue
 		}
@@ -174,6 +174,9 @@ func childVisibility(raw []byte) ([]string, bool) {
 	}
 	visibility := make([]string, 0, len(snapshot.OrgUnitIDs)+1)
 	for _, orgUnitID := range snapshot.OrgUnitIDs {
+		if visibilityLevelToken(orgUnitID) {
+			return nil, false
+		}
 		if _, ok := parseScopeRef(orgUnitID); !ok {
 			return nil, false
 		}
@@ -182,4 +185,12 @@ func childVisibility(raw []byte) ([]string, bool) {
 	visibility = append(visibility, string(snapshot.VisibilityLevel))
 	visibility = normalizeStrings(visibility, maxVisibilityEntries+1)
 	return visibility, len(visibility) >= 2 && len(visibility) <= maxVisibilityEntries
+}
+
+func parentIdentityMatches(kind, id, orgScope, requested string) bool {
+	parent, ok := parseScopeRef(orgScope)
+	if !ok || parent.kind == "" || parent.kind != kind || parent.id != id {
+		return false
+	}
+	return sameOrgUnit(orgScope, requested)
 }

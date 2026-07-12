@@ -339,12 +339,13 @@ type MethodSpaceBinding struct {
 }
 
 type OrgScopeBinding struct {
-	ID            int64       `json:"id"`
-	EnterpriseID  string      `json:"enterprise_id"`
-	SpaceID       string      `json:"space_id"`
-	ScopeKind     string      `json:"scope_kind"`
-	ScopeID       string      `json:"scope_id"`
-	ParentScopeID pgtype.Text `json:"parent_scope_id"`
+	ID              int64       `json:"id"`
+	EnterpriseID    string      `json:"enterprise_id"`
+	SpaceID         string      `json:"space_id"`
+	ScopeKind       string      `json:"scope_kind"`
+	ScopeID         string      `json:"scope_id"`
+	ParentScopeID   pgtype.Text `json:"parent_scope_id"`
+	ParentScopeKind pgtype.Text `json:"parent_scope_kind"`
 }
 
 type OrgSnapshot struct {

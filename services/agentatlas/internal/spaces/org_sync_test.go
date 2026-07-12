@@ -225,3 +225,22 @@ func TestOrgSyncIdempotentReplay(t *testing.T) {
 		t.Fatalf("replay created duplicate spaces: %d", len(all))
 	}
 }
+
+func TestOrgSyncRequiresAndPersistsTypedParentIdentity(t *testing.T) {
+	store := newFakeStore()
+	service := NewService(store)
+	child := orgEvent(nexus.OrgDepartmentUpserted, 2, nexus.ScopeDepartment, "child", "Child")
+	child.Scope.ParentID = "parent"
+	if _, _, err := service.EnsureSpaceFromEvent(context.Background(), child); err == nil {
+		t.Fatal("untyped parent identity accepted")
+	}
+
+	child.Scope.ParentKind = nexus.ScopeCompany
+	if _, _, err := service.EnsureSpaceFromEvent(context.Background(), child); err != nil {
+		t.Fatal(err)
+	}
+	binding := store.bindings["ent_1|department|child"]
+	if !binding.ParentScopeKind.Valid || binding.ParentScopeKind.String != "company" || !binding.ParentScopeID.Valid || binding.ParentScopeID.String != "parent" {
+		t.Fatalf("typed parent identity not persisted: %+v", binding)
+	}
+}

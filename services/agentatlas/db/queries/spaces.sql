@@ -36,10 +36,12 @@ INSERT INTO knowledge_space_versions (space_id, org_version, snapshot)
 VALUES ($1, $2, $3);
 
 -- name: UpsertOrgScopeBinding :exec
-INSERT INTO org_scope_bindings (enterprise_id, space_id, scope_kind, scope_id, parent_scope_id)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO org_scope_bindings (enterprise_id, space_id, scope_kind, scope_id, parent_scope_kind, parent_scope_id)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (enterprise_id, scope_kind, scope_id)
-DO UPDATE SET space_id = EXCLUDED.space_id, parent_scope_id = EXCLUDED.parent_scope_id;
+DO UPDATE SET space_id = EXCLUDED.space_id,
+              parent_scope_kind = EXCLUDED.parent_scope_kind,
+              parent_scope_id = EXCLUDED.parent_scope_id;
 
 -- name: UpsertOrgSnapshot :exec
 INSERT INTO org_snapshots (enterprise_id, org_version, snapshot)

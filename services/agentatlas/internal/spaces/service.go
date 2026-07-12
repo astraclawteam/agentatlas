@@ -39,6 +39,9 @@ func NewService(store Store) *Service {
 // event's org scope. Stale events (org_version older than the stored space)
 // never overwrite newer state; replays are idempotent.
 func (s *Service) EnsureSpaceFromEvent(ctx context.Context, ev nexus.OrgEvent) (spaceID string, created bool, err error) {
+	if (ev.Scope.ParentID == "") != (ev.Scope.ParentKind == "") {
+		return "", false, fmt.Errorf("scope %s parent kind and id must be provided together", ev.Scope.ID)
+	}
 	scope := ScopeString(ev.Scope.Kind, ev.Scope.ID)
 
 	existing, err := s.store.GetKnowledgeSpaceByScope(ctx, db.GetKnowledgeSpaceByScopeParams{
@@ -75,11 +78,12 @@ func (s *Service) EnsureSpaceFromEvent(ctx context.Context, ev nexus.OrgEvent) (
 			return "", false, fmt.Errorf("insert space for %s: %w", scope, ierr)
 		}
 		if berr := s.store.UpsertOrgScopeBinding(ctx, db.UpsertOrgScopeBindingParams{
-			EnterpriseID:  ev.EnterpriseID,
-			SpaceID:       space.ID,
-			ScopeKind:     string(ev.Scope.Kind),
-			ScopeID:       ev.Scope.ID,
-			ParentScopeID: pgTextOrEmpty(ev.Scope.ParentID),
+			EnterpriseID:    ev.EnterpriseID,
+			SpaceID:         space.ID,
+			ScopeKind:       string(ev.Scope.Kind),
+			ScopeID:         ev.Scope.ID,
+			ParentScopeKind: pgTextOrEmpty(string(ev.Scope.ParentKind)),
+			ParentScopeID:   pgTextOrEmpty(ev.Scope.ParentID),
 		}); berr != nil {
 			return "", false, fmt.Errorf("bind scope %s: %w", scope, berr)
 		}

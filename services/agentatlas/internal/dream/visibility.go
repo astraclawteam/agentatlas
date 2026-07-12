@@ -12,6 +12,14 @@ type Masker struct {
 	rules []*regexp.Regexp
 }
 
+// MaskedText is an opaque proof that text was sanitized by the exact Masker
+// supplied to a source resolver. Its fields are intentionally unexported so a
+// plugin cannot attach raw model text to a SourceInput.
+type MaskedText struct {
+	text  string
+	owner *Masker
+}
+
 func NewMasker(rules []string) (*Masker, error) {
 	m := &Masker{}
 	for _, r := range rules {
@@ -29,6 +37,21 @@ func (m *Masker) Apply(text string) string {
 		text = re.ReplaceAllString(text, "▇▇")
 	}
 	return text
+}
+
+// Sanitize applies masking exactly once and returns an opaque provenance token.
+// Reapplying broad rules such as `.` or `\S+` would corrupt mask markers, so
+// consumers validate ownership instead of testing regex idempotence.
+func (m *Masker) Sanitize(text string) MaskedText {
+	if m == nil {
+		return MaskedText{}
+	}
+	text = strings.TrimSpace(m.Apply(text))
+	return MaskedText{text: truncateRunes(text, maxResolvedTextRunes), owner: m}
+}
+
+func (m *Masker) resolve(text MaskedText) (string, bool) {
+	return text.text, m != nil && text.owner == m && text.text != "" && text.text == strings.TrimSpace(text.text) && len([]rune(text.text)) <= maxResolvedTextRunes
 }
 
 // RiskExtractor collects risk signals by rule; company-level summaries keep

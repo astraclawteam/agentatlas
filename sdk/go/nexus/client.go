@@ -108,10 +108,11 @@ const (
 )
 
 type OrgScope struct {
-	Kind     OrgScopeKind `json:"kind"`
-	ID       string       `json:"id"`
-	Name     string       `json:"name"`
-	ParentID string       `json:"parent_id,omitempty"`
+	Kind       OrgScopeKind `json:"kind"`
+	ID         string       `json:"id"`
+	Name       string       `json:"name"`
+	ParentKind OrgScopeKind `json:"parent_kind,omitempty"`
+	ParentID   string       `json:"parent_id,omitempty"`
 }
 
 type OrgMember struct {
