@@ -161,6 +161,14 @@ func (h *dreamRunHandler) rerunRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "bounded Idempotency-Key is required")
 		return
 	}
+	audit, err := h.nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, Action: nexus.AuditDreamJobRun, ResourceType: "dream_run", ResourceID: view.RunID, Details: map[string]any{"org_unit_id": view.OrgUnitID, "idempotency_key": key, "phase": "manual_rerun"}})
+	if err != nil || strings.TrimSpace(audit.AuditRefID) == "" {
+		if err == nil {
+			err = fmt.Errorf("AgentNexus returned no durable audit reference")
+		}
+		writeError(w, http.StatusInternalServerError, "audit_failed", err.Error())
+		return
+	}
 	id, err := h.rerun.Rerun(r.Context(), actor.Ticket.EnterpriseID, chi.URLParam(r, "id"), key)
 	if err != nil {
 		writeError(w, http.StatusConflict, "rerun_failed", err.Error())
@@ -313,7 +321,7 @@ func validAnnotation(v string) bool {
 }
 func hasScope(scopes []string, wanted string) bool {
 	for _, s := range scopes {
-		if s == wanted {
+		if s == wanted || s == "admin" {
 			return true
 		}
 	}

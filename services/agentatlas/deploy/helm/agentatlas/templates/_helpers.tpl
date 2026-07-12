@@ -32,6 +32,8 @@
   value: {{ .Values.config.nexusClientId | quote }}
 - name: ATLAS_NEXUS_SERVICE_SECRET_FILE
   value: /var/run/secrets/agentnexus/client-secret
+- name: ATLAS_NEXUS_APPROVAL_FACTS_SECRET_FILE
+  value: /var/run/secrets/agentnexus/approval-facts-secret
 - name: ATLAS_DOCLING_URL
   value: {{ .Values.config.doclingUrl | quote }}
 - name: ATLAS_MINERU_URL
@@ -55,5 +57,8 @@
     items:
       - key: {{ .Values.config.nexusServiceSecretKey | quote }}
         path: client-secret
+        mode: 0400
+      - key: {{ .Values.config.nexusApprovalFactsSecretKey | quote }}
+        path: approval-facts-secret
         mode: 0400
 {{- end -}}

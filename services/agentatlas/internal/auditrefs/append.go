@@ -17,9 +17,18 @@ type Appender struct {
 }
 
 var _ nexus.Client = (*Appender)(nil)
+var _ nexus.ApprovalClient = (*Appender)(nil)
 
 func New(client nexus.Client, metrics *observability.Metrics) *Appender {
 	return &Appender{Client: client, metrics: metrics}
+}
+
+func (a *Appender) ResolveApprovalRoute(ctx context.Context, req nexus.ApprovalResolveRequest) (nexus.ApprovalRoute, error) {
+	client, ok := a.Client.(nexus.ApprovalClient)
+	if !ok {
+		return nexus.ApprovalRoute{}, fmt.Errorf("AgentNexus approval client unavailable")
+	}
+	return client.ResolveApprovalRoute(ctx, req)
 }
 
 func (a *Appender) AppendAuditEvidence(ctx context.Context, req nexus.AppendAuditEvidenceRequest) (nexus.AppendAuditEvidenceResponse, error) {

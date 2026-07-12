@@ -17,6 +17,7 @@ x-atlas-env: &atlas-env
   ATLAS_NEXUS_BASE_URL: ${NEXUS_BASE_URL:-http://host.docker.internal:8100}
   ATLAS_NEXUS_CLIENT_ID: agentatlas
   ATLAS_NEXUS_SERVICE_SECRET_FILE: /run/secrets/agentatlas_agentnexus_service_secret
+  ATLAS_NEXUS_APPROVAL_FACTS_SECRET_FILE: /run/secrets/agentatlas_agentnexus_approval_facts_secret
   ATLAS_DOCLING_URL: http://docling-sidecar:5001
   ATLAS_MINERU_URL: http://mineru-sidecar:8000
   ATLAS_ASR_URL: http://asr-sidecar:5003
@@ -118,6 +119,7 @@ services:
       <<: *atlas-env
     secrets:
       - agentatlas_agentnexus_service_secret
+      - agentatlas_agentnexus_approval_facts_secret
     ports:
       - "8080:8080"
     healthcheck:
@@ -146,6 +148,7 @@ services:
       <<: *atlas-env
     secrets:
       - agentatlas_agentnexus_service_secret
+      - agentatlas_agentnexus_approval_facts_secret
     ports:
       - "8081:8081"
     healthcheck:
@@ -173,6 +176,7 @@ services:
       ATLAS_ORG_SYNC_ENTERPRISES: ${ATLAS_ORG_SYNC_ENTERPRISES:-}
     secrets:
       - agentatlas_agentnexus_service_secret
+      - agentatlas_agentnexus_approval_facts_secret
     ports:
       - "9091:9091" # metrics/liveness listener
     healthcheck:
@@ -273,6 +277,8 @@ services:
 secrets:
   agentatlas_agentnexus_service_secret:
     file: ${ATLAS_NEXUS_SERVICE_SECRET_FILE_SOURCE:?set an absolute host path to the AgentNexus service secret file}
+  agentatlas_agentnexus_approval_facts_secret:
+    file: ${ATLAS_NEXUS_APPROVAL_FACTS_SECRET_FILE_SOURCE:?set an absolute host path to the AgentNexus approval facts secret file}
 
 volumes:
   pgdata:

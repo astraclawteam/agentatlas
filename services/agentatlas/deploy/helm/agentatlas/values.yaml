@@ -36,6 +36,7 @@ config:
   nexusClientId: agentatlas
   nexusServiceSecretName: agentatlas-agentnexus-service
   nexusServiceSecretKey: client-secret
+  nexusApprovalFactsSecretKey: approval-facts-secret
   doclingUrl: http://docling-sidecar:5001
   mineruUrl: http://mineru-sidecar:8000
   asrUrl: http://asr-sidecar:5003

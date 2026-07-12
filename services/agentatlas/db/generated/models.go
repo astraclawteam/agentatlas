@@ -179,13 +179,34 @@ type DreamInput struct {
 }
 
 type DreamPolicy struct {
-	ID           string             `json:"id"`
+	ID              string             `json:"id"`
+	EnterpriseID    string             `json:"enterprise_id"`
+	OrgScope        string             `json:"org_scope"`
+	Status          string             `json:"status"`
+	Draft           []byte             `json:"draft"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	Revision        int32              `json:"revision"`
+	RequesterUserID string             `json:"requester_user_id"`
+	PermissionMode  string             `json:"permission_mode"`
+	RiskLevel       string             `json:"risk_level"`
+	RiskReasons     []byte             `json:"risk_reasons"`
+	ReviewMode      string             `json:"review_mode"`
+	ReviewerUserID  pgtype.Text        `json:"reviewer_user_id"`
+	ReviewOrgPath   []byte             `json:"review_org_path"`
+	ReviewQueue     pgtype.Text        `json:"review_queue"`
+	Decision        string             `json:"decision"`
+	AuditRefID      string             `json:"audit_ref_id"`
+}
+
+type DreamPolicyTransitionAudit struct {
 	EnterpriseID string             `json:"enterprise_id"`
-	OrgScope     string             `json:"org_scope"`
-	Status       string             `json:"status"`
-	Draft        []byte             `json:"draft"`
+	PolicyID     string             `json:"policy_id"`
+	Revision     int32              `json:"revision"`
+	Transition   string             `json:"transition"`
+	AuditRefID   string             `json:"audit_ref_id"`
+	ActorUserID  string             `json:"actor_user_id"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
 type DreamPolicyVersion struct {

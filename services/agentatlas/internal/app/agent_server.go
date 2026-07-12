@@ -32,6 +32,10 @@ type AgentRouterDeps struct {
 	Metrics    *observability.Metrics // optional; enables /metrics + latency histograms
 }
 
+type dreamBackfiller interface {
+	Backfill(context.Context, dream.BackfillRequest) (string, error)
+}
+
 // actorContext carries the verified ticket identity through the request.
 type actorContext struct {
 	TicketID string
@@ -98,6 +102,13 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 		r.Post("/workflows/{id}/runs", wf.startRun)
 		r.Post("/dream-policies", dp.create)
 		r.Get("/dream-policies", dp.list)
+		r.Put("/dream-policies/{id}", dp.update)
+		r.Post("/dream-policies/{id}/check", dp.check)
+		r.Post("/dream-policies/{id}/review", dp.review)
+		r.Post("/dream-policies/{id}/decisions", dp.decide)
+		r.Post("/dream-policies/{id}/publish", dp.publish)
+		r.Post("/dream-policies/{id}/disable", dp.disable)
+		r.Post("/dream-policies/{id}/backfills", dp.backfill)
 		r.Get("/dream/overview", dr.overview)
 		r.Get("/dream/runs", dr.list)
 		r.Get("/dream/runs/{id}", dr.detail)

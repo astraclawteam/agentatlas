@@ -44,9 +44,10 @@ type LLMRouter struct {
 }
 
 type AgentNexus struct {
-	BaseURL    string `yaml:"base_url"`
-	ClientID   string `yaml:"client_id"`
-	SecretFile string `yaml:"secret_file"`
+	BaseURL                 string `yaml:"base_url"`
+	ClientID                string `yaml:"client_id"`
+	SecretFile              string `yaml:"secret_file"`
+	ApprovalFactsSecretFile string `yaml:"approval_facts_secret_file"`
 }
 
 type ParserEndpoint struct {
@@ -140,6 +141,7 @@ func (c *Config) applyEnv() {
 	set(&c.AgentNexus.BaseURL, "ATLAS_NEXUS_BASE_URL")
 	set(&c.AgentNexus.ClientID, "ATLAS_NEXUS_CLIENT_ID")
 	set(&c.AgentNexus.SecretFile, "ATLAS_NEXUS_SERVICE_SECRET_FILE")
+	set(&c.AgentNexus.ApprovalFactsSecretFile, "ATLAS_NEXUS_APPROVAL_FACTS_SECRET_FILE")
 	set(&c.Parsers.GatewayURL, "ATLAS_PARSER_GATEWAY_URL")
 	set(&c.Parsers.Docling.BaseURL, "ATLAS_DOCLING_URL")
 	set(&c.Parsers.MinerU.BaseURL, "ATLAS_MINERU_URL")

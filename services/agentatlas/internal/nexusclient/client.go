@@ -4,6 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -22,13 +27,26 @@ import (
 
 // HTTPClient implements nexus.Client against api/openapi/agentnexus-client.yaml.
 type HTTPClient struct {
-	baseURL         string
-	http            *http.Client
-	serviceClientID string
-	serviceSecret   string
+	baseURL             string
+	http                *http.Client
+	serviceClientID     string
+	serviceSecret       string
+	approvalFactsSecret string
+}
+
+// ConfigureApprovalFactsSecret loads the dedicated HMAC key shared only with
+// the AgentNexus approval verifier. It must not reuse the service credential.
+func (c *HTTPClient) ConfigureApprovalFactsSecret(path string) error {
+	secret, err := loadServiceSecretFile(path)
+	if err != nil {
+		return fmt.Errorf("load AgentNexus approval facts credential: %w", err)
+	}
+	c.approvalFactsSecret = secret
+	return nil
 }
 
 var _ nexus.Client = (*HTTPClient)(nil)
+var _ nexus.ApprovalClient = (*HTTPClient)(nil)
 
 func (c *HTTPClient) String() string {
 	if c == nil {
@@ -161,6 +179,81 @@ func (c *HTTPClient) AppendAuditEvidence(ctx context.Context, req nexus.AppendAu
 	var out nexus.AppendAuditEvidenceResponse
 	err := c.post(ctx, "/v1/audit/evidence", req, &out)
 	return out, err
+}
+
+func (c *HTTPClient) ResolveApprovalRoute(ctx context.Context, input nexus.ApprovalResolveRequest) (nexus.ApprovalRoute, error) {
+	var out nexus.ApprovalRoute
+	if len(input.IdempotencyKey) < 16 || input.TicketID == "" || input.EnterpriseID == "" || input.ActorUserID == "" {
+		return out, fmt.Errorf("nexus approval: incomplete bound request")
+	}
+	attestation, err := approvalFactsAttestation(c.approvalFactsSecret, input)
+	if err != nil {
+		return out, err
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		return out, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/approvals/resolve", bytes.NewReader(body))
+	if err != nil {
+		return out, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Case-Ticket", input.TicketID)
+	req.Header.Set("Idempotency-Key", input.IdempotencyKey)
+	req.Header.Set("X-Approval-Facts-Attestation", attestation)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return out, fmt.Errorf("nexus approval: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return out, fmt.Errorf("nexus approval: status %d: %s", resp.StatusCode, snippet)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return out, fmt.Errorf("nexus approval: decode: %w", err)
+	}
+	if out.AutoPublish {
+		return out, fmt.Errorf("nexus approval violated no-auto-publish contract")
+	}
+	return out, nil
+}
+
+func approvalFactsAttestation(secret string, input nexus.ApprovalResolveRequest) (string, error) {
+	if len(secret) < 32 {
+		return "", fmt.Errorf("nexus approval facts secret unavailable")
+	}
+	keyHash := sha256.Sum256([]byte(input.IdempotencyKey))
+	changed := append([]string{}, input.ChangedFields...)
+	impacted := append([]string{}, input.ImpactedOrgUnitIDs...)
+	sort.Strings(changed)
+	sort.Strings(impacted)
+	payload := struct {
+		EnterpriseID            string    `json:"enterprise_id"`
+		ActorUserID             string    `json:"actor_user_id"`
+		OrgVersion              int64     `json:"org_version"`
+		OrgUnitID               string    `json:"org_unit_id"`
+		ResourceType            string    `json:"resource_type"`
+		ResourceID              string    `json:"resource_id"`
+		Action                  string    `json:"action"`
+		ChangedFields           []string  `json:"changed_fields"`
+		ImpactedOrgUnitIDs      []string  `json:"impacted_org_unit_ids"`
+		ImpactedUserCount       int       `json:"impacted_user_count"`
+		PublishedBehaviorChange bool      `json:"published_behavior_change"`
+		ExternalSideEffect      bool      `json:"external_side_effect"`
+		FactsIssuedAt           time.Time `json:"facts_issued_at"`
+		FactsExpiresAt          time.Time `json:"facts_expires_at"`
+		FactsNonce              string    `json:"facts_nonce"`
+		IdempotencyKeyHash      string    `json:"idempotency_key_hash"`
+	}{input.EnterpriseID, input.ActorUserID, input.OrgVersion, input.OrgUnitID, input.ResourceType, input.ResourceID, input.Action, changed, impacted, input.ImpactedUserCount, input.PublishedBehaviorChange, input.ExternalSideEffect, input.FactsIssuedAt.UTC(), input.FactsExpiresAt.UTC(), input.FactsNonce, hex.EncodeToString(keyHash[:])}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write(raw)
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
 // SubscribeOrgEvents consumes the SSE stream. It returns nil when the server

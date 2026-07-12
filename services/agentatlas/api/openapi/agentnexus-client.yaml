@@ -10,6 +10,18 @@ info:
     AgentNexus contract snapshot. AgentAtlas ships a mock server implementing
     this client contract for local development and integration tests.
 paths:
+  /v1/approvals/resolve:
+    post:
+      operationId: resolveApprovalRoute
+      summary: Resolve and audit the approval route for a governed change.
+      parameters:
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
+        - {name: X-Approval-Facts-Attestation, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/ApprovalResolveRequest'}}}
+      responses:
+        '200': {description: Deterministic confirmation, reviewer, or administrator queue route, content: {application/json: {schema: {$ref: '#/components/schemas/ApprovalRoute'}}}}
   /v1/tickets/verify:
     post:
       operationId: verifyTicket
@@ -145,6 +157,38 @@ components:
       scheme: basic
       description: AgentAtlas service credentials using client_id=agentatlas and its confidential client secret.
   schemas:
+    ApprovalRoute:
+      type: object
+      required: [mode, risk_level, risk_reasons, requester_user_id, org_path, auto_publish]
+      properties:
+        mode: {type: string, enum: [single_confirmation, upward_review, enterprise_knowledge_admin_queue]}
+        risk_level: {type: string, enum: [low, medium, high]}
+        risk_reasons: {type: array, items: {type: string}}
+        requester_user_id: {type: string}
+        reviewer_user_id: {type: string}
+        reviewer_display_name: {type: string}
+        org_path: {type: array, items: {type: string}}
+        queue: {type: string}
+        auto_publish: {type: boolean, enum: [false]}
+    ApprovalResolveRequest:
+      type: object
+      additionalProperties: false
+      required: [org_version, org_unit_id, resource_type, resource_id, action, changed_fields, impacted_org_unit_ids, impacted_user_count, published_behavior_change, external_side_effect, requested_risk, facts_issued_at, facts_expires_at, facts_nonce]
+      properties:
+        org_version: {type: integer, minimum: 1}
+        org_unit_id: {type: string}
+        resource_type: {type: string}
+        resource_id: {type: string}
+        action: {type: string}
+        changed_fields: {type: array, items: {type: string}}
+        impacted_org_unit_ids: {type: array, items: {type: string}}
+        impacted_user_count: {type: integer, minimum: 0}
+        published_behavior_change: {type: boolean}
+        external_side_effect: {type: boolean}
+        requested_risk: {type: string, enum: [low, medium, high]}
+        facts_issued_at: {type: string, format: date-time}
+        facts_expires_at: {type: string, format: date-time}
+        facts_nonce: {type: string, minLength: 16, maxLength: 128}
     AuditEvidenceAction:
       type: string
       enum:

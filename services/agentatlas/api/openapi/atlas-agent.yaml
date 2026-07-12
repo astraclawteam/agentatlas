@@ -156,10 +156,17 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [dream_policy_id, status]
+                required: [dream_policy_id, status, version, revision, requester_user_id, permission_mode, risk_reasons, org_path, policy]
                 properties:
                   dream_policy_id: { type: string }
                   status: { type: string, enum: [draft] }
+                  version: { type: integer, enum: [0] }
+                  revision: { type: integer, minimum: 0 }
+                  requester_user_id: { type: string }
+                  permission_mode: { type: string, enum: [direct_edit, suggestion_only] }
+                  risk_reasons: { type: array, items: { type: string } }
+                  org_path: { type: array, items: { type: string } }
+                  policy: { $ref: '#/components/schemas/DreamPolicyDefinition' }
     get:
       operationId: listDreamPolicies
       summary: List the enterprise's published dream policies (console policy panel)
@@ -182,6 +189,72 @@ paths:
                         org_scope: { type: string }
                         status: { type: string }
                         policy: { $ref: '#/components/schemas/DreamPolicyDefinition' }
+  /v1/dream-policies/{id}:
+    put:
+      operationId: updateDreamPolicyDraft
+      summary: Revision-guarded update of a direct-edit Dream policy draft
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [revision, policy], properties: {revision: {type: integer, minimum: 0}, policy: {$ref: '#/components/schemas/DreamPolicyDefinition'}}}}}}
+      responses: {'200': {description: Updated draft, content: {application/json: {schema: {$ref: '#/components/schemas/DreamPolicyLifecycle'}}}}, '409': {description: Stale revision or immutable suggestion}}
+  /v1/dream-policies/{id}/review:
+    post:
+      operationId: submitDreamPolicyReview
+      summary: Resolve and pin the AgentNexus confirmation or upward-review route
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}, {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/DreamPolicyRevision'}}}}
+      responses: {'200': {description: Review route pinned, content: {application/json: {schema: {$ref: '#/components/schemas/DreamPolicyLifecycle'}}}}}
+  /v1/dream-policies/{id}/check:
+    post:
+      operationId: checkDreamPolicyRisk
+      summary: Deterministically check the current revision without changing state
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/DreamPolicyRevision'}}}}
+      responses:
+        '200':
+          description: Risk and changed fields
+          content: {application/json: {schema: {type: object, required: [revision, risk_level, risk_reasons, changed_fields], properties: {revision: {type: integer}, risk_level: {type: string, enum: [low, high]}, risk_reasons: {type: array, items: {type: string}}, changed_fields: {type: array, items: {type: string}}}}}}
+  /v1/dream-policies/{id}/decisions:
+    post:
+      operationId: decideDreamPolicy
+      summary: Approve or reject the current reviewed revision
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, required: [revision, decision], properties: {revision: {type: integer, minimum: 0}, decision: {type: string, enum: [approve, reject]}, comment: {type: string, maxLength: 4000}}}}}}
+      responses: {'200': {description: Decision recorded, content: {application/json: {schema: {$ref: '#/components/schemas/DreamPolicyLifecycle'}}}}}
+  /v1/dream-policies/{id}/publish:
+    post:
+      operationId: publishDreamPolicy
+      summary: Atomically publish one approved revision as an immutable version
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/DreamPolicyRevision'}}}}
+      responses: {'200': {description: Published, content: {application/json: {schema: {$ref: '#/components/schemas/DreamPolicyLifecycle'}}}}}
+  /v1/dream-policies/{id}/disable:
+    post:
+      operationId: disableDreamPolicy
+      summary: Revision-guarded disable of a published Dream policy
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/DreamPolicyRevision'}}}}
+      responses: {'200': {description: Disabled, content: {application/json: {schema: {$ref: '#/components/schemas/DreamPolicyLifecycle'}}}}}
+  /v1/dream-policies/{id}/backfills:
+    post:
+      operationId: backfillDreamPolicy
+      summary: Create one audited, idempotent historical Dream window
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}, {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 256}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [window_start, window_end]
+              properties:
+                window_start: {type: string, format: date-time}
+                window_end: {type: string, format: date-time}
+                rerun_of_run_id: {type: string}
+      responses:
+        '202':
+          description: Immutable backfill run accepted
+          content: {application/json: {schema: {type: object, required: [run_id], properties: {run_id: {type: string}}}}}
   /v1/dream/overview:
     get:
       operationId: getDreamOverview
@@ -479,6 +552,29 @@ components:
           uniqueItems: true
           items: { type: string, minLength: 1, maxLength: 128 }
         masked_field_count: { type: integer, minimum: 0 }
+    DreamPolicyRevision:
+      type: object
+      additionalProperties: false
+      required: [revision]
+      properties:
+        revision: {type: integer, minimum: 0}
+    DreamPolicyLifecycle:
+      type: object
+      required: [dream_policy_id, status, revision, version, requester_user_id, permission_mode, risk_reasons, org_path, policy]
+      properties:
+        dream_policy_id: {type: string}
+        status: {type: string, enum: [draft, review_pending, approved, rejected, published, disabled]}
+        revision: {type: integer, minimum: 0}
+        version: {type: integer, minimum: 0}
+        requester_user_id: {type: string}
+        permission_mode: {type: string, enum: [direct_edit, suggestion_only]}
+        risk_level: {type: string, enum: [low, high]}
+        risk_reasons: {type: array, items: {type: string}}
+        review_mode: {type: string, enum: [single_confirmation, upward_review, enterprise_knowledge_admin_queue]}
+        reviewer_user_id: {type: string}
+        org_path: {type: array, items: {type: string}}
+        queue: {type: string}
+        policy: {$ref: '#/components/schemas/DreamPolicyDefinition'}
     DreamPolicyDefinition:
       type: object
       additionalProperties: false

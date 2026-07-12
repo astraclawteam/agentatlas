@@ -50,6 +50,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if cfg.AgentNexus.ApprovalFactsSecretFile != "" {
+		if err := rawNexusClient.ConfigureApprovalFactsSecret(cfg.AgentNexus.ApprovalFactsSecretFile); err != nil {
+			return err
+		}
+	}
 	logger, err := observability.NewLogger("atlas-agent")
 	if err != nil {
 		return err

@@ -101,7 +101,7 @@ func TestDreamPolicyRouteConsumesCanonicalDefinition(t *testing.T) {
 		t.Fatalf("create request ref = %v", got)
 	}
 	response := nestedMap(t, post, "responses", "201", "content", "application/json", "schema")
-	assertObjectProperties(t, response, []string{"dream_policy_id", "status"}, nil)
+	assertObjectProperties(t, response, []string{"dream_policy_id", "org_path", "permission_mode", "policy", "requester_user_id", "revision", "risk_reasons", "status", "version"}, nil)
 	assertEnum(t, property(t, response, "status"), []any{"draft"})
 }
 

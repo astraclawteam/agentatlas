@@ -179,7 +179,7 @@ func (q *Queries) CreateDreamAnnotation(ctx context.Context, arg CreateDreamAnno
 const createDreamPolicy = `-- name: CreateDreamPolicy :one
 INSERT INTO dream_policies (id, enterprise_id, org_scope, status, draft)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at
+RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
 `
 
 type CreateDreamPolicyParams struct {
@@ -207,6 +207,68 @@ func (q *Queries) CreateDreamPolicy(ctx context.Context, arg CreateDreamPolicyPa
 		&i.Draft,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Revision,
+		&i.RequesterUserID,
+		&i.PermissionMode,
+		&i.RiskLevel,
+		&i.RiskReasons,
+		&i.ReviewMode,
+		&i.ReviewerUserID,
+		&i.ReviewOrgPath,
+		&i.ReviewQueue,
+		&i.Decision,
+		&i.AuditRefID,
+	)
+	return i, err
+}
+
+const createDreamPolicyLifecycle = `-- name: CreateDreamPolicyLifecycle :one
+INSERT INTO dream_policies (id, enterprise_id, org_scope, status, draft, requester_user_id, permission_mode, audit_ref_id)
+VALUES ($1, $2, $3, 'draft', $4,
+        $5, $6, $7)
+RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
+`
+
+type CreateDreamPolicyLifecycleParams struct {
+	ID              string `json:"id"`
+	EnterpriseID    string `json:"enterprise_id"`
+	OrgScope        string `json:"org_scope"`
+	Draft           []byte `json:"draft"`
+	RequesterUserID string `json:"requester_user_id"`
+	PermissionMode  string `json:"permission_mode"`
+	AuditRefID      string `json:"audit_ref_id"`
+}
+
+func (q *Queries) CreateDreamPolicyLifecycle(ctx context.Context, arg CreateDreamPolicyLifecycleParams) (DreamPolicy, error) {
+	row := q.db.QueryRow(ctx, createDreamPolicyLifecycle,
+		arg.ID,
+		arg.EnterpriseID,
+		arg.OrgScope,
+		arg.Draft,
+		arg.RequesterUserID,
+		arg.PermissionMode,
+		arg.AuditRefID,
+	)
+	var i DreamPolicy
+	err := row.Scan(
+		&i.ID,
+		&i.EnterpriseID,
+		&i.OrgScope,
+		&i.Status,
+		&i.Draft,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Revision,
+		&i.RequesterUserID,
+		&i.PermissionMode,
+		&i.RiskLevel,
+		&i.RiskReasons,
+		&i.ReviewMode,
+		&i.ReviewerUserID,
+		&i.ReviewOrgPath,
+		&i.ReviewQueue,
+		&i.Decision,
+		&i.AuditRefID,
 	)
 	return i, err
 }
@@ -406,6 +468,161 @@ func (q *Queries) CreateDreamSummary(ctx context.Context, arg CreateDreamSummary
 	return i, err
 }
 
+const decideDreamPolicyIfRevision = `-- name: DecideDreamPolicyIfRevision :one
+WITH changed AS (
+  UPDATE dream_policies SET status=CASE WHEN $1::text='approve' THEN 'approved' ELSE 'rejected' END,
+      decision=$1, audit_ref_id=$2, updated_at=now()
+  WHERE dream_policies.enterprise_id=$3 AND dream_policies.id=$4
+    AND dream_policies.revision=$5 AND dream_policies.status='review_pending'
+    AND ((dream_policies.risk_level='high' AND dream_policies.reviewer_user_id=$6 AND dream_policies.requester_user_id<>$6)
+      OR (dream_policies.risk_level='low' AND dream_policies.requester_user_id=$6 AND dream_policies.review_mode='single_confirmation'))
+  RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
+), audit AS (
+  INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,audit_ref_id,actor_user_id)
+  SELECT enterprise_id,id,revision,'decision:'||$1,$2,$6 FROM changed
+  RETURNING policy_id
+)
+SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id
+`
+
+type DecideDreamPolicyIfRevisionParams struct {
+	Decision           string      `json:"decision"`
+	AuditRefID         string      `json:"audit_ref_id"`
+	TargetEnterpriseID string      `json:"target_enterprise_id"`
+	TargetID           string      `json:"target_id"`
+	ExpectedRevision   int32       `json:"expected_revision"`
+	ActorUserID        pgtype.Text `json:"actor_user_id"`
+}
+
+type DecideDreamPolicyIfRevisionRow struct {
+	ID              string             `json:"id"`
+	EnterpriseID    string             `json:"enterprise_id"`
+	OrgScope        string             `json:"org_scope"`
+	Status          string             `json:"status"`
+	Draft           []byte             `json:"draft"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	Revision        int32              `json:"revision"`
+	RequesterUserID string             `json:"requester_user_id"`
+	PermissionMode  string             `json:"permission_mode"`
+	RiskLevel       string             `json:"risk_level"`
+	RiskReasons     []byte             `json:"risk_reasons"`
+	ReviewMode      string             `json:"review_mode"`
+	ReviewerUserID  pgtype.Text        `json:"reviewer_user_id"`
+	ReviewOrgPath   []byte             `json:"review_org_path"`
+	ReviewQueue     pgtype.Text        `json:"review_queue"`
+	Decision        string             `json:"decision"`
+	AuditRefID      string             `json:"audit_ref_id"`
+}
+
+func (q *Queries) DecideDreamPolicyIfRevision(ctx context.Context, arg DecideDreamPolicyIfRevisionParams) (DecideDreamPolicyIfRevisionRow, error) {
+	row := q.db.QueryRow(ctx, decideDreamPolicyIfRevision,
+		arg.Decision,
+		arg.AuditRefID,
+		arg.TargetEnterpriseID,
+		arg.TargetID,
+		arg.ExpectedRevision,
+		arg.ActorUserID,
+	)
+	var i DecideDreamPolicyIfRevisionRow
+	err := row.Scan(
+		&i.ID,
+		&i.EnterpriseID,
+		&i.OrgScope,
+		&i.Status,
+		&i.Draft,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Revision,
+		&i.RequesterUserID,
+		&i.PermissionMode,
+		&i.RiskLevel,
+		&i.RiskReasons,
+		&i.ReviewMode,
+		&i.ReviewerUserID,
+		&i.ReviewOrgPath,
+		&i.ReviewQueue,
+		&i.Decision,
+		&i.AuditRefID,
+	)
+	return i, err
+}
+
+const disableDreamPolicyIfRevision = `-- name: DisableDreamPolicyIfRevision :one
+WITH changed AS (
+  UPDATE dream_policies SET status='disabled', revision=revision+1, audit_ref_id=$1, updated_at=now()
+  WHERE dream_policies.enterprise_id=$2 AND dream_policies.id=$3
+    AND dream_policies.revision=$4 AND dream_policies.status='published' AND dream_policies.permission_mode='direct_edit'
+  RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
+), audit AS (
+  INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,audit_ref_id,actor_user_id)
+  SELECT enterprise_id,id,revision,'disable',$1,$5 FROM changed
+  RETURNING policy_id
+)
+SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id
+`
+
+type DisableDreamPolicyIfRevisionParams struct {
+	AuditRefID         string `json:"audit_ref_id"`
+	TargetEnterpriseID string `json:"target_enterprise_id"`
+	TargetID           string `json:"target_id"`
+	ExpectedRevision   int32  `json:"expected_revision"`
+	ActorUserID        string `json:"actor_user_id"`
+}
+
+type DisableDreamPolicyIfRevisionRow struct {
+	ID              string             `json:"id"`
+	EnterpriseID    string             `json:"enterprise_id"`
+	OrgScope        string             `json:"org_scope"`
+	Status          string             `json:"status"`
+	Draft           []byte             `json:"draft"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	Revision        int32              `json:"revision"`
+	RequesterUserID string             `json:"requester_user_id"`
+	PermissionMode  string             `json:"permission_mode"`
+	RiskLevel       string             `json:"risk_level"`
+	RiskReasons     []byte             `json:"risk_reasons"`
+	ReviewMode      string             `json:"review_mode"`
+	ReviewerUserID  pgtype.Text        `json:"reviewer_user_id"`
+	ReviewOrgPath   []byte             `json:"review_org_path"`
+	ReviewQueue     pgtype.Text        `json:"review_queue"`
+	Decision        string             `json:"decision"`
+	AuditRefID      string             `json:"audit_ref_id"`
+}
+
+func (q *Queries) DisableDreamPolicyIfRevision(ctx context.Context, arg DisableDreamPolicyIfRevisionParams) (DisableDreamPolicyIfRevisionRow, error) {
+	row := q.db.QueryRow(ctx, disableDreamPolicyIfRevision,
+		arg.AuditRefID,
+		arg.TargetEnterpriseID,
+		arg.TargetID,
+		arg.ExpectedRevision,
+		arg.ActorUserID,
+	)
+	var i DisableDreamPolicyIfRevisionRow
+	err := row.Scan(
+		&i.ID,
+		&i.EnterpriseID,
+		&i.OrgScope,
+		&i.Status,
+		&i.Draft,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Revision,
+		&i.RequesterUserID,
+		&i.PermissionMode,
+		&i.RiskLevel,
+		&i.RiskReasons,
+		&i.ReviewMode,
+		&i.ReviewerUserID,
+		&i.ReviewOrgPath,
+		&i.ReviewQueue,
+		&i.Decision,
+		&i.AuditRefID,
+	)
+	return i, err
+}
+
 const failDreamRunAfterWorkflow = `-- name: FailDreamRunAfterWorkflow :one
 UPDATE dream_runs SET status='failed', error=$1, finished_at=COALESCE(finished_at, now()),
     execution_owner=NULL, execution_lease_expires_at=NULL
@@ -491,7 +708,7 @@ func (q *Queries) GetDreamOrgTreeVersion(ctx context.Context, enterpriseID strin
 }
 
 const getDreamPolicy = `-- name: GetDreamPolicy :one
-SELECT id, enterprise_id, org_scope, status, draft, created_at, updated_at FROM dream_policies WHERE id = $1
+SELECT id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id FROM dream_policies WHERE id = $1
 `
 
 func (q *Queries) GetDreamPolicy(ctx context.Context, id string) (DreamPolicy, error) {
@@ -505,6 +722,17 @@ func (q *Queries) GetDreamPolicy(ctx context.Context, id string) (DreamPolicy, e
 		&i.Draft,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Revision,
+		&i.RequesterUserID,
+		&i.PermissionMode,
+		&i.RiskLevel,
+		&i.RiskReasons,
+		&i.ReviewMode,
+		&i.ReviewerUserID,
+		&i.ReviewOrgPath,
+		&i.ReviewQueue,
+		&i.Decision,
+		&i.AuditRefID,
 	)
 	return i, err
 }
@@ -869,6 +1097,41 @@ func (q *Queries) GetDreamSummaryForRunLayer(ctx context.Context, arg GetDreamSu
 		&i.Themes,
 		&i.Trends,
 		&i.Todos,
+	)
+	return i, err
+}
+
+const getEnterpriseDreamPolicy = `-- name: GetEnterpriseDreamPolicy :one
+SELECT id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id FROM dream_policies WHERE enterprise_id = $1 AND id = $2
+`
+
+type GetEnterpriseDreamPolicyParams struct {
+	EnterpriseID string `json:"enterprise_id"`
+	ID           string `json:"id"`
+}
+
+func (q *Queries) GetEnterpriseDreamPolicy(ctx context.Context, arg GetEnterpriseDreamPolicyParams) (DreamPolicy, error) {
+	row := q.db.QueryRow(ctx, getEnterpriseDreamPolicy, arg.EnterpriseID, arg.ID)
+	var i DreamPolicy
+	err := row.Scan(
+		&i.ID,
+		&i.EnterpriseID,
+		&i.OrgScope,
+		&i.Status,
+		&i.Draft,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Revision,
+		&i.RequesterUserID,
+		&i.PermissionMode,
+		&i.RiskLevel,
+		&i.RiskReasons,
+		&i.ReviewMode,
+		&i.ReviewerUserID,
+		&i.ReviewOrgPath,
+		&i.ReviewQueue,
+		&i.Decision,
+		&i.AuditRefID,
 	)
 	return i, err
 }
@@ -1602,7 +1865,7 @@ func (q *Queries) ListPendingDreamWorkflowLifecycle(ctx context.Context, resultL
 }
 
 const listPublishedDreamPolicies = `-- name: ListPublishedDreamPolicies :many
-SELECT id, enterprise_id, org_scope, status, draft, created_at, updated_at FROM dream_policies WHERE enterprise_id = $1 AND status = 'published' ORDER BY id
+SELECT id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id FROM dream_policies WHERE enterprise_id = $1 AND status = 'published' ORDER BY id
 `
 
 func (q *Queries) ListPublishedDreamPolicies(ctx context.Context, enterpriseID string) ([]DreamPolicy, error) {
@@ -1622,6 +1885,17 @@ func (q *Queries) ListPublishedDreamPolicies(ctx context.Context, enterpriseID s
 			&i.Draft,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Revision,
+			&i.RequesterUserID,
+			&i.PermissionMode,
+			&i.RiskLevel,
+			&i.RiskReasons,
+			&i.ReviewMode,
+			&i.ReviewerUserID,
+			&i.ReviewOrgPath,
+			&i.ReviewQueue,
+			&i.Decision,
+			&i.AuditRefID,
 		); err != nil {
 			return nil, err
 		}
@@ -1631,6 +1905,57 @@ func (q *Queries) ListPublishedDreamPolicies(ctx context.Context, enterpriseID s
 		return nil, err
 	}
 	return items, nil
+}
+
+const publishDreamPolicyGoverned = `-- name: PublishDreamPolicyGoverned :one
+WITH changed AS (
+  UPDATE dream_policies SET status='published', revision=revision+1, audit_ref_id=$1, updated_at=now()
+  WHERE dream_policies.enterprise_id=$2 AND dream_policies.id=$3
+    AND dream_policies.revision=$4 AND dream_policies.status='approved' AND dream_policies.permission_mode='direct_edit'
+  RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
+), inserted AS (
+  INSERT INTO dream_policy_versions(policy_id,version,definition)
+  SELECT id, COALESCE((SELECT max(version)+1 FROM dream_policy_versions WHERE policy_id=id),1), draft FROM changed
+  RETURNING policy_id, version, definition, published_at
+), audit AS (
+  INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,audit_ref_id,actor_user_id)
+  SELECT enterprise_id,id,revision,'publish',$1,$5 FROM changed
+  RETURNING policy_id
+)
+SELECT inserted.policy_id, inserted.version, inserted.definition, inserted.published_at FROM inserted JOIN audit ON audit.policy_id=inserted.policy_id
+`
+
+type PublishDreamPolicyGovernedParams struct {
+	AuditRefID         string `json:"audit_ref_id"`
+	TargetEnterpriseID string `json:"target_enterprise_id"`
+	TargetID           string `json:"target_id"`
+	ExpectedRevision   int32  `json:"expected_revision"`
+	ActorUserID        string `json:"actor_user_id"`
+}
+
+type PublishDreamPolicyGovernedRow struct {
+	PolicyID    string             `json:"policy_id"`
+	Version     int32              `json:"version"`
+	Definition  []byte             `json:"definition"`
+	PublishedAt pgtype.Timestamptz `json:"published_at"`
+}
+
+func (q *Queries) PublishDreamPolicyGoverned(ctx context.Context, arg PublishDreamPolicyGovernedParams) (PublishDreamPolicyGovernedRow, error) {
+	row := q.db.QueryRow(ctx, publishDreamPolicyGoverned,
+		arg.AuditRefID,
+		arg.TargetEnterpriseID,
+		arg.TargetID,
+		arg.ExpectedRevision,
+		arg.ActorUserID,
+	)
+	var i PublishDreamPolicyGovernedRow
+	err := row.Scan(
+		&i.PolicyID,
+		&i.Version,
+		&i.Definition,
+		&i.PublishedAt,
+	)
+	return i, err
 }
 
 const publishDreamPolicyVersion = `-- name: PublishDreamPolicyVersion :one
@@ -1984,6 +2309,178 @@ func (q *Queries) ReserveDreamOutputHashOwned(ctx context.Context, arg ReserveDr
 		&i.ExecutionLeaseExpiresAt,
 		&i.OrgVersion,
 		&i.OperationKind,
+	)
+	return i, err
+}
+
+const submitDreamPolicyReviewIfRevision = `-- name: SubmitDreamPolicyReviewIfRevision :one
+WITH changed AS (
+  UPDATE dream_policies SET status='review_pending', risk_level=$1,
+      risk_reasons=$2, review_mode=$3,
+      reviewer_user_id=$4, review_org_path=$5,
+      review_queue=$6, decision='', audit_ref_id=$7, updated_at=now()
+  WHERE dream_policies.enterprise_id=$8 AND dream_policies.id=$9
+    AND dream_policies.revision=$10 AND dream_policies.status='draft' AND dream_policies.permission_mode='direct_edit'
+  RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
+), audit AS (
+  INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,audit_ref_id,actor_user_id)
+  SELECT enterprise_id,id,revision,'review',$7,$11 FROM changed
+  RETURNING policy_id
+)
+SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id
+`
+
+type SubmitDreamPolicyReviewIfRevisionParams struct {
+	RiskLevel          string      `json:"risk_level"`
+	RiskReasons        []byte      `json:"risk_reasons"`
+	ReviewMode         string      `json:"review_mode"`
+	ReviewerUserID     pgtype.Text `json:"reviewer_user_id"`
+	ReviewOrgPath      []byte      `json:"review_org_path"`
+	ReviewQueue        pgtype.Text `json:"review_queue"`
+	AuditRefID         string      `json:"audit_ref_id"`
+	TargetEnterpriseID string      `json:"target_enterprise_id"`
+	TargetID           string      `json:"target_id"`
+	ExpectedRevision   int32       `json:"expected_revision"`
+	ActorUserID        string      `json:"actor_user_id"`
+}
+
+type SubmitDreamPolicyReviewIfRevisionRow struct {
+	ID              string             `json:"id"`
+	EnterpriseID    string             `json:"enterprise_id"`
+	OrgScope        string             `json:"org_scope"`
+	Status          string             `json:"status"`
+	Draft           []byte             `json:"draft"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	Revision        int32              `json:"revision"`
+	RequesterUserID string             `json:"requester_user_id"`
+	PermissionMode  string             `json:"permission_mode"`
+	RiskLevel       string             `json:"risk_level"`
+	RiskReasons     []byte             `json:"risk_reasons"`
+	ReviewMode      string             `json:"review_mode"`
+	ReviewerUserID  pgtype.Text        `json:"reviewer_user_id"`
+	ReviewOrgPath   []byte             `json:"review_org_path"`
+	ReviewQueue     pgtype.Text        `json:"review_queue"`
+	Decision        string             `json:"decision"`
+	AuditRefID      string             `json:"audit_ref_id"`
+}
+
+func (q *Queries) SubmitDreamPolicyReviewIfRevision(ctx context.Context, arg SubmitDreamPolicyReviewIfRevisionParams) (SubmitDreamPolicyReviewIfRevisionRow, error) {
+	row := q.db.QueryRow(ctx, submitDreamPolicyReviewIfRevision,
+		arg.RiskLevel,
+		arg.RiskReasons,
+		arg.ReviewMode,
+		arg.ReviewerUserID,
+		arg.ReviewOrgPath,
+		arg.ReviewQueue,
+		arg.AuditRefID,
+		arg.TargetEnterpriseID,
+		arg.TargetID,
+		arg.ExpectedRevision,
+		arg.ActorUserID,
+	)
+	var i SubmitDreamPolicyReviewIfRevisionRow
+	err := row.Scan(
+		&i.ID,
+		&i.EnterpriseID,
+		&i.OrgScope,
+		&i.Status,
+		&i.Draft,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Revision,
+		&i.RequesterUserID,
+		&i.PermissionMode,
+		&i.RiskLevel,
+		&i.RiskReasons,
+		&i.ReviewMode,
+		&i.ReviewerUserID,
+		&i.ReviewOrgPath,
+		&i.ReviewQueue,
+		&i.Decision,
+		&i.AuditRefID,
+	)
+	return i, err
+}
+
+const updateDreamPolicyDraftIfRevision = `-- name: UpdateDreamPolicyDraftIfRevision :one
+WITH changed AS (
+  UPDATE dream_policies SET org_scope=$1, draft=$2, revision=revision+1,
+      status='draft', risk_level='', risk_reasons='[]', review_mode='', reviewer_user_id=NULL,
+      review_org_path='[]', review_queue=NULL, decision='', audit_ref_id=$3, updated_at=now()
+  WHERE dream_policies.enterprise_id=$4 AND dream_policies.id=$5
+    AND dream_policies.revision=$6 AND dream_policies.status IN ('draft','rejected','published','disabled')
+    AND dream_policies.permission_mode='direct_edit'
+  RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
+), audit AS (
+  INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,audit_ref_id,actor_user_id)
+  SELECT enterprise_id,id,revision,'update',$3,$7 FROM changed
+  RETURNING policy_id
+)
+SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id
+`
+
+type UpdateDreamPolicyDraftIfRevisionParams struct {
+	OrgScope           string `json:"org_scope"`
+	Draft              []byte `json:"draft"`
+	AuditRefID         string `json:"audit_ref_id"`
+	TargetEnterpriseID string `json:"target_enterprise_id"`
+	TargetID           string `json:"target_id"`
+	ExpectedRevision   int32  `json:"expected_revision"`
+	ActorUserID        string `json:"actor_user_id"`
+}
+
+type UpdateDreamPolicyDraftIfRevisionRow struct {
+	ID              string             `json:"id"`
+	EnterpriseID    string             `json:"enterprise_id"`
+	OrgScope        string             `json:"org_scope"`
+	Status          string             `json:"status"`
+	Draft           []byte             `json:"draft"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	Revision        int32              `json:"revision"`
+	RequesterUserID string             `json:"requester_user_id"`
+	PermissionMode  string             `json:"permission_mode"`
+	RiskLevel       string             `json:"risk_level"`
+	RiskReasons     []byte             `json:"risk_reasons"`
+	ReviewMode      string             `json:"review_mode"`
+	ReviewerUserID  pgtype.Text        `json:"reviewer_user_id"`
+	ReviewOrgPath   []byte             `json:"review_org_path"`
+	ReviewQueue     pgtype.Text        `json:"review_queue"`
+	Decision        string             `json:"decision"`
+	AuditRefID      string             `json:"audit_ref_id"`
+}
+
+func (q *Queries) UpdateDreamPolicyDraftIfRevision(ctx context.Context, arg UpdateDreamPolicyDraftIfRevisionParams) (UpdateDreamPolicyDraftIfRevisionRow, error) {
+	row := q.db.QueryRow(ctx, updateDreamPolicyDraftIfRevision,
+		arg.OrgScope,
+		arg.Draft,
+		arg.AuditRefID,
+		arg.TargetEnterpriseID,
+		arg.TargetID,
+		arg.ExpectedRevision,
+		arg.ActorUserID,
+	)
+	var i UpdateDreamPolicyDraftIfRevisionRow
+	err := row.Scan(
+		&i.ID,
+		&i.EnterpriseID,
+		&i.OrgScope,
+		&i.Status,
+		&i.Draft,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Revision,
+		&i.RequesterUserID,
+		&i.PermissionMode,
+		&i.RiskLevel,
+		&i.RiskReasons,
+		&i.ReviewMode,
+		&i.ReviewerUserID,
+		&i.ReviewOrgPath,
+		&i.ReviewQueue,
+		&i.Decision,
+		&i.AuditRefID,
 	)
 	return i, err
 }

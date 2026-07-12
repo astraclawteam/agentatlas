@@ -3,6 +3,7 @@ package nexusclient
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
@@ -13,13 +14,26 @@ import (
 type Mock struct {
 	mu sync.Mutex
 
-	Tickets   map[string]nexus.VerifyTicketResponse  // ticket_id -> response
-	Locations map[string]nexus.LocateEvidenceResponse // pointer id or uri -> location
-	Reads     map[string]nexus.ReadEvidenceResponse   // resource_uri -> excerpt
-	DenyReads bool
-	OrgEvents []nexus.OrgEvent
+	Tickets          map[string]nexus.VerifyTicketResponse   // ticket_id -> response
+	Locations        map[string]nexus.LocateEvidenceResponse // pointer id or uri -> location
+	Reads            map[string]nexus.ReadEvidenceResponse   // resource_uri -> excerpt
+	DenyReads        bool
+	OrgEvents        []nexus.OrgEvent
+	ApprovalRoute    nexus.ApprovalRoute
+	ApprovalErr      error
+	ApprovalRequests []nexus.ApprovalResolveRequest
 
 	AuditLog []nexus.AppendAuditEvidenceRequest
+}
+
+func (m *Mock) ResolveApprovalRoute(_ context.Context, req nexus.ApprovalResolveRequest) (nexus.ApprovalRoute, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ApprovalRequests = append(m.ApprovalRequests, req)
+	if m.ApprovalErr != nil {
+		return nexus.ApprovalRoute{}, m.ApprovalErr
+	}
+	return m.ApprovalRoute, nil
 }
 
 var _ nexus.Client = (*Mock)(nil)
@@ -49,6 +63,15 @@ func (m *Mock) LocateEvidence(_ context.Context, req nexus.LocateEvidenceRequest
 	}
 	if loc, ok := m.Locations[req.ResourceURI]; ok {
 		return loc, nil
+	}
+	if strings.HasPrefix(req.ResourceURI, "agentatlas://dream/") {
+		if ticket, ok := m.Tickets[req.TicketID]; ok && ticket.Valid {
+			for _, scope := range ticket.Scopes {
+				if scope == "admin" || scope == req.QueryIntent {
+					return nexus.LocateEvidenceResponse{ResourceURI: req.ResourceURI}, nil
+				}
+			}
+		}
 	}
 	return nexus.LocateEvidenceResponse{}, fmt.Errorf("locate %q: %w", req.EvidencePointerID, ErrDenied)
 }

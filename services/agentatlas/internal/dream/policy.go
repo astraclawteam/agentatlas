@@ -11,10 +11,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/robfig/cron/v3"
 
 	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
+	"github.com/astraclawteam/agentatlas/sdk/go/governance"
 	sdkworkflow "github.com/astraclawteam/agentatlas/sdk/go/workflow"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	publicschemas "github.com/astraclawteam/agentatlas/services/agentatlas/schemas"
@@ -122,6 +125,60 @@ type PolicyStore interface {
 	ListPublishedDreamPolicies(ctx context.Context, enterpriseID string) ([]db.DreamPolicy, error)
 }
 
+type policyLifecycleStore interface {
+	CreateDreamPolicyLifecycle(context.Context, db.CreateDreamPolicyLifecycleParams) (db.DreamPolicy, error)
+	GetEnterpriseDreamPolicy(context.Context, db.GetEnterpriseDreamPolicyParams) (db.DreamPolicy, error)
+	UpdateDreamPolicyDraftIfRevision(context.Context, db.UpdateDreamPolicyDraftIfRevisionParams) (db.UpdateDreamPolicyDraftIfRevisionRow, error)
+	SubmitDreamPolicyReviewIfRevision(context.Context, db.SubmitDreamPolicyReviewIfRevisionParams) (db.SubmitDreamPolicyReviewIfRevisionRow, error)
+	DecideDreamPolicyIfRevision(context.Context, db.DecideDreamPolicyIfRevisionParams) (db.DecideDreamPolicyIfRevisionRow, error)
+	PublishDreamPolicyGoverned(context.Context, db.PublishDreamPolicyGovernedParams) (db.PublishDreamPolicyGovernedRow, error)
+	DisableDreamPolicyIfRevision(context.Context, db.DisableDreamPolicyIfRevisionParams) (db.DisableDreamPolicyIfRevisionRow, error)
+}
+
+type LifecycleView struct {
+	ID              string                    `json:"dream_policy_id"`
+	Status          string                    `json:"status"`
+	Revision        int32                     `json:"revision"`
+	Version         int32                     `json:"version"`
+	RequesterUserID string                    `json:"requester_user_id"`
+	PermissionMode  governance.PermissionMode `json:"permission_mode"`
+	RiskLevel       governance.RiskLevel      `json:"risk_level,omitempty"`
+	RiskReasons     []string                  `json:"risk_reasons"`
+	ReviewMode      governance.ReviewMode     `json:"review_mode,omitempty"`
+	ReviewerUserID  string                    `json:"reviewer_user_id,omitempty"`
+	OrgPath         []string                  `json:"org_path"`
+	Queue           string                    `json:"queue,omitempty"`
+	Policy          Policy                    `json:"policy"`
+}
+
+func lifecycleView(row db.DreamPolicy, version int32) (LifecycleView, error) {
+	p, err := decodePolicy(row.Draft)
+	if err != nil {
+		return LifecycleView{}, err
+	}
+	var reasons, path []string
+	if len(row.RiskReasons) > 0 {
+		if err := json.Unmarshal(row.RiskReasons, &reasons); err != nil {
+			return LifecycleView{}, err
+		}
+	}
+	if len(row.ReviewOrgPath) > 0 {
+		if err := json.Unmarshal(row.ReviewOrgPath, &path); err != nil {
+			return LifecycleView{}, err
+		}
+	}
+	if reasons == nil {
+		reasons = []string{}
+	}
+	if path == nil {
+		path = []string{}
+	}
+	return LifecycleView{ID: row.ID, Status: row.Status, Revision: row.Revision, Version: version,
+		RequesterUserID: row.RequesterUserID, PermissionMode: governance.PermissionMode(row.PermissionMode),
+		RiskLevel: governance.RiskLevel(row.RiskLevel), RiskReasons: reasons, ReviewMode: governance.ReviewMode(row.ReviewMode),
+		ReviewerUserID: row.ReviewerUserID.String, OrgPath: path, Queue: row.ReviewQueue.String, Policy: p}, nil
+}
+
 // LoadVersion returns exactly one immutable published policy version.
 func (s *PolicyService) LoadVersion(ctx context.Context, policyID string, version int32) (Policy, error) {
 	store, ok := s.store.(interface {
@@ -178,6 +235,240 @@ func (s *PolicyService) CreateDraftWithID(ctx context.Context, enterpriseID, pol
 	}
 	return row.ID, nil
 }
+
+// CreateGovernedDraft stores the requester and permission mode alongside the
+// version-zero draft. The audit reference must already have been durably
+// appended by AgentNexus.
+func (s *PolicyService) CreateGovernedDraft(ctx context.Context, enterpriseID, policyID, requester string, mode governance.PermissionMode, auditRef string, p Policy) (LifecycleView, error) {
+	p = withPolicyDefaults(p)
+	if err := p.Validate(); err != nil {
+		return LifecycleView{}, err
+	}
+	if requester == "" || auditRef == "" || (mode != governance.PermissionDirectEdit && mode != governance.PermissionSuggestionOnly) {
+		return LifecycleView{}, fmt.Errorf("governed Dream draft requires requester, permission mode, and audit reference")
+	}
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return LifecycleView{}, err
+	}
+	ls, ok := s.store.(policyLifecycleStore)
+	if !ok {
+		return LifecycleView{}, fmt.Errorf("policy store does not support governed lifecycle")
+	}
+	row, err := ls.CreateDreamPolicyLifecycle(ctx, db.CreateDreamPolicyLifecycleParams{ID: policyID, EnterpriseID: enterpriseID, OrgScope: p.OrgUnitID, Draft: raw, RequesterUserID: requester, PermissionMode: string(mode), AuditRefID: auditRef})
+	if err != nil {
+		return LifecycleView{}, fmt.Errorf("store governed policy draft: %w", err)
+	}
+	return lifecycleView(row, 0)
+}
+
+func (s *PolicyService) GetLifecycle(ctx context.Context, enterpriseID, policyID string) (LifecycleView, error) {
+	ls, ok := s.store.(policyLifecycleStore)
+	if !ok {
+		return LifecycleView{}, fmt.Errorf("policy store does not support governed lifecycle")
+	}
+	row, err := ls.GetEnterpriseDreamPolicy(ctx, db.GetEnterpriseDreamPolicyParams{EnterpriseID: enterpriseID, ID: policyID})
+	if err != nil {
+		return LifecycleView{}, err
+	}
+	version := int32(0)
+	if latest, latestErr := s.store.GetLatestDreamPolicyVersion(ctx, policyID); latestErr == nil {
+		version = latest.Version
+	}
+	return lifecycleView(row, version)
+}
+
+func (s *PolicyService) OrgVersion(ctx context.Context, enterpriseID string) (int64, error) {
+	store, ok := s.store.(interface {
+		GetDreamOrgTreeVersion(context.Context, string) (int64, error)
+	})
+	if !ok {
+		return 0, fmt.Errorf("Dream organization version unavailable")
+	}
+	version, err := store.GetDreamOrgTreeVersion(ctx, enterpriseID)
+	if err != nil {
+		return 0, err
+	}
+	if version < 1 {
+		return 0, fmt.Errorf("Dream organization snapshot unavailable")
+	}
+	return version, nil
+}
+
+func (s *PolicyService) UpdateGovernedDraft(ctx context.Context, enterpriseID, policyID, actor, auditRef string, revision int32, p Policy) (LifecycleView, error) {
+	p = withPolicyDefaults(p)
+	if err := p.Validate(); err != nil {
+		return LifecycleView{}, err
+	}
+	if actor == "" || auditRef == "" {
+		return LifecycleView{}, fmt.Errorf("update requires actor and durable audit reference")
+	}
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return LifecycleView{}, err
+	}
+	ls, ok := s.store.(policyLifecycleStore)
+	if !ok {
+		return LifecycleView{}, fmt.Errorf("policy store does not support governed lifecycle")
+	}
+	row, err := ls.UpdateDreamPolicyDraftIfRevision(ctx, db.UpdateDreamPolicyDraftIfRevisionParams{OrgScope: p.OrgUnitID, Draft: raw, AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor})
+	if err != nil {
+		return LifecycleView{}, fmt.Errorf("update Dream policy revision: %w", err)
+	}
+	_ = row
+	return s.GetLifecycle(ctx, enterpriseID, policyID)
+}
+
+// Assess returns deterministic risk facts. Creation has no published baseline
+// and is therefore high risk. Updates are high risk when any security or
+// execution-binding field changes.
+func (s *PolicyService) Assess(ctx context.Context, enterpriseID, policyID string) (governance.RiskAssessment, []string, LifecycleView, error) {
+	view, err := s.GetLifecycle(ctx, enterpriseID, policyID)
+	if err != nil {
+		return governance.RiskAssessment{}, nil, LifecycleView{}, err
+	}
+	changed := []string{}
+	latest, latestErr := s.store.GetLatestDreamPolicyVersion(ctx, policyID)
+	if latestErr != nil {
+		changed = []string{"org_unit_id", "visibility_level", "masking_rules", "evidence_retention", "workflow", "confirmation_mode"}
+	} else {
+		base, err := decodePolicy(latest.Definition)
+		if err != nil {
+			return governance.RiskAssessment{}, nil, LifecycleView{}, err
+		}
+		if base.OrgUnitID != view.Policy.OrgUnitID {
+			changed = append(changed, "org_unit_id")
+		}
+		if base.VisibilityLevel != view.Policy.VisibilityLevel {
+			changed = append(changed, "visibility_level")
+		}
+		if !slices.Equal(base.MaskingRules, view.Policy.MaskingRules) {
+			changed = append(changed, "masking_rules")
+		}
+		if base.EvidenceRetention != view.Policy.EvidenceRetention {
+			changed = append(changed, "evidence_retention")
+		}
+		if base.Workflow != view.Policy.Workflow {
+			changed = append(changed, "workflow")
+		}
+		if base.ConfirmationMode != view.Policy.ConfirmationMode {
+			changed = append(changed, "confirmation_mode")
+		}
+		if base.Schedule != view.Policy.Schedule {
+			changed = append(changed, "schedule")
+		}
+		if !slices.Equal(base.InputSources, view.Policy.InputSources) {
+			changed = append(changed, "input_sources")
+		}
+		if !slices.Equal(base.RiskSignalRules, view.Policy.RiskSignalRules) {
+			changed = append(changed, "risk_signal_rules")
+		}
+	}
+	high := false
+	reasons := []string{}
+	for _, field := range changed {
+		if slices.Contains([]string{"org_unit_id", "visibility_level", "masking_rules", "evidence_retention", "workflow", "confirmation_mode"}, field) {
+			high = true
+			reasons = append(reasons, "high_risk_field:"+field)
+		}
+	}
+	level := governance.RiskLow
+	if high {
+		level = governance.RiskHigh
+	}
+	return governance.RiskAssessment{RiskLevel: level, RiskReasons: reasons}, changed, view, nil
+}
+
+func (s *PolicyService) SubmitReview(ctx context.Context, enterpriseID, policyID, actor, auditRef string, revision int32, route governance.ReviewRoute, reasons []string) (LifecycleView, error) {
+	if err := route.Validate(); err != nil {
+		return LifecycleView{}, err
+	}
+	if route.ResourceType != governance.ResourceDreamPolicy || route.ResourceID != policyID || route.RequesterUserID != actor {
+		return LifecycleView{}, fmt.Errorf("review route is not bound to Dream policy requester")
+	}
+	reasonsJSON, _ := json.Marshal(reasons)
+	pathJSON, _ := json.Marshal(route.OrgPath)
+	ls, ok := s.store.(policyLifecycleStore)
+	if !ok {
+		return LifecycleView{}, fmt.Errorf("policy store does not support governed lifecycle")
+	}
+	row, err := ls.SubmitDreamPolicyReviewIfRevision(ctx, db.SubmitDreamPolicyReviewIfRevisionParams{RiskLevel: string(route.RiskLevel), RiskReasons: reasonsJSON, ReviewMode: string(route.Mode), ReviewerUserID: text(route.ReviewerUserID), ReviewOrgPath: pathJSON, ReviewQueue: text(route.Queue), AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor})
+	if err != nil {
+		return LifecycleView{}, fmt.Errorf("submit Dream policy review: %w", err)
+	}
+	_ = row
+	return s.GetLifecycle(ctx, enterpriseID, policyID)
+}
+
+func (s *PolicyService) Decide(ctx context.Context, enterpriseID, policyID, actor, auditRef, decision string, revision int32) (LifecycleView, error) {
+	if decision != "approve" && decision != "reject" {
+		return LifecycleView{}, fmt.Errorf("decision must be approve or reject")
+	}
+	ls, ok := s.store.(policyLifecycleStore)
+	if !ok {
+		return LifecycleView{}, fmt.Errorf("policy store does not support governed lifecycle")
+	}
+	row, err := ls.DecideDreamPolicyIfRevision(ctx, db.DecideDreamPolicyIfRevisionParams{Decision: decision, AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: text(actor)})
+	if err != nil {
+		return LifecycleView{}, fmt.Errorf("decide Dream policy: %w", err)
+	}
+	_ = row
+	return s.GetLifecycle(ctx, enterpriseID, policyID)
+}
+
+func (s *PolicyService) PublishGoverned(ctx context.Context, enterpriseID, policyID, actor, auditRef string, revision int32) (LifecycleView, error) {
+	view, err := s.GetLifecycle(ctx, enterpriseID, policyID)
+	if err != nil {
+		return LifecycleView{}, err
+	}
+	if view.Status != "approved" || view.Revision != revision || view.PermissionMode != governance.PermissionDirectEdit {
+		return LifecycleView{}, fmt.Errorf("Dream policy is not an approved current revision")
+	}
+	wfStore, ok := s.store.(interface {
+		GetWorkflow(context.Context, string) (db.Workflow, error)
+		GetWorkflowVersion(context.Context, db.GetWorkflowVersionParams) (db.WorkflowVersion, error)
+	})
+	if !ok {
+		return LifecycleView{}, fmt.Errorf("policy store cannot validate published workflows")
+	}
+	wf, err := wfStore.GetWorkflow(ctx, view.Policy.Workflow.ID)
+	if err != nil {
+		return LifecycleView{}, err
+	}
+	wfv, err := wfStore.GetWorkflowVersion(ctx, db.GetWorkflowVersionParams{WorkflowID: view.Policy.Workflow.ID, Version: view.Policy.Workflow.Version})
+	if err != nil {
+		return LifecycleView{}, err
+	}
+	if err := validatePublishedDreamWorkflow(enterpriseID, view.Policy, wf, wfv); err != nil {
+		return LifecycleView{}, err
+	}
+	ls := s.store.(policyLifecycleStore)
+	published, err := ls.PublishDreamPolicyGoverned(ctx, db.PublishDreamPolicyGovernedParams{AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor})
+	if err != nil {
+		return LifecycleView{}, fmt.Errorf("publish governed Dream policy: %w", err)
+	}
+	view, err = s.GetLifecycle(ctx, enterpriseID, policyID)
+	if err != nil {
+		return LifecycleView{}, err
+	}
+	view.Version = published.Version
+	return view, nil
+}
+
+func (s *PolicyService) Disable(ctx context.Context, enterpriseID, policyID, actor, auditRef string, revision int32) (LifecycleView, error) {
+	ls, ok := s.store.(policyLifecycleStore)
+	if !ok {
+		return LifecycleView{}, fmt.Errorf("policy store does not support governed lifecycle")
+	}
+	row, err := ls.DisableDreamPolicyIfRevision(ctx, db.DisableDreamPolicyIfRevisionParams{AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor})
+	if err != nil {
+		return LifecycleView{}, fmt.Errorf("disable Dream policy: %w", err)
+	}
+	_ = row
+	return s.GetLifecycle(ctx, enterpriseID, policyID)
+}
+
+func text(v string) pgtype.Text { return pgtype.Text{String: v, Valid: v != ""} }
 
 // Publish freezes the draft as the next immutable version (admin-confirmed).
 func (s *PolicyService) Publish(ctx context.Context, policyID string) (int32, error) {
