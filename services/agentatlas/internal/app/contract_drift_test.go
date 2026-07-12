@@ -300,6 +300,25 @@ func TestContractDrift(t *testing.T) {
 	}
 }
 
+func TestBrowserKnowledgeBadRequestContract(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "api", "openapi", "atlas-agent.yaml"))
+	if err != nil {
+		t.Fatalf("read agent spec: %v", err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse agent spec: %v", err)
+	}
+
+	badRequest := nestedMap(t, doc, "paths", "/api/knowledge", "get", "responses", "400")
+	assertRef(t, nestedMap(t, badRequest, "content", "application/json", "schema"), "#/components/schemas/InvalidKnowledgeQueryError")
+
+	errorSchema := namedSchema(t, nestedMap(t, doc, "components", "schemas"), "InvalidKnowledgeQueryError")
+	assertObjectProperties(t, errorSchema, []string{"code", "message"}, nil)
+	assertEnum(t, property(t, errorSchema, "code"), []any{"invalid_query"})
+	assertType(t, property(t, errorSchema, "message"), "string")
+}
+
 // TestProtoMirrorsSDK is the locked-decision drift guard: proto codegen is
 // deferred (docs/specs/codegen-decision.md), so the hand-authored proto
 // messages must keep naming parity with the SDK structs they mirror.

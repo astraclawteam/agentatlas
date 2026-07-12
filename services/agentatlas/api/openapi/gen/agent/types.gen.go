@@ -593,6 +593,21 @@ func (e InputSnapshotSummarySourceCountsSourceType) Valid() bool {
 	}
 }
 
+// Defines values for InvalidKnowledgeQueryErrorCode.
+const (
+	InvalidQuery InvalidKnowledgeQueryErrorCode = "invalid_query"
+)
+
+// Valid indicates whether the value is a known member of the InvalidKnowledgeQueryErrorCode enum.
+func (e InvalidKnowledgeQueryErrorCode) Valid() bool {
+	switch e {
+	case InvalidQuery:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MissingInputReason.
 const (
 	MissingInputReasonFailed        MissingInputReason = "failed"
@@ -1408,6 +1423,15 @@ type InputSnapshotSummary struct {
 
 // InputSnapshotSummarySourceCountsSourceType defines model for InputSnapshotSummary.SourceCounts.SourceType.
 type InputSnapshotSummarySourceCountsSourceType string
+
+// InvalidKnowledgeQueryError defines model for InvalidKnowledgeQueryError.
+type InvalidKnowledgeQueryError struct {
+	Code    InvalidKnowledgeQueryErrorCode `json:"code"`
+	Message string                         `json:"message"`
+}
+
+// InvalidKnowledgeQueryErrorCode defines model for InvalidKnowledgeQueryError.Code.
+type InvalidKnowledgeQueryErrorCode string
 
 // MissingInput defines model for MissingInput.
 type MissingInput struct {

@@ -13,6 +13,7 @@ import (
 
 	model "github.com/astraclawteam/agentatlas/sdk/go/governance"
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
+	agentapi "github.com/astraclawteam/agentatlas/services/agentatlas/api/openapi/gen/agent"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/browsersession"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/governance"
@@ -136,7 +137,11 @@ func TestBrowserKnowledgeEscapesLiteralSearchAndValidatesUnicodeLength(t *testin
 	req.AddCookie(cookie)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
-	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "invalid_query") {
+	var problem agentapi.InvalidKnowledgeQueryError
+	if err := json.Unmarshal(rr.Body.Bytes(), &problem); err != nil {
+		t.Fatalf("decode 201-character query response: %v body=%s", err, rr.Body.String())
+	}
+	if rr.Code != http.StatusBadRequest || problem.Code != agentapi.InvalidQuery || problem.Message == "" {
 		t.Fatalf("201-character query status=%d body=%s", rr.Code, rr.Body.String())
 	}
 }
