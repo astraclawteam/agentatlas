@@ -1,4 +1,4 @@
-import { ChevronRight, FileText } from "lucide-react";
+import { FileText } from "lucide-react";
 
 import type { KnowledgeItem } from "../../api/knowledge";
 
@@ -41,9 +41,6 @@ export function KnowledgeList({ items, loading, error, organizationName, query, 
             <strong>{item.title}</strong>
             <small>{item.type_label} · {item.updated_label} · {item.scope_label}</small>
           </span>
-          <a href={`/knowledge/item/${encodeURIComponent(item.key)}`} aria-label={`查看 ${item.title}`} className="knowledge-row-link">
-            查看 <ChevronRight aria-hidden size={16} />
-          </a>
         </li>
       ))}
     </ul>

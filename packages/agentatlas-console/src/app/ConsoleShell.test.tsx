@@ -39,8 +39,8 @@ describe("ConsoleShell", () => {
       if (url.startsWith("/api/knowledge?")) {
         return new Response(JSON.stringify({
           organization: { name: "\u7814\u53d1\u4e00\u90e8" },
-          status: { running: true, freshness_label: "today" },
-          counts: { recent_changes: 0, reviews: 0 },
+          status: { knowledge_runtime: "running", freshness_label: "today" },
+          counts: { available: true, recent_changes: 0, reviews: 0 },
           items: [],
         }), { status: 200, headers: { "Content-Type": "application/json" } });
       }

@@ -672,17 +672,18 @@ components:
         status:
           type: object
           additionalProperties: false
-          required: [running, freshness_label]
+          required: [knowledge_runtime, freshness_label]
           properties:
-            running: {type: boolean}
+            knowledge_runtime: {type: string, enum: [running, checking]}
             freshness_label: {type: string, minLength: 1, maxLength: 64}
         counts:
           type: object
           additionalProperties: false
-          required: [recent_changes, reviews]
+          required: [available, recent_changes, reviews]
           properties:
-            recent_changes: {type: integer, minimum: 0, maximum: 100}
-            reviews: {type: integer, minimum: 0, maximum: 100}
+            available: {type: boolean}
+            recent_changes: {type: integer, nullable: true, minimum: 0, maximum: 100}
+            reviews: {type: integer, nullable: true, minimum: 0, maximum: 100}
         items:
           type: array
           maxItems: 100

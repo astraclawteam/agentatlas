@@ -88,7 +88,7 @@ JOIN knowledge_spaces AS spaces
  AND spaces.org_scope = sops.org_scope
 WHERE sops.enterprise_id = $3
   AND sops.org_scope = $4
-  AND ($5::text = '' OR sops.title ILIKE '%' || $5::text || '%')
+  AND ($5::text = '' OR sops.title ILIKE '%' || $5::text || '%' ESCAPE '\')
 UNION ALL
 SELECT outlines.id, outlines.title AS summary_text, 'method_outline'::text AS source_type, outlines.updated_at AS node_time, spaces.name AS scope_name
 FROM method_outlines AS outlines
@@ -98,7 +98,7 @@ JOIN knowledge_spaces AS spaces
  AND spaces.org_scope = outlines.org_scope
 WHERE outlines.enterprise_id = $3
   AND outlines.org_scope = $4
-  AND ($5::text = '' OR outlines.title ILIKE '%' || $5::text || '%')
+  AND ($5::text = '' OR outlines.title ILIKE '%' || $5::text || '%' ESCAPE '\')
 ORDER BY node_time DESC, id
 LIMIT $1
 `

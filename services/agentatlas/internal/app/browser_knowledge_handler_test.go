@@ -3,12 +3,15 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	model "github.com/astraclawteam/agentatlas/sdk/go/governance"
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/browsersession"
@@ -112,9 +115,74 @@ func TestBrowserKnowledgeFailsClosedWhenOrganizationScanExceedsBound(t *testing.
 	}
 }
 
+func TestBrowserKnowledgeEscapesLiteralSearchAndValidatesUnicodeLength(t *testing.T) {
+	store := &fakeBrowserKnowledgeStore{}
+	orgs := &fakeBrowserOrgStore{spaces: []db.KnowledgeSpace{{ID: "space-rd", EnterpriseID: "ent-1", Name: "研发一部", OrgScope: "department:dept-rd", OrgVersion: 7}}}
+	authorizer := &fakeBrowserAuthorizer{decisions: map[string]nexus.BrowserAuthorizationDecision{"dept-rd": {Decision: "allow", OrgVersion: 7, OrgUnitIDs: []string{"dept-rd"}}}}
+	router, cookie := browserKnowledgeRouter(t, orgs, store, authorizer, nil)
+
+	for _, tc := range []struct{ raw, escaped string }{{"%", `\%`}, {"_", `\_`}, {`\`, `\\`}, {strings.Repeat("知", 200), strings.Repeat("知", 200)}} {
+		req := httptest.NewRequest(http.MethodGet, "https://atlas.example/api/knowledge?org_unit_id=dept-rd&query="+url.QueryEscape(tc.raw), nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK || store.last.SearchQuery != tc.escaped {
+			t.Fatalf("query %q status=%d escaped=%q body=%s", tc.raw, rr.Code, store.last.SearchQuery, rr.Body.String())
+		}
+	}
+
+	tooLong := strings.Repeat("知", 201)
+	req := httptest.NewRequest(http.MethodGet, "https://atlas.example/api/knowledge?org_unit_id=dept-rd&query="+url.QueryEscape(tooLong), nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "invalid_query") {
+		t.Fatalf("201-character query status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestBrowserKnowledgeReviewCountMatchesDecisionEligibility(t *testing.T) {
+	pending := func(mode model.ReviewMode, requester, reviewer, queue string) governance.Record {
+		return governance.Record{Draft: model.ChangeDraft{RequesterUserID: requester, State: model.ChangeSubmitted, UpdatedAt: time.Now()}, Route: model.ReviewRoute{Mode: mode, ReviewerUserID: reviewer, Queue: queue, State: model.RoutePending}}
+	}
+	lister := &fakeKnowledgeChangeLister{records: []governance.Record{
+		pending(model.ReviewUpward, "other", "user-1", ""),
+		pending(model.ReviewUpward, "user-1", "user-1", ""),
+		pending(model.ReviewUpward, "other", "user-2", ""),
+		pending(model.ReviewAdminQueue, "other", "", "enterprise_knowledge_admin"),
+		pending(model.ReviewAdminQueue, "user-1", "", "enterprise_knowledge_admin"),
+	}}
+	h := &browserKnowledgeHandler{changes: lister}
+	_, reviews, available := h.counts(context.Background(), "ent-1", "user-1", "dept-rd", 7, []string{"dept-rd"}, []string{"approve_high_risk"}, time.Now())
+	if !available || reviews != 2 {
+		t.Fatalf("eligible reviews=%d available=%v", reviews, available)
+	}
+	_, reviews, available = h.counts(context.Background(), "ent-1", "user-1", "dept-rd", 7, []string{"dept-rd"}, []string{"knowledge:approve_high_risk"}, time.Now())
+	if !available || reviews != 0 {
+		t.Fatalf("unrelated namespaced permission reviews=%d available=%v", reviews, available)
+	}
+}
+
+func TestBrowserKnowledgeReportsGovernanceCountFailureAsUnavailable(t *testing.T) {
+	h := &browserKnowledgeHandler{changes: &fakeKnowledgeChangeLister{err: errors.New("bounded read failed")}}
+	recent, reviews, available := h.counts(context.Background(), "ent-1", "user-1", "dept-rd", 7, []string{"dept-rd"}, []string{"approve_high_risk"}, time.Now())
+	if available || recent != 0 || reviews != 0 {
+		t.Fatalf("failure presented as available counts: recent=%d reviews=%d available=%v", recent, reviews, available)
+	}
+}
+
 type fakeBrowserKnowledgeStore struct {
 	items []db.ListBrowserKnowledgeItemsRow
 	last  db.ListBrowserKnowledgeItemsParams
+}
+
+type fakeKnowledgeChangeLister struct {
+	records []governance.Record
+	err     error
+}
+
+func (f *fakeKnowledgeChangeLister) List(context.Context, governance.Actor, string, int) ([]governance.Record, error) {
+	return f.records, f.err
 }
 
 func (f *fakeBrowserKnowledgeStore) ListBrowserKnowledgeItems(_ context.Context, arg db.ListBrowserKnowledgeItemsParams) ([]db.ListBrowserKnowledgeItemsRow, error) {

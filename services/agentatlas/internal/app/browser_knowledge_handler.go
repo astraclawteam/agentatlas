@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	model "github.com/astraclawteam/agentatlas/sdk/go/governance"
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
@@ -20,11 +21,15 @@ type browserKnowledgeStore interface {
 	ListBrowserKnowledgeItems(context.Context, db.ListBrowserKnowledgeItemsParams) ([]db.ListBrowserKnowledgeItemsRow, error)
 }
 
+type browserKnowledgeChangeLister interface {
+	List(context.Context, governance.Actor, string, int) ([]governance.Record, error)
+}
+
 type browserKnowledgeHandler struct {
 	orgs       browserSessionOrgStore
 	store      browserKnowledgeStore
 	authorizer nexus.BrowserBFFClient
-	changes    *governance.Service
+	changes    browserKnowledgeChangeLister
 	now        func() time.Time
 }
 
@@ -43,8 +48,13 @@ func (h *browserKnowledgeHandler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	orgUnitID := strings.TrimSpace(r.URL.Query().Get("org_unit_id"))
-	query := strings.TrimSpace(r.URL.Query().Get("query"))
-	if orgUnitID == "" || len(query) > 200 || !containsExactOrganization(session.OrgUnitIDs, orgUnitID) {
+	rawQuery := r.URL.Query().Get("query")
+	if !utf8.ValidString(rawQuery) || utf8.RuneCountInString(rawQuery) > 200 {
+		writeError(w, http.StatusBadRequest, "invalid_query", "search query must be at most 200 characters")
+		return
+	}
+	query := strings.TrimSpace(rawQuery)
+	if orgUnitID == "" || !containsExactOrganization(session.OrgUnitIDs, orgUnitID) {
 		writeError(w, http.StatusForbidden, "forbidden", "knowledge scope is not authorized")
 		return
 	}
@@ -73,7 +83,7 @@ func (h *browserKnowledgeHandler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := h.store.ListBrowserKnowledgeItems(r.Context(), db.ListBrowserKnowledgeItemsParams{
-		EnterpriseID: session.EnterpriseID, SpaceID: space.ID, OrgScope: space.OrgScope, SearchQuery: query, ResultLimit: 101,
+		EnterpriseID: session.EnterpriseID, SpaceID: space.ID, OrgScope: space.OrgScope, SearchQuery: escapeILikeLiteral(query), ResultLimit: 101,
 	})
 	if err != nil || len(rows) > 100 {
 		writeError(w, http.StatusServiceUnavailable, "knowledge_unavailable", "knowledge workspace is unavailable")
@@ -93,15 +103,19 @@ func (h *browserKnowledgeHandler) list(w http.ResponseWriter, r *http.Request) {
 			UpdatedLabel: relativeUpdateLabel(now, row.NodeTime.Time), ScopeLabel: safeKnowledgeSpaceName(db.KnowledgeSpace{ID: space.ID, Name: row.ScopeName, OrgScope: space.OrgScope}, orgUnitID),
 		})
 	}
-	recent, reviews := h.counts(r.Context(), session.EnterpriseID, session.UserID, orgUnitID, session.OrgVersion, session.OrgUnitIDs, session.Permissions, now)
+	recent, reviews, countsAvailable := h.counts(r.Context(), session.EnterpriseID, session.UserID, orgUnitID, session.OrgVersion, session.OrgUnitIDs, session.Permissions, now)
 	freshness := "还没有更新记录"
 	if len(rows) > 0 && rows[0].NodeTime.Valid {
 		freshness = relativeUpdateLabel(now, rows[0].NodeTime.Time)
 	}
+	var recentValue, reviewsValue any
+	if countsAvailable {
+		recentValue, reviewsValue = recent, reviews
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"organization": map[string]any{"name": safeKnowledgeSpaceName(space, orgUnitID)},
-		"status":       map[string]any{"running": true, "freshness_label": freshness},
-		"counts":       map[string]any{"recent_changes": recent, "reviews": reviews},
+		"status":       map[string]any{"knowledge_runtime": "running", "freshness_label": freshness},
+		"counts":       map[string]any{"available": countsAvailable, "recent_changes": recentValue, "reviews": reviewsValue},
 		"items":        items,
 	})
 }
@@ -131,25 +145,42 @@ func (h *browserKnowledgeHandler) resolveSpace(ctx context.Context, enterpriseID
 	return match, matches == 1, nil
 }
 
-func (h *browserKnowledgeHandler) counts(ctx context.Context, enterpriseID, userID, orgUnitID string, orgVersion int64, orgUnitIDs, permissions []string, now time.Time) (int, int) {
+func (h *browserKnowledgeHandler) counts(ctx context.Context, enterpriseID, userID, orgUnitID string, orgVersion int64, orgUnitIDs, permissions []string, now time.Time) (int, int, bool) {
 	if h.changes == nil {
-		return 0, 0
+		return 0, 0, false
 	}
 	records, err := h.changes.List(ctx, governance.Actor{EnterpriseID: enterpriseID, UserID: userID, OrgVersion: orgVersion, OrgUnitIDs: orgUnitIDs, Permissions: permissions}, orgUnitID, 100)
 	if err != nil {
-		return 0, 0
+		return 0, 0, false
 	}
 	recent, reviews := 0, 0
 	for _, record := range records {
 		if !record.Draft.UpdatedAt.Before(now.AddDate(0, 0, -30)) {
 			recent++
 		}
-		if record.Draft.State == model.ChangeSubmitted && record.Route.State == model.RoutePending &&
-			(record.Route.ReviewerUserID == userID || (record.Route.Mode == model.ReviewAdminQueue && hasKnowledgeApproval(permissions))) {
+		if record.Draft.State == model.ChangeSubmitted && record.Route.State == model.RoutePending && eligibleKnowledgeReview(record, userID, permissions) {
 			reviews++
 		}
 	}
-	return recent, reviews
+	return recent, reviews, true
+}
+
+func eligibleKnowledgeReview(record governance.Record, userID string, permissions []string) bool {
+	if record.Draft.RequesterUserID == userID || !hasKnowledgeApproval(permissions) {
+		return false
+	}
+	switch record.Route.Mode {
+	case model.ReviewUpward:
+		return record.Route.ReviewerUserID == userID
+	case model.ReviewAdminQueue:
+		return record.Route.Queue != ""
+	default:
+		return false
+	}
+}
+
+func escapeILikeLiteral(value string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(value)
 }
 
 func knowledgeTypeLabel(sourceType string) string {
@@ -197,7 +228,7 @@ func safeKnowledgeSpaceName(space db.KnowledgeSpace, sealedOrgUnitID string) str
 
 func hasKnowledgeApproval(permissions []string) bool {
 	for _, permission := range permissions {
-		if permission == "approve_high_risk" || permission == "knowledge:approve_high_risk" {
+		if permission == "approve_high_risk" {
 			return true
 		}
 	}

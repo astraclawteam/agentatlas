@@ -16,9 +16,9 @@ export function KnowledgeSearch({ expanded, value, onExpandedChange, onChange }:
 
   if (!expanded) {
     return (
-      <button type="button" className="knowledge-toolbar-action" aria-label="搜索已有内容" onClick={() => onExpandedChange(true)}>
+      <button type="button" className="knowledge-toolbar-action" aria-label="按标题搜索已有内容" onClick={() => onExpandedChange(true)}>
         <Search aria-hidden size={18} strokeWidth={1.8} />
-        搜索
+        按标题搜索
       </button>
     );
   }
@@ -28,8 +28,8 @@ export function KnowledgeSearch({ expanded, value, onExpandedChange, onChange }:
       <input
         ref={inputRef}
         type="search"
-        aria-label="搜索已有内容"
-        placeholder="输入名称或内容关键词"
+        aria-label="按标题搜索已有内容"
+        placeholder="输入标题关键词"
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
         onKeyDown={(event) => {

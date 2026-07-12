@@ -34,7 +34,7 @@ JOIN knowledge_spaces AS spaces
  AND spaces.org_scope = sops.org_scope
 WHERE sops.enterprise_id = sqlc.arg(enterprise_id)
   AND sops.org_scope = sqlc.arg(org_scope)
-  AND (sqlc.arg(search_query)::text = '' OR sops.title ILIKE '%' || sqlc.arg(search_query)::text || '%')
+  AND (sqlc.arg(search_query)::text = '' OR sops.title ILIKE '%' || sqlc.arg(search_query)::text || '%' ESCAPE '\')
 UNION ALL
 SELECT outlines.id, outlines.title AS summary_text, 'method_outline'::text AS source_type, outlines.updated_at AS node_time, spaces.name AS scope_name
 FROM method_outlines AS outlines
@@ -44,6 +44,6 @@ JOIN knowledge_spaces AS spaces
  AND spaces.org_scope = outlines.org_scope
 WHERE outlines.enterprise_id = sqlc.arg(enterprise_id)
   AND outlines.org_scope = sqlc.arg(org_scope)
-  AND (sqlc.arg(search_query)::text = '' OR outlines.title ILIKE '%' || sqlc.arg(search_query)::text || '%')
+  AND (sqlc.arg(search_query)::text = '' OR outlines.title ILIKE '%' || sqlc.arg(search_query)::text || '%' ESCAPE '\')
 ORDER BY node_time DESC, id
 LIMIT sqlc.arg(result_limit);

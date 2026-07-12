@@ -24,7 +24,22 @@ async function openConsole(page: Page, path = "/knowledge/dept-rd") {
   await page.route("**/api/session", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(session) }),
   );
+  await page.route("**/api/knowledge?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        organization: { name: "\u7814\u53d1\u4e00\u90e8" },
+        status: { knowledge_runtime: "running", freshness_label: "\u4eca\u5929\u5df2\u66f4\u65b0" },
+        counts: { available: true, recent_changes: 3, reviews: 2 },
+        items: [{ key: "item-1", title: "MES \u5f02\u5e38\u5de5\u5355\u5904\u7406", type_label: "SOP", updated_label: "\u6628\u5929\u66f4\u65b0", scope_label: "\u7814\u53d1\u4e00\u90e8" }],
+      }),
+    }),
+  );
   await page.goto(path);
+  await expect(page.getByRole("heading", { name: "\u7814\u53d1\u4e00\u90e8\u7684\u4f01\u4e1a\u77e5\u8bc6", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: /\u6dfb\u52a0\u8d44\u6599/ })).toBeVisible();
+  await expect(page.getByText("MES \u5f02\u5e38\u5de5\u5355\u5904\u7406", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "企业知识" })).toBeVisible();
 }
 

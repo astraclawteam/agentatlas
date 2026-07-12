@@ -156,7 +156,10 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 		if knowledgeStore == nil && deps.Store != nil {
 			knowledgeStore = deps.Store
 		}
-		knowledge := &browserKnowledgeHandler{orgs: orgStore, store: knowledgeStore, authorizer: deps.BrowserAuthorizer, changes: deps.Changes}
+		knowledge := &browserKnowledgeHandler{orgs: orgStore, store: knowledgeStore, authorizer: deps.BrowserAuthorizer}
+		if deps.Changes != nil {
+			knowledge.changes = deps.Changes
+		}
 		var legacyWorkflows legacyWorkflowLister
 		if deps.Workflows != nil {
 			legacyWorkflows = deps.Workflows

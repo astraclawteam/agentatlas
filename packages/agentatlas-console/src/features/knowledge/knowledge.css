@@ -109,6 +109,11 @@
   color: var(--color-muted-foreground);
 }
 .knowledge-purpose p { margin: 0; }
+.knowledge-next-step {
+  margin: -10px 0 24px;
+  color: var(--color-muted-foreground);
+  font-size: 14px;
+}
 
 .knowledge-section-title {
   margin: 0;
@@ -205,7 +210,7 @@
 }
 .knowledge-row {
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) auto;
+  grid-template-columns: 38px minmax(0, 1fr);
   min-height: 68px;
   align-items: center;
   gap: 12px;
@@ -223,18 +228,6 @@
 }
 .knowledge-row-copy { display: grid; gap: 4px; }
 .knowledge-row-copy small { color: var(--color-muted-foreground); }
-.knowledge-row-link {
-  display: inline-flex;
-  min-height: 40px;
-  align-items: center;
-  gap: 4px;
-  padding: 0 10px;
-  border-radius: var(--radius-field);
-  color: var(--color-foreground);
-  font-weight: 700;
-  text-decoration: none;
-}
-
 .knowledge-state,
 .knowledge-no-scope {
   display: grid;
@@ -247,6 +240,29 @@
 }
 .knowledge-state strong { color: var(--color-foreground); }
 .knowledge-secondary-button { justify-self: start; margin-top: 6px; }
+.knowledge-handoff {
+  display: grid;
+  max-width: 720px;
+  gap: 14px;
+  padding: 52px clamp(24px, 6vw, 72px);
+}
+.knowledge-handoff h1, .knowledge-handoff p { margin: 0; }
+.knowledge-handoff-icon {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-content: center;
+  border-radius: 14px;
+  background: var(--chip-bg);
+  color: var(--color-clay-deep);
+}
+.knowledge-handoff-next {
+  margin-top: 8px;
+  padding: 18px;
+  border-radius: var(--radius-card);
+  line-height: 1.7;
+}
+.knowledge-handoff .knowledge-secondary-button { width: fit-content; text-decoration: none; }
 
 .knowledge-map-readonly { height: 100%; min-height: 420px; }
 .knowledge-map-description {

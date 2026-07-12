@@ -62,6 +62,24 @@ func (e AgentRunStatus) Valid() bool {
 	}
 }
 
+// Defines values for BrowserKnowledgeHomeStatusKnowledgeRuntime.
+const (
+	BrowserKnowledgeHomeStatusKnowledgeRuntimeChecking BrowserKnowledgeHomeStatusKnowledgeRuntime = "checking"
+	BrowserKnowledgeHomeStatusKnowledgeRuntimeRunning  BrowserKnowledgeHomeStatusKnowledgeRuntime = "running"
+)
+
+// Valid indicates whether the value is a known member of the BrowserKnowledgeHomeStatusKnowledgeRuntime enum.
+func (e BrowserKnowledgeHomeStatusKnowledgeRuntime) Valid() bool {
+	switch e {
+	case BrowserKnowledgeHomeStatusKnowledgeRuntimeChecking:
+		return true
+	case BrowserKnowledgeHomeStatusKnowledgeRuntimeRunning:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for BrowserKnowledgeItemTypeLabel.
 const (
 	Empty BrowserKnowledgeItemTypeLabel = "资料"
@@ -1124,18 +1142,22 @@ type AgentRunStatus string
 // BrowserKnowledgeHome defines model for BrowserKnowledgeHome.
 type BrowserKnowledgeHome struct {
 	Counts struct {
-		RecentChanges int `json:"recent_changes"`
-		Reviews       int `json:"reviews"`
+		Available     bool `json:"available"`
+		RecentChanges *int `json:"recent_changes"`
+		Reviews       *int `json:"reviews"`
 	} `json:"counts"`
 	Items        []BrowserKnowledgeItem `json:"items"`
 	Organization struct {
 		Name string `json:"name"`
 	} `json:"organization"`
 	Status struct {
-		FreshnessLabel string `json:"freshness_label"`
-		Running        bool   `json:"running"`
+		FreshnessLabel   string                                     `json:"freshness_label"`
+		KnowledgeRuntime BrowserKnowledgeHomeStatusKnowledgeRuntime `json:"knowledge_runtime"`
 	} `json:"status"`
 }
+
+// BrowserKnowledgeHomeStatusKnowledgeRuntime defines model for BrowserKnowledgeHome.Status.KnowledgeRuntime.
+type BrowserKnowledgeHomeStatusKnowledgeRuntime string
 
 // BrowserKnowledgeItem defines model for BrowserKnowledgeItem.
 type BrowserKnowledgeItem struct {

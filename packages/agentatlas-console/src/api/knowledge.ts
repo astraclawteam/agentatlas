@@ -10,14 +10,14 @@ export interface KnowledgeItem {
 
 export interface KnowledgeHomeResponse {
   organization: { name: string };
-  status: { running: boolean; freshness_label: string };
-  counts: { recent_changes: number; reviews: number };
+  status: { knowledge_runtime: "running" | "checking"; freshness_label: string };
+  counts: { available: boolean; recent_changes: number | null; reviews: number | null };
   items: KnowledgeItem[];
 }
 
-export function loadKnowledgeHome(orgUnitID: string, query: string) {
+export function loadKnowledgeHome(orgUnitID: string, query: string, signal?: AbortSignal) {
   const params = new URLSearchParams({ org_unit_id: orgUnitID });
   const normalized = query.trim();
   if (normalized) params.set("query", normalized);
-  return api<KnowledgeHomeResponse>(`/api/knowledge?${params.toString()}`);
+  return api<KnowledgeHomeResponse>(`/api/knowledge?${params.toString()}`, { signal });
 }
