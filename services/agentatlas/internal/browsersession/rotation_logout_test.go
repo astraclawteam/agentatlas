@@ -71,7 +71,10 @@ func testIdentity() Identity {
 	return Identity{EnterpriseID: "ent-1", UserID: "user-1", OrgVersion: 1, OrgUnitIDs: []string{"team"}, Permissions: []string{"suggest"}}
 }
 
-type logoutOIDC struct{ failures, calls int }
+type logoutOIDC struct {
+	failures, calls int
+	tokens          []string
+}
 
 func (*logoutOIDC) AuthorizationURL(context.Context, AuthorizationRequest) (string, error) {
 	return "", nil
@@ -80,8 +83,9 @@ func (*logoutOIDC) ExchangeAndVerify(context.Context, ExchangeRequest) (Exchange
 	return ExchangeResult{}, nil
 }
 func (*logoutOIDC) Profile(context.Context, string) (Identity, error) { return Identity{}, nil }
-func (o *logoutOIDC) Logout(context.Context, string) error {
+func (o *logoutOIDC) Logout(_ context.Context, token string) error {
 	o.calls++
+	o.tokens = append(o.tokens, token)
 	if o.failures > 0 {
 		o.failures--
 		return errors.New("upstream audit unavailable")

@@ -40,8 +40,10 @@ config:
   nexusBrowserClientSecretKey: browser-client-secret
   browserSessionEncryptionKeyId: current
   browserSessionEncryptionKey: browser-session-key
-  browserSessionPreviousEncryptionKeyId: previous
-  browserSessionPreviousEncryptionKey: browser-session-previous-key
+  # Set both only during key rotation. Empty values omit the previous key from
+  # the pod environment and Secret projection on first installs.
+  browserSessionPreviousEncryptionKeyId: ""
+  browserSessionPreviousEncryptionKey: ""
   atlasPublicUrl: https://atlas.example
   doclingUrl: http://docling-sidecar:5001
   mineruUrl: http://mineru-sidecar:8000

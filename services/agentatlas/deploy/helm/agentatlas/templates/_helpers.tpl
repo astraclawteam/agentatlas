@@ -42,10 +42,12 @@
   value: /var/run/secrets/agentnexus/browser-session-key
 - name: ATLAS_BROWSER_SESSION_ENCRYPTION_KEY_ID
   value: {{ .Values.config.browserSessionEncryptionKeyId | quote }}
+{{- if and .Values.config.browserSessionPreviousEncryptionKeyId .Values.config.browserSessionPreviousEncryptionKey }}
 - name: ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_FILE
   value: /var/run/secrets/agentnexus/browser-session-previous-key
 - name: ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_ID
   value: {{ .Values.config.browserSessionPreviousEncryptionKeyId | quote }}
+{{- end }}
 - name: ATLAS_PUBLIC_URL
   value: {{ .Values.config.atlasPublicUrl | quote }}
 - name: ATLAS_DOCLING_URL
@@ -81,7 +83,9 @@
       - key: {{ .Values.config.browserSessionEncryptionKey | quote }}
         path: browser-session-key
         mode: 0400
+{{- if and .Values.config.browserSessionPreviousEncryptionKeyId .Values.config.browserSessionPreviousEncryptionKey }}
       - key: {{ .Values.config.browserSessionPreviousEncryptionKey | quote }}
         path: browser-session-previous-key
         mode: 0400
+{{- end }}
 {{- end -}}

@@ -18,6 +18,19 @@ docker compose build        # builds Go services, OpenSearch+smartcn, sidecars
 docker compose up -d
 ```
 
+The previous browser-session encryption key is not required on a first
+install. During a key rotation, set
+`ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_ID` and
+`ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_FILE_SOURCE`, then include the
+rotation override:
+
+```sh
+docker compose -f compose.yaml -f compose.rotation.yaml config -q
+docker compose -f compose.yaml -f compose.rotation.yaml up -d atlas-agent
+```
+
+Remove the override and both previous-key settings after the rotation window.
+
 Verify:
 
 ```sh
@@ -54,6 +67,11 @@ Notes:
 helm lint deploy/helm/agentatlas
 helm template atlas deploy/helm/agentatlas > /tmp/agentatlas.yaml
 ```
+
+For a browser-session key rotation, set both
+`config.browserSessionPreviousEncryptionKeyId` and
+`config.browserSessionPreviousEncryptionKey`. Leaving both empty omits the
+previous-key environment variables and Secret projection.
 
 The chart deploys the four AgentAtlas services and consumes PostgreSQL,
 OpenSearch, NATS, object storage, llmrouter, and AgentNexus as configurable

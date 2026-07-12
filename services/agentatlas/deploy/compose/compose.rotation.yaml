@@ -1,0 +1,14 @@
+# Apply this override only while the current browser-session keyring must read
+# ciphertext written by the immediately previous key:
+# docker compose -f compose.yaml -f compose.rotation.yaml up -d
+services:
+  atlas-agent:
+    environment:
+      ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_ID: ${ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_ID:?set the previous browser session key ID during rotation}
+      ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_FILE: /run/secrets/agentatlas_browser_session_previous_key
+    secrets:
+      - agentatlas_browser_session_previous_key
+
+secrets:
+  agentatlas_browser_session_previous_key:
+    file: ${ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_FILE_SOURCE:?set an absolute host path to the previous 32-byte Atlas browser session key during rotation}

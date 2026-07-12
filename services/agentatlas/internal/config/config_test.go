@@ -32,9 +32,15 @@ func TestAgentNexusServiceCredentialConfigDefaultsAndEnvironment(t *testing.T) {
 func TestDeploymentProfilesReferenceAgentNexusSecretFilesOnly(t *testing.T) {
 	root := filepath.Join("..", "..")
 	compose := readDeploymentFile(t, filepath.Join(root, "deploy", "compose", "compose.yaml"))
-	for _, required := range []string{"ATLAS_NEXUS_CLIENT_ID: agentatlas", "ATLAS_NEXUS_SERVICE_SECRET_FILE: /run/secrets/agentatlas_agentnexus_service_secret", "agentatlas_agentnexus_service_secret:", "ATLAS_NEXUS_SERVICE_SECRET_FILE_SOURCE", "ATLAS_NEXUS_BROWSER_CLIENT_SECRET_FILE", "ATLAS_BROWSER_SESSION_ENCRYPTION_KEY_ID", "ATLAS_BROWSER_SESSION_ENCRYPTION_KEY_FILE", "ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_ID", "ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_FILE", "ATLAS_PUBLIC_URL", "agentatlas_browser_client_secret:", "agentatlas_browser_session_key:", "agentatlas_browser_session_previous_key:"} {
+	for _, required := range []string{"ATLAS_NEXUS_CLIENT_ID: agentatlas", "ATLAS_NEXUS_SERVICE_SECRET_FILE: /run/secrets/agentatlas_agentnexus_service_secret", "agentatlas_agentnexus_service_secret:", "ATLAS_NEXUS_SERVICE_SECRET_FILE_SOURCE", "ATLAS_NEXUS_BROWSER_CLIENT_SECRET_FILE", "ATLAS_BROWSER_SESSION_ENCRYPTION_KEY_ID", "ATLAS_BROWSER_SESSION_ENCRYPTION_KEY_FILE", "ATLAS_PUBLIC_URL", "agentatlas_browser_client_secret:", "agentatlas_browser_session_key:"} {
 		if !strings.Contains(compose, required) {
 			t.Errorf("Compose missing %q", required)
+		}
+	}
+	rotation := readDeploymentFile(t, filepath.Join(root, "deploy", "compose", "compose.rotation.yaml"))
+	for _, required := range []string{"ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_ID", "ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_FILE", "agentatlas_browser_session_previous_key:", "ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_FILE_SOURCE"} {
+		if !strings.Contains(rotation, required) {
+			t.Errorf("Compose rotation override missing %q", required)
 		}
 	}
 	values := readDeploymentFile(t, filepath.Join(root, "deploy", "helm", "agentatlas", "values.yaml"))

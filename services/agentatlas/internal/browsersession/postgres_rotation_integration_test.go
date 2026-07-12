@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -117,8 +118,8 @@ func TestPostgresSessionRotationKeyRolloverAndLogoutOutbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.ReconcileLogouts(ctx, 10); err == nil {
-		t.Fatal("undecryptable operation error was hidden")
+	if err := svc.ReconcileLogouts(ctx, 10); err != nil {
+		t.Fatalf("quarantined operation remained in retry queue: %v", err)
 	}
 	if oidc.calls != 1 {
 		t.Fatalf("poison logout blocked decryptable operations: calls=%d", oidc.calls)
@@ -128,5 +129,89 @@ func TestPostgresSessionRotationKeyRolloverAndLogoutOutbox(t *testing.T) {
 	}
 	if pending != 0 {
 		t.Fatalf("decryptable logout remained pending=%d", pending)
+	}
+}
+
+func TestPostgresLogoutReconcilerQuarantinesFullPoisonBatchAndReachesNewerOperation(t *testing.T) {
+	dsn := os.Getenv("ATLAS_TASK8_SESSION_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("ATLAS_TASK8_SESSION_POSTGRES_DSN not set")
+	}
+	ctx := context.Background()
+	if err := storage.Migrate(ctx, dsn); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	now := time.Date(2026, 7, 13, 0, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	enterpriseID := "ent-logout-quarantine-" + strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "-")
+	if _, err := pool.Exec(ctx, `INSERT INTO enterprises(id,name) VALUES($1,'Logout Quarantine Integration')`, enterpriseID); err != nil {
+		t.Fatal(err)
+	}
+	identity := testIdentity()
+	identity.EnterpriseID = enterpriseID
+	tokenRunID := strings.TrimPrefix(enterpriseID, "ent-logout-quarantine-")
+	retiredProtector, _ := NewProtectorKeyring(EncryptionKey{ID: "retired", Key: bytes.Repeat([]byte{7}, 32)})
+	currentProtector, _ := NewProtectorKeyring(EncryptionKey{ID: "current", Key: bytes.Repeat([]byte{8}, 32)})
+	retiredStore, _ := NewPostgresStore(pool, retiredProtector, clock)
+	currentStore, _ := NewPostgresStore(pool, currentProtector, clock)
+
+	for i := 0; i < 100; i++ {
+		token := fmt.Sprintf("atlas-session-poison-%s-%03d-aaaaaaaaaaaaaaaa", tokenRunID, i)
+		if err := retiredStore.CreateSession(ctx, token, identity, "retired-upstream-token", 8*time.Hour, 24*time.Hour, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := currentStore.BeginLogout(ctx, token); err == nil {
+			t.Fatalf("poison logout %d unexpectedly decrypted", i)
+		}
+	}
+	now = now.Add(time.Second)
+	validToken := "atlas-session-newer-valid-" + tokenRunID + "-dddddddddddddddd"
+	if err := currentStore.CreateSession(ctx, validToken, identity, "valid-upstream-token", 8*time.Hour, 24*time.Hour, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := currentStore.BeginLogout(ctx, validToken); err != nil {
+		t.Fatal(err)
+	}
+
+	oidc := &logoutOIDC{}
+	svc, err := New(Config{Issuer: "https://nexus", ClientID: "atlas", ClientSecret: "secret", RedirectURI: "https://atlas/auth/callback"}, currentStore, oidc, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ReconcileLogouts(ctx, 100); err == nil {
+		t.Fatal("poison quarantine errors were hidden")
+	}
+	foundValid := false
+	for _, token := range oidc.tokens {
+		if token == "valid-upstream-token" {
+			foundValid = true
+			break
+		}
+	}
+	if !foundValid {
+		t.Fatalf("full poison batch starved newer valid logout: tokens=%v", oidc.tokens)
+	}
+
+	var quarantined, retainedCiphertexts, revokedPoison, validPending int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM atlas_browser_logout_operations o JOIN atlas_browser_sessions s USING(session_hash) WHERE s.enterprise_id=$1 AND o.quarantine_reason='credential_decrypt_failed' AND o.quarantined_at IS NOT NULL`, enterpriseID).Scan(&quarantined); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM atlas_browser_logout_operations o JOIN atlas_browser_sessions s USING(session_hash) WHERE s.enterprise_id=$1 AND o.quarantine_reason='credential_decrypt_failed' AND o.upstream_access_token_ciphertext IS NOT NULL`, enterpriseID).Scan(&retainedCiphertexts); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM atlas_browser_sessions WHERE enterprise_id=$1 AND revoked_at IS NOT NULL`, enterpriseID).Scan(&revokedPoison); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM atlas_browser_logout_operations WHERE session_hash=$1`, hash(validToken)).Scan(&validPending); err != nil {
+		t.Fatal(err)
+	}
+	if quarantined != 100 || retainedCiphertexts != 100 || revokedPoison != 101 || validPending != 0 {
+		t.Fatalf("quarantined=%d retained=%d revoked=%d valid_pending=%d", quarantined, retainedCiphertexts, revokedPoison, validPending)
 	}
 }

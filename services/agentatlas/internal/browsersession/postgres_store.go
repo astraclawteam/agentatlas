@@ -278,28 +278,41 @@ func (s *PostgresStore) PendingLogouts(ctx context.Context, limit int) ([]Logout
 		return nil, nil
 	}
 	now := s.now().UTC()
-	rows, err := s.pool.Query(ctx, `WITH pending AS (SELECT session_hash FROM atlas_browser_logout_operations WHERE last_attempt_at IS NULL OR last_attempt_at<($2::timestamptz-interval '10 seconds') ORDER BY created_at LIMIT $1 FOR UPDATE SKIP LOCKED), claimed AS (UPDATE atlas_browser_logout_operations o SET attempts=o.attempts+1,last_attempt_at=$2 FROM pending p WHERE o.session_hash=p.session_hash RETURNING o.session_hash,o.upstream_access_token_ciphertext,o.attempts) SELECT session_hash,upstream_access_token_ciphertext,attempts FROM claimed`, limit, now)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
 	var out []LogoutOperation
 	var decryptErrs []error
-	for rows.Next() {
-		var op LogoutOperation
-		var ciphertext []byte
-		if err := rows.Scan(&op.SessionHash, &ciphertext, &op.Attempts); err != nil {
-			return nil, err
-		}
-		op.UpstreamAccessToken, err = s.protector.Open(ciphertext)
+	for len(out) < limit {
+		batchLimit := limit - len(out)
+		rows, err := s.pool.Query(ctx, `WITH pending AS (SELECT session_hash FROM atlas_browser_logout_operations WHERE quarantined_at IS NULL AND (last_attempt_at IS NULL OR last_attempt_at<($2::timestamptz-interval '10 seconds')) ORDER BY created_at LIMIT $1 FOR UPDATE SKIP LOCKED), claimed AS (UPDATE atlas_browser_logout_operations o SET attempts=o.attempts+1,last_attempt_at=$2 FROM pending p WHERE o.session_hash=p.session_hash RETURNING o.session_hash,o.upstream_access_token_ciphertext,o.attempts) SELECT session_hash,upstream_access_token_ciphertext,attempts FROM claimed`, batchLimit, now)
 		if err != nil {
-			decryptErrs = append(decryptErrs, fmt.Errorf("decrypt pending browser logout %s: %w", op.SessionHash, err))
-			continue
+			return out, errors.Join(append(decryptErrs, err)...)
 		}
-		out = append(out, op)
-	}
-	if err := rows.Err(); err != nil {
-		decryptErrs = append(decryptErrs, err)
+		claimed := 0
+		for rows.Next() {
+			claimed++
+			var op LogoutOperation
+			var ciphertext []byte
+			if err := rows.Scan(&op.SessionHash, &ciphertext, &op.Attempts); err != nil {
+				rows.Close()
+				return out, errors.Join(append(decryptErrs, err)...)
+			}
+			op.UpstreamAccessToken, err = s.protector.Open(ciphertext)
+			if err != nil {
+				if _, quarantineErr := s.pool.Exec(ctx, `UPDATE atlas_browser_logout_operations SET quarantined_at=COALESCE(quarantined_at,$2),quarantine_reason=COALESCE(quarantine_reason,'credential_decrypt_failed') WHERE session_hash=$1`, op.SessionHash, now); quarantineErr != nil {
+					decryptErrs = append(decryptErrs, fmt.Errorf("quarantine undecryptable browser logout %s: %w", op.SessionHash, quarantineErr))
+				} else {
+					decryptErrs = append(decryptErrs, fmt.Errorf("decrypt pending browser logout %s: %w", op.SessionHash, err))
+				}
+				continue
+			}
+			out = append(out, op)
+		}
+		if err := rows.Err(); err != nil {
+			decryptErrs = append(decryptErrs, err)
+		}
+		rows.Close()
+		if claimed < batchLimit {
+			break
+		}
 	}
 	return out, errors.Join(decryptErrs...)
 }
