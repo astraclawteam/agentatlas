@@ -164,13 +164,27 @@ func TestDreamInputResolverPostgresContracts(t *testing.T) {
 		{id: otherRunID, start: windowStart.Add(-24 * time.Hour), end: windowStart},
 	} {
 		if _, err := q.CreateDreamRun(ctx, db.CreateDreamRunParams{
-			ID: run.id, PolicyID: policyID, Version: 1, EnterpriseID: ent, Status: "succeeded",
+			ID: run.id, PolicyID: policyID, Version: 1, EnterpriseID: ent, Status: "running",
 			WindowStart: ts(run.start), WindowEnd: ts(run.end), OrgUnitID: "department:child", PolicyVersion: 1,
 			WorkflowID: workflowID, WorkflowVersion: 1, Timezone: "UTC",
 			InputSnapshot: []byte(`{"source_counts":[],"sanitized_input_ids":[]}`), VisibilitySnapshot: []byte(`{"visibility_level":"company_sanitized","org_unit_ids":["company:parent"]}`),
 			ModelRoute: "reasoning", ModelVersion: "v1", Attempt: 1,
 			Coverage: []byte(`{"expected_children":0,"completed_children":0,"input_count":0}`), MissingInputs: []byte(`[]`), IdempotencyKey: run.id,
 		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	summaryID := newID("summary-input")
+	for _, summary := range []db.CreateDreamSummaryParams{
+		{ID: newID("summary-other"), RunID: otherRunID, EnterpriseID: ent, SpaceID: childID, Layer: "retrieval", SummaryText: "other run", RiskSignals: []byte(`[]`)},
+		{ID: summaryID, RunID: runID, EnterpriseID: ent, SpaceID: childID, Layer: "retrieval", SummaryText: "exact run", RiskSignals: []byte(`[]`)},
+	} {
+		if _, err := q.CreateDreamSummary(ctx, summary); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{runID, otherRunID} {
+		if _, err := q.UpdateDreamRunStatus(ctx, db.UpdateDreamRunStatusParams{ID: id, Status: "succeeded", Error: ""}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -182,16 +196,6 @@ func TestDreamInputResolverPostgresContracts(t *testing.T) {
 	}
 	if len(runs) != 1 || runs[0].ID != runID || runs[0].ChildSpaceID != childID || runs[0].ParentSpaceID != parentID || runs[0].ParentScopeKind != "company" || runs[0].ParentScopeID != "parent" || runs[0].ParentOrgScope != "company:parent" {
 		t.Fatalf("completed-run provenance: %+v", runs)
-	}
-
-	summaryID := newID("summary-input")
-	for _, summary := range []db.CreateDreamSummaryParams{
-		{ID: newID("summary-other"), RunID: otherRunID, EnterpriseID: ent, SpaceID: childID, Layer: "retrieval", SummaryText: "other run", RiskSignals: []byte(`[]`)},
-		{ID: summaryID, RunID: runID, EnterpriseID: ent, SpaceID: childID, Layer: "retrieval", SummaryText: "exact run", RiskSignals: []byte(`[]`)},
-	} {
-		if _, err := q.CreateDreamSummary(ctx, summary); err != nil {
-			t.Fatal(err)
-		}
 	}
 	summary, err := q.GetDreamSummaryForRunLayer(ctx, db.GetDreamSummaryForRunLayerParams{
 		EnterpriseID: ent, RunID: runID, SpaceID: childID, Layer: "retrieval",

@@ -96,13 +96,16 @@ func TestDreamHierarchy(t *testing.T) {
 		if _, err := q.PublishDreamPolicyVersion(ctx, db.PublishDreamPolicyVersionParams{PolicyID: policyID, Version: 1, Definition: []byte(`{}`)}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := q.CreateDreamRun(ctx, db.CreateDreamRunParams{ID: runID, PolicyID: policyID, Version: 1, EnterpriseID: ent, Status: "succeeded", WindowStart: ts(windowStart), WindowEnd: ts(windowEnd), OrgUnitID: org, PolicyVersion: 1, WorkflowID: wfID, WorkflowVersion: 1, Timezone: "UTC", InputSnapshot: []byte(`{"source_counts":[],"sanitized_input_ids":[]}`), VisibilitySnapshot: []byte(fmt.Sprintf(`{"visibility_level":"managers","org_unit_ids":[%q,"department:parent"],"masked_field_count":0}`, org)), ModelRoute: "workflow/" + wfID, ModelVersion: "v1", Attempt: 1, Coverage: []byte(`{"expected_children":0,"completed_children":0,"input_count":0}`), MissingInputs: []byte(`[]`), IdempotencyKey: runID}); err != nil {
+		if _, err := q.CreateDreamRun(ctx, db.CreateDreamRunParams{ID: runID, PolicyID: policyID, Version: 1, EnterpriseID: ent, Status: "running", WindowStart: ts(windowStart), WindowEnd: ts(windowEnd), OrgUnitID: org, PolicyVersion: 1, WorkflowID: wfID, WorkflowVersion: 1, Timezone: "UTC", InputSnapshot: []byte(`{"source_counts":[],"sanitized_input_ids":[]}`), VisibilitySnapshot: []byte(fmt.Sprintf(`{"visibility_level":"managers","org_unit_ids":[%q,"department:parent"],"masked_field_count":0}`, org)), ModelRoute: "workflow/" + wfID, ModelVersion: "v1", Attempt: 1, Coverage: []byte(`{"expected_children":0,"completed_children":0,"input_count":0}`), MissingInputs: []byte(`[]`), IdempotencyKey: runID}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := q.CreateEvidencePointer(ctx, db.CreateEvidencePointerParams{ID: pointerID, EnterpriseID: ent, ResourceType: "dream_sealed_summary", ResourceRef: "seed://" + runID, SourceSystem: "integration", RequiredScopes: []string{"dream:evidence:read"}}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := q.CreateDreamSummary(ctx, db.CreateDreamSummaryParams{ID: newID("sum-child"), RunID: runID, EnterpriseID: ent, SpaceID: spaceID, Layer: "retrieval", SummaryText: fmt.Sprintf("child %d sanitized summary", i+1), EvidencePointerID: pgtype.Text{String: pointerID, Valid: true}, RiskSignals: []byte(`[]`), Facts: []byte(`[]`), Themes: []byte(`[]`), Trends: []byte(`[]`), Todos: []byte(`[]`)}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := q.UpdateDreamRunStatus(ctx, db.UpdateDreamRunStatusParams{ID: runID, Status: "succeeded", Error: ""}); err != nil {
 			t.Fatal(err)
 		}
 		childRuns = append(childRuns, runID)

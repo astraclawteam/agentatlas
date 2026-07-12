@@ -155,3 +155,42 @@ golang:1.26-bookworm go test -race ./internal/dream ./internal/app
 ok internal/dream
 ok internal/app
 ```
+
+## Second-Round Review Fix
+
+Migration `000008_freeze_terminal_dream_output.sql` closes the remaining late-INSERT hole. Summary-layer and evidence-link inserts now lock the owning Dream run row and are accepted only while its status is `running`. This serializes inserts against the terminal transition. The Runner's legitimate order is unchanged: claim `running`, write all three layers and links atomically, commit, then transition to `succeeded` in task completion.
+
+Real PostgreSQL RED before migration 000008:
+
+```text
+TestDreamOutputImmutabilityPostgres: terminal Dream accepted late distinct evidence lineage
+```
+
+Fresh PostgreSQL 17 + fixed-digest MinIO GREEN after migration 000008:
+
+```text
+TestDreamHierarchy                         PASS
+TestDreamInputResolverPostgresContracts   PASS
+TestDreamOutputImmutabilityPostgres       PASS
+TestPostgresCore                          PASS
+```
+
+The immutability test now proves:
+
+- a legitimate initial transaction can create a running run, insert all three layers and evidence links, and transition it to succeeded;
+- a terminal run rejects a distinct late evidence pointer;
+- a terminal run rejects insertion of a previously missing summary layer;
+- prior update/delete and replacement-layer protections remain active.
+
+Migration 000008 down-to-7 passed and removed both insert guards while retaining migration 000007's update/delete protections. OpenAPI now documents `403` scope/organization denial and `502` AgentNexus authorization/upstream failure on every Dream overview/read/action route; generated output remained stable.
+
+Second-round final gates:
+
+```text
+go test ./...                                      PASS
+go vet ./...                                       PASS
+cd sdk/go && go test ./...                         PASS
+golang:1.26-bookworm go test -race ./internal/dream ./internal/app  PASS
+sqlc/OpenAPI second generation hash                5f282702bb03ef11d7184d19c80927b47f919764 (stable)
+git diff --check                                   PASS
+```

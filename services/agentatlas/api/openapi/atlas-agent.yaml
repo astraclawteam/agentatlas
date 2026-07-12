@@ -195,6 +195,8 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/DreamRunList' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { description: Missing dream:read or AgentNexus denied the enterprise/organization resource }
+        '502': { description: AgentNexus organization authorization failed }
   /v1/dream/runs:
     get:
       operationId: listDreamRuns
@@ -208,6 +210,8 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/DreamRunList' }
+        '403': { description: Missing dream:read or AgentNexus denied the enterprise/organization resource }
+        '502': { description: AgentNexus organization authorization failed }
   /v1/dream/runs/{id}:
     get:
       operationId: getDreamRun
@@ -221,6 +225,8 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/DreamRunView' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '403': { description: Missing dream:read or AgentNexus denied the run's enterprise/organization resource }
+        '502': { description: AgentNexus organization authorization failed }
   /v1/dream/runs/{id}/annotations:
     post:
       operationId: annotateDreamRun
@@ -241,6 +247,7 @@ paths:
       responses:
         '201': { description: Annotation appended }
         '403': { description: Annotation permission denied }
+        '502': { description: AgentNexus organization authorization failed }
   /v1/dream/runs/{id}/reruns:
     post:
       operationId: rerunDreamRun
@@ -250,7 +257,9 @@ paths:
         - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 1, maxLength: 256 } }
       responses:
         '202': { description: Rerun scheduled }
+        '403': { description: Missing dream:rerun or AgentNexus denied the run's enterprise/organization resource }
         '409': { description: Canonical idempotency conflict }
+        '502': { description: AgentNexus organization authorization failed }
   /v1/dream/runs/{id}/evidence-access:
     post:
       operationId: accessDreamEvidence
@@ -272,6 +281,7 @@ paths:
                   sanitized_detail: { type: string, maxLength: 100000 }
                   content_hash: { type: string }
         '403': { description: Missing dream:evidence:read or AgentNexus denied the bound read }
+        '502': { description: AgentNexus organization authorization or evidence lookup/read failed }
   /v1/method-outlines:
     post:
       operationId: createMethodOutline

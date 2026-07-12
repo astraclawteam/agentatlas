@@ -438,6 +438,19 @@ func TestDreamMigrationDownContracts(t *testing.T) {
 	if dsn == "" {
 		t.Skip("set ATLAS_TEST_POSTGRES_DSN (production-standard postgres from deploy/compose)")
 	}
+	t.Run("000008 safe", func(t *testing.T) {
+		ctx, db := openDreamMigrationDB(t, dsn, 8)
+		if err := goose.DownToContext(ctx, db, "migrations", 7); err != nil {
+			t.Fatal(err)
+		}
+		var triggerCount int
+		if err := db.QueryRowContext(ctx, `select count(*) from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname=current_schema() and tgname in ('dream_summaries_insert_running_guard','dream_evidence_pointers_insert_running_guard') and not tgisinternal`).Scan(&triggerCount); err != nil {
+			t.Fatal(err)
+		}
+		if triggerCount != 0 {
+			t.Fatalf("000008 down retained %d terminal insert triggers", triggerCount)
+		}
+	})
 	t.Run("000007 safe", func(t *testing.T) {
 		ctx, db := openDreamMigrationDB(t, dsn, 7)
 		if err := goose.DownToContext(ctx, db, "migrations", 6); err != nil {
@@ -672,7 +685,7 @@ func TestDreamGovernanceSchema(t *testing.T) {
 			org_unit_id,policy_version,workflow_id,workflow_version,timezone,
 			input_snapshot,visibility_snapshot,model_route,model_version,attempt,
 			coverage,missing_inputs,idempotency_key
-		) values($1,$2,1,$3,'succeeded',$4,$5,$6,1,$7,1,'UTC',
+		) values($1,$2,1,$3,'running',$4,$5,$6,1,$7,1,'UTC',
 			'{"source_counts":[],"sanitized_input_ids":[]}',
 			'{"visibility_level":"managers","org_unit_ids":[],"masked_field_count":0}',
 			'reasoning','v1',1,
@@ -690,6 +703,9 @@ func TestDreamGovernanceSchema(t *testing.T) {
 	on conflict (id) do nothing`)
 	if err != nil {
 		t.Fatalf("structured child summary: %v", err)
+	}
+	if _, err = pool.Exec(ctx, `update dream_runs set status='succeeded',finished_at=now() where id in ('parent','child','foreign')`); err != nil {
+		t.Fatal(err)
 	}
 	assertRejected("cross-enterprise Dream summary accepted", `insert into dream_summaries(
 		id,run_id,enterprise_id,space_id,layer,summary_text,risk_signals
