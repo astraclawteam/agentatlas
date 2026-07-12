@@ -12,6 +12,13 @@ CREATE INDEX atlas_browser_login_attempts_expiry_idx ON atlas_browser_login_atte
 
 CREATE TABLE atlas_browser_sessions (
     session_hash text PRIMARY KEY CHECK (session_hash ~ '^[0-9a-f]{64}$'),
+	session_family_id text NOT NULL CHECK (char_length(session_family_id) BETWEEN 16 AND 256),
+	generation bigint NOT NULL CHECK (generation > 0),
+	parent_hash text REFERENCES atlas_browser_sessions(session_hash),
+	successor_hash text REFERENCES atlas_browser_sessions(session_hash),
+	successor_token_ciphertext bytea,
+	rotation_due_at timestamptz NOT NULL,
+	overlap_expires_at timestamptz,
     enterprise_id text NOT NULL REFERENCES enterprises(id),
     enterprise_user_id text NOT NULL,
     display_name text NOT NULL DEFAULT '',
@@ -19,7 +26,7 @@ CREATE TABLE atlas_browser_sessions (
     org_unit_ids jsonb NOT NULL CHECK (jsonb_typeof(org_unit_ids)='array' AND jsonb_array_length(org_unit_ids) <= 1000),
     permissions jsonb NOT NULL CHECK (jsonb_typeof(permissions)='array' AND jsonb_array_length(permissions) <= 100),
     advanced_mode_allowed boolean NOT NULL DEFAULT false,
-    upstream_access_token_ciphertext bytea NOT NULL,
+    upstream_access_token_ciphertext bytea,
     created_at timestamptz NOT NULL DEFAULT now(),
     last_seen_at timestamptz NOT NULL DEFAULT now(),
     idle_expires_at timestamptz NOT NULL,
@@ -28,6 +35,15 @@ CREATE TABLE atlas_browser_sessions (
     CHECK (idle_expires_at <= absolute_expires_at)
 );
 CREATE INDEX atlas_browser_sessions_expiry_idx ON atlas_browser_sessions(idle_expires_at,absolute_expires_at) WHERE revoked_at IS NULL;
+CREATE UNIQUE INDEX atlas_browser_sessions_family_generation_uniq ON atlas_browser_sessions(session_family_id,generation);
+
+CREATE TABLE atlas_browser_logout_operations (
+	session_hash text PRIMARY KEY REFERENCES atlas_browser_sessions(session_hash) ON DELETE CASCADE,
+	upstream_access_token_ciphertext bytea NOT NULL,
+	attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+	created_at timestamptz NOT NULL DEFAULT now(),
+	last_attempt_at timestamptz
+);
 
 ALTER TABLE publish_operations
     ADD COLUMN request_hash text CHECK (request_hash IS NULL OR request_hash ~ '^[0-9a-f]{64}$'),
@@ -57,6 +73,9 @@ CREATE TABLE published_resource_pointers (
 -- +goose Down
 DROP TABLE published_resource_pointers;
 ALTER TABLE change_reviews DROP CONSTRAINT change_reviews_check;
+UPDATE change_reviews
+SET review_mode='single_confirmation', reviewer_user_id=NULL, org_path='[]'::jsonb, queue=NULL
+WHERE review_mode='upward_review' AND risk_level='low';
 ALTER TABLE change_reviews ADD CONSTRAINT change_reviews_check CHECK (
     (review_mode='single_confirmation' AND risk_level='low' AND reviewer_user_id IS NULL AND queue IS NULL)
     OR (review_mode='upward_review' AND risk_level='high' AND reviewer_user_id IS NOT NULL AND queue IS NULL AND jsonb_array_length(org_path)>0)
@@ -64,5 +83,6 @@ ALTER TABLE change_reviews ADD CONSTRAINT change_reviews_check CHECK (
 );
 DROP INDEX publish_operations_audit_ref_uniq;
 ALTER TABLE publish_operations DROP COLUMN audit_ref_id, DROP COLUMN request_hash;
+DROP TABLE atlas_browser_logout_operations;
 DROP TABLE atlas_browser_sessions;
 DROP TABLE atlas_browser_login_attempts;

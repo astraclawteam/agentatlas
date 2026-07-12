@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -78,9 +79,11 @@ func TestBrowserSessionRoutesUseSecureCookieAndCSRF(t *testing.T) {
 }
 
 type fakeAtlasOIDC struct {
-	profile browsersession.Identity
-	last    browsersession.AuthorizationRequest
-	logouts int
+	profile     browsersession.Identity
+	last        browsersession.AuthorizationRequest
+	logouts     int
+	exchangeErr error
+	logoutErr   error
 }
 
 func (f *fakeAtlasOIDC) AuthorizationURL(_ context.Context, in browsersession.AuthorizationRequest) (string, error) {
@@ -88,9 +91,56 @@ func (f *fakeAtlasOIDC) AuthorizationURL(_ context.Context, in browsersession.Au
 	return "https://nexus.example/oauth2/authorize?state=" + in.State, nil
 }
 func (f *fakeAtlasOIDC) ExchangeAndVerify(_ context.Context, in browsersession.ExchangeRequest) (browsersession.ExchangeResult, error) {
+	if f.exchangeErr != nil {
+		return browsersession.ExchangeResult{}, f.exchangeErr
+	}
 	return browsersession.ExchangeResult{Identity: browsersession.Identity{EnterpriseID: f.profile.EnterpriseID, UserID: f.profile.UserID}, AccessToken: "upstream-access-token", ExpiresAt: time.Date(2026, 7, 12, 10, 5, 0, 0, time.UTC)}, nil
 }
 func (f *fakeAtlasOIDC) Profile(context.Context, string) (browsersession.Identity, error) {
 	return f.profile, nil
 }
-func (f *fakeAtlasOIDC) Logout(context.Context, string) error { f.logouts++; return nil }
+func (f *fakeAtlasOIDC) Logout(context.Context, string) error { f.logouts++; return f.logoutErr }
+
+func TestBrowserAuthErrorsAreStableAndDoNotLeakInternalCause(t *testing.T) {
+	now := time.Date(2026, 7, 12, 10, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	oidc := &fakeAtlasOIDC{profile: browsersession.Identity{EnterpriseID: "ent-1", UserID: "user-1", OrgVersion: 1, OrgUnitIDs: []string{"team"}, Permissions: []string{"suggest"}}, exchangeErr: errors.New("oidc token endpoint returned 502 with internal topology")}
+	sessions, err := browsersession.New(browsersession.Config{Issuer: "https://nexus.example", ClientID: "agentatlas", ClientSecret: "secret", RedirectURI: "https://atlas.example/auth/callback"}, browsersession.NewMemoryStore(clock), oidc, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewAgentRouter(AgentRouterDeps{Nexus: adminMock(), BrowserSessions: sessions})
+	invalidLogin := httptest.NewRequest(http.MethodGet, "https://atlas.example/auth/login?return_to=%2F%2Fevil.example", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, invalidLogin)
+	if rr.Code != http.StatusBadRequest || strings.Contains(rr.Body.String(), "unsafe return_to") || !strings.Contains(rr.Body.String(), "login request is invalid") {
+		t.Fatalf("invalid login=%d body=%s", rr.Code, rr.Body.String())
+	}
+	login := httptest.NewRequest(http.MethodGet, "https://atlas.example/auth/login", nil)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, login)
+	callback := httptest.NewRequest(http.MethodGet, "https://atlas.example/auth/callback?state="+oidc.last.State+"&code=bad", nil)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, callback)
+	if rr.Code != http.StatusUnauthorized || strings.Contains(rr.Body.String(), "topology") || !strings.Contains(rr.Body.String(), "login could not be completed") {
+		t.Fatalf("callback=%d body=%s", rr.Code, rr.Body.String())
+	}
+
+	oidc.exchangeErr = nil
+	oidc.logoutErr = errors.New("audit database connection string leaked")
+	login = httptest.NewRequest(http.MethodGet, "https://atlas.example/auth/login", nil)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, login)
+	callback = httptest.NewRequest(http.MethodGet, "https://atlas.example/auth/callback?state="+oidc.last.State+"&code=ok", nil)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, callback)
+	cookie := rr.Result().Cookies()[0]
+	logout := httptest.NewRequest(http.MethodPost, "https://atlas.example/auth/logout", nil)
+	logout.Header.Set("Origin", "https://atlas.example")
+	logout.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, logout)
+	if rr.Code != http.StatusAccepted || strings.Contains(rr.Body.String(), "connection string") || !strings.Contains(rr.Body.String(), "logout is being completed") {
+		t.Fatalf("logout=%d body=%s", rr.Code, rr.Body.String())
+	}
+}

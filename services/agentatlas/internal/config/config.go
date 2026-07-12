@@ -44,14 +44,17 @@ type LLMRouter struct {
 }
 
 type AgentNexus struct {
-	BaseURL                 string `yaml:"base_url"`
-	ClientID                string `yaml:"client_id"`
-	SecretFile              string `yaml:"secret_file"`
-	ApprovalFactsSecretFile string `yaml:"approval_facts_secret_file"`
-	BrowserClientID string `yaml:"browser_client_id"`
-	BrowserClientSecretFile string `yaml:"browser_client_secret_file"`
-	BrowserSessionEncryptionKeyFile string `yaml:"browser_session_encryption_key_file"`
-	AtlasPublicURL string `yaml:"atlas_public_url"`
+	BaseURL                                 string `yaml:"base_url"`
+	ClientID                                string `yaml:"client_id"`
+	SecretFile                              string `yaml:"secret_file"`
+	ApprovalFactsSecretFile                 string `yaml:"approval_facts_secret_file"`
+	BrowserClientID                         string `yaml:"browser_client_id"`
+	BrowserClientSecretFile                 string `yaml:"browser_client_secret_file"`
+	BrowserSessionEncryptionKeyID           string `yaml:"browser_session_encryption_key_id"`
+	BrowserSessionEncryptionKeyFile         string `yaml:"browser_session_encryption_key_file"`
+	BrowserSessionPreviousEncryptionKeyID   string `yaml:"browser_session_previous_encryption_key_id"`
+	BrowserSessionPreviousEncryptionKeyFile string `yaml:"browser_session_previous_encryption_key_file"`
+	AtlasPublicURL                          string `yaml:"atlas_public_url"`
 }
 
 type ParserEndpoint struct {
@@ -90,7 +93,7 @@ func Default() *Config {
 			Bucket:   "agentatlas",
 		},
 		LLMRouter:  LLMRouter{BaseURL: "http://localhost:8000/v1"},
-		AgentNexus: AgentNexus{BaseURL: "http://localhost:8100", ClientID: "agentatlas", SecretFile: "/run/secrets/agentatlas_agentnexus_service_secret", BrowserClientID:"agentatlas",BrowserClientSecretFile:"/run/secrets/agentatlas_browser_client_secret",BrowserSessionEncryptionKeyFile:"/run/secrets/agentatlas_browser_session_key",AtlasPublicURL:"https://atlas.local"},
+		AgentNexus: AgentNexus{BaseURL: "http://localhost:8100", ClientID: "agentatlas", SecretFile: "/run/secrets/agentatlas_agentnexus_service_secret", BrowserClientID: "agentatlas", BrowserClientSecretFile: "/run/secrets/agentatlas_browser_client_secret", BrowserSessionEncryptionKeyID: "current", BrowserSessionEncryptionKeyFile: "/run/secrets/agentatlas_browser_session_key", BrowserSessionPreviousEncryptionKeyID: "previous", AtlasPublicURL: "https://atlas.local"},
 		Parsers: Parsers{
 			Docling: ParserEndpoint{BaseURL: "http://localhost:5001"},
 			MinerU:  ParserEndpoint{BaseURL: "http://localhost:5002"},
@@ -146,10 +149,13 @@ func (c *Config) applyEnv() {
 	set(&c.AgentNexus.ClientID, "ATLAS_NEXUS_CLIENT_ID")
 	set(&c.AgentNexus.SecretFile, "ATLAS_NEXUS_SERVICE_SECRET_FILE")
 	set(&c.AgentNexus.ApprovalFactsSecretFile, "ATLAS_NEXUS_APPROVAL_FACTS_SECRET_FILE")
-	set(&c.AgentNexus.BrowserClientID,"ATLAS_NEXUS_BROWSER_CLIENT_ID")
-	set(&c.AgentNexus.BrowserClientSecretFile,"ATLAS_NEXUS_BROWSER_CLIENT_SECRET_FILE")
-	set(&c.AgentNexus.BrowserSessionEncryptionKeyFile,"ATLAS_BROWSER_SESSION_ENCRYPTION_KEY_FILE")
-	set(&c.AgentNexus.AtlasPublicURL,"ATLAS_PUBLIC_URL")
+	set(&c.AgentNexus.BrowserClientID, "ATLAS_NEXUS_BROWSER_CLIENT_ID")
+	set(&c.AgentNexus.BrowserClientSecretFile, "ATLAS_NEXUS_BROWSER_CLIENT_SECRET_FILE")
+	set(&c.AgentNexus.BrowserSessionEncryptionKeyID, "ATLAS_BROWSER_SESSION_ENCRYPTION_KEY_ID")
+	set(&c.AgentNexus.BrowserSessionEncryptionKeyFile, "ATLAS_BROWSER_SESSION_ENCRYPTION_KEY_FILE")
+	set(&c.AgentNexus.BrowserSessionPreviousEncryptionKeyID, "ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_ID")
+	set(&c.AgentNexus.BrowserSessionPreviousEncryptionKeyFile, "ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_FILE")
+	set(&c.AgentNexus.AtlasPublicURL, "ATLAS_PUBLIC_URL")
 	set(&c.Parsers.GatewayURL, "ATLAS_PARSER_GATEWAY_URL")
 	set(&c.Parsers.Docling.BaseURL, "ATLAS_DOCLING_URL")
 	set(&c.Parsers.MinerU.BaseURL, "ATLAS_MINERU_URL")

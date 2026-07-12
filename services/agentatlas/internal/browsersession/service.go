@@ -15,6 +15,7 @@ import (
 type Config struct {
 	Issuer, ClientID, ClientSecret, RedirectURI string
 	IdleTimeout, AbsoluteTimeout                time.Duration
+	RotationInterval, RotationOverlap           time.Duration
 }
 
 type OIDC interface {
@@ -49,8 +50,17 @@ func New(cfg Config, store Store, oidc OIDC, now func() time.Time) (*Service, er
 	if cfg.AbsoluteTimeout == 0 {
 		cfg.AbsoluteTimeout = 24 * time.Hour
 	}
+	if cfg.RotationInterval == 0 {
+		cfg.RotationInterval = 15 * time.Minute
+	}
+	if cfg.RotationOverlap == 0 {
+		cfg.RotationOverlap = time.Minute
+	}
 	if cfg.IdleTimeout <= 0 || cfg.AbsoluteTimeout < cfg.IdleTimeout {
 		return nil, errors.New("browser session: invalid timeouts")
+	}
+	if cfg.RotationInterval <= 0 || cfg.RotationOverlap <= 0 || cfg.RotationOverlap >= cfg.RotationInterval {
+		return nil, errors.New("browser session: invalid rotation timing")
 	}
 	if now == nil {
 		now = time.Now
@@ -113,26 +123,45 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code, _ string) (tok
 	if absolute < idle {
 		idle = absolute
 	}
-	if err := s.store.CreateSession(ctx, token, profile, exchanged.AccessToken, idle, absolute); err != nil {
+	if err := s.store.CreateSession(ctx, token, profile, exchanged.AccessToken, idle, absolute, s.cfg.RotationInterval); err != nil {
 		return "", "", err
 	}
 	return token, attempt.ReturnTo, nil
 }
 
-func (s *Service) Session(ctx context.Context, token string) (Session, error) {
-	return s.store.GetSession(ctx, token)
+func (s *Service) Session(ctx context.Context, token string) (SessionAccess, error) {
+	return s.store.ResolveSession(ctx, token, s.cfg.IdleTimeout, s.cfg.RotationInterval, s.cfg.RotationOverlap)
 }
 func (s *Service) RevokeLocal(ctx context.Context, token string) error {
 	return s.store.RevokeSession(ctx, token)
 }
 func (s *Service) Logout(ctx context.Context, token string) error {
-	session, err := s.store.GetSession(ctx, token)
+	op, err := s.store.BeginLogout(ctx, token)
 	if err != nil {
 		return err
 	}
-	upstreamErr := s.oidc.Logout(ctx, session.UpstreamAccessToken)
-	localErr := s.store.RevokeSession(ctx, token)
-	return errors.Join(upstreamErr, localErr)
+	if err := s.oidc.Logout(ctx, op.UpstreamAccessToken); err != nil {
+		return err
+	}
+	return s.store.CompleteLogout(ctx, op.SessionHash)
+}
+
+func (s *Service) ReconcileLogouts(ctx context.Context, limit int) error {
+	operations, err := s.store.PendingLogouts(ctx, limit)
+	var errs []error
+	if err != nil {
+		errs = append(errs, err)
+	}
+	for _, op := range operations {
+		if err := s.oidc.Logout(ctx, op.UpstreamAccessToken); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if err := s.store.CompleteLogout(ctx, op.SessionHash); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func SafeReturnTo(v string) bool {

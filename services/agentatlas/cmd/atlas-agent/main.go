@@ -81,7 +81,15 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("browser session key: %w", err)
 	}
-	protector, err := browsersession.NewProtector(encryptionKey)
+	keys := []browsersession.EncryptionKey{{ID: cfg.AgentNexus.BrowserSessionEncryptionKeyID, Key: encryptionKey}}
+	if cfg.AgentNexus.BrowserSessionPreviousEncryptionKeyFile != "" {
+		previousKey, err := browsersession.LoadEncryptionKey(cfg.AgentNexus.BrowserSessionPreviousEncryptionKeyFile)
+		if err != nil {
+			return fmt.Errorf("previous browser session key: %w", err)
+		}
+		keys = append(keys, browsersession.EncryptionKey{ID: cfg.AgentNexus.BrowserSessionPreviousEncryptionKeyID, Key: previousKey})
+	}
+	protector, err := browsersession.NewProtectorKeyring(keys[0], keys[1:]...)
 	if err != nil {
 		return err
 	}
@@ -94,6 +102,20 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := browserSessions.ReconcileLogouts(ctx, 100); err != nil && ctx.Err() == nil {
+					logger.Error("browser logout reconciliation failed", zap.Error(err))
+				}
+			}
+		}
+	}()
 	changeStore, err := governance.NewPostgresStore(pool, time.Now)
 	if err != nil {
 		return err

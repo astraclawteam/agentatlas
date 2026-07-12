@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -19,7 +20,8 @@ func (h *browserSessionHandler) login(w http.ResponseWriter, r *http.Request) {
 	}
 	location, err := h.sessions.BeginLogin(r.Context(), r.URL.Query().Get("return_to"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_login", err.Error())
+		slog.ErrorContext(r.Context(), "browser login start failed", "error", err)
+		writeError(w, http.StatusBadRequest, "invalid_login", "login request is invalid")
 		return
 	}
 	http.Redirect(w, r, location, http.StatusFound)
@@ -36,13 +38,15 @@ func (h *browserSessionHandler) callback(w http.ResponseWriter, r *http.Request)
 	}
 	token, returnTo, err := h.sessions.CompleteLogin(r.Context(), state, code, "")
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "login_failed", err.Error())
+		slog.ErrorContext(r.Context(), "browser login callback failed", "error", err)
+		writeError(w, http.StatusUnauthorized, "login_failed", "login could not be completed")
 		return
 	}
 	if old, oldErr := r.Cookie("atlas_session"); oldErr == nil && old.Value != "" {
 		if err := h.sessions.RevokeLocal(r.Context(), old.Value); err != nil {
 			_ = h.sessions.RevokeLocal(r.Context(), token)
-			writeError(w, http.StatusServiceUnavailable, "session_rotation_failed", err.Error())
+			slog.ErrorContext(r.Context(), "browser login session replacement failed", "error", err)
+			writeError(w, http.StatusServiceUnavailable, "session_rotation_failed", "browser session could not be established")
 			return
 		}
 	}
@@ -61,12 +65,15 @@ func (h *browserSessionHandler) sessionGuard(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "no active browser session")
 			return
 		}
-		session, err := h.sessions.Session(r.Context(), cookie.Value)
+		access, err := h.sessions.Session(r.Context(), cookie.Value)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "no active browser session")
 			return
 		}
-		ctx := context.WithValue(r.Context(), browserActorKey{}, session)
+		if access.ReplacementToken != "" {
+			h.setSessionCookie(w, access.ReplacementToken)
+		}
+		ctx := context.WithValue(r.Context(), browserActorKey{}, access.Session)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -81,6 +88,10 @@ func (h *browserSessionHandler) session(w http.ResponseWriter, r *http.Request) 
 	})).ServeHTTP(w, r)
 }
 func (h *browserSessionHandler) logout(w http.ResponseWriter, r *http.Request) {
+	if h.sessions == nil {
+		writeError(w, http.StatusServiceUnavailable, "browser_session_unavailable", "browser sessions not configured")
+		return
+	}
 	cookie, err := r.Cookie("atlas_session")
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "no active browser session")
@@ -89,10 +100,15 @@ func (h *browserSessionHandler) logout(w http.ResponseWriter, r *http.Request) {
 	err = h.sessions.Logout(r.Context(), cookie.Value)
 	http.SetCookie(w, &http.Cookie{Name: "atlas_session", Value: "", Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: -1, Expires: time.Unix(1, 0)})
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "logout_failed", err.Error())
+		slog.ErrorContext(r.Context(), "browser logout pending reconciliation", "error", err)
+		writeError(w, http.StatusAccepted, "logout_pending", "logout is being completed")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *browserSessionHandler) setSessionCookie(w http.ResponseWriter, token string) {
+	http.SetCookie(w, &http.Cookie{Name: "atlas_session", Value: token, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: 0})
 }
 func sameOriginCSRF(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

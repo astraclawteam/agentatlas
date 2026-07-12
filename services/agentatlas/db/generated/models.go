@@ -98,8 +98,23 @@ type AtlasBrowserLoginAttempt struct {
 	ExpiresAt              pgtype.Timestamptz `json:"expires_at"`
 }
 
+type AtlasBrowserLogoutOperation struct {
+	SessionHash                   string             `json:"session_hash"`
+	UpstreamAccessTokenCiphertext []byte             `json:"upstream_access_token_ciphertext"`
+	Attempts                      int32              `json:"attempts"`
+	CreatedAt                     pgtype.Timestamptz `json:"created_at"`
+	LastAttemptAt                 pgtype.Timestamptz `json:"last_attempt_at"`
+}
+
 type AtlasBrowserSession struct {
 	SessionHash                   string             `json:"session_hash"`
+	SessionFamilyID               string             `json:"session_family_id"`
+	Generation                    int64              `json:"generation"`
+	ParentHash                    pgtype.Text        `json:"parent_hash"`
+	SuccessorHash                 pgtype.Text        `json:"successor_hash"`
+	SuccessorTokenCiphertext      []byte             `json:"successor_token_ciphertext"`
+	RotationDueAt                 pgtype.Timestamptz `json:"rotation_due_at"`
+	OverlapExpiresAt              pgtype.Timestamptz `json:"overlap_expires_at"`
 	EnterpriseID                  string             `json:"enterprise_id"`
 	EnterpriseUserID              string             `json:"enterprise_user_id"`
 	DisplayName                   string             `json:"display_name"`

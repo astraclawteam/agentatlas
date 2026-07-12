@@ -20,7 +20,10 @@ x-atlas-env: &atlas-env
   ATLAS_NEXUS_APPROVAL_FACTS_SECRET_FILE: /run/secrets/agentatlas_agentnexus_approval_facts_secret
   ATLAS_NEXUS_BROWSER_CLIENT_ID: agentatlas
   ATLAS_NEXUS_BROWSER_CLIENT_SECRET_FILE: /run/secrets/agentatlas_browser_client_secret
+  ATLAS_BROWSER_SESSION_ENCRYPTION_KEY_ID: ${ATLAS_BROWSER_SESSION_ENCRYPTION_KEY_ID:-current}
   ATLAS_BROWSER_SESSION_ENCRYPTION_KEY_FILE: /run/secrets/agentatlas_browser_session_key
+  ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_ID: ${ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_ID:-previous}
+  ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_FILE: /run/secrets/agentatlas_browser_session_previous_key
   ATLAS_PUBLIC_URL: ${ATLAS_PUBLIC_URL:-https://localhost:8081}
   ATLAS_DOCLING_URL: http://docling-sidecar:5001
   ATLAS_MINERU_URL: http://mineru-sidecar:8000
@@ -155,6 +158,7 @@ services:
       - agentatlas_agentnexus_approval_facts_secret
       - agentatlas_browser_client_secret
       - agentatlas_browser_session_key
+      - agentatlas_browser_session_previous_key
     ports:
       - "8081:8081"
     healthcheck:
@@ -289,6 +293,8 @@ secrets:
     file: ${ATLAS_NEXUS_BROWSER_CLIENT_SECRET_FILE_SOURCE:?set an absolute host path to the AgentNexus browser client secret file}
   agentatlas_browser_session_key:
     file: ${ATLAS_BROWSER_SESSION_ENCRYPTION_KEY_FILE_SOURCE:?set an absolute host path to the 32-byte Atlas browser session key}
+  agentatlas_browser_session_previous_key:
+    file: ${ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_FILE_SOURCE:?set an absolute host path to the previous 32-byte Atlas browser session key during rotation}
 
 volumes:
   pgdata:

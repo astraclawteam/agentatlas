@@ -38,7 +38,10 @@ config:
   nexusServiceSecretKey: client-secret
   nexusApprovalFactsSecretKey: approval-facts-secret
   nexusBrowserClientSecretKey: browser-client-secret
+  browserSessionEncryptionKeyId: current
   browserSessionEncryptionKey: browser-session-key
+  browserSessionPreviousEncryptionKeyId: previous
+  browserSessionPreviousEncryptionKey: browser-session-previous-key
   atlasPublicUrl: https://atlas.example
   doclingUrl: http://docling-sidecar:5001
   mineruUrl: http://mineru-sidecar:8000
