@@ -116,6 +116,11 @@ func sameOriginCSRF(next http.Handler) http.Handler {
 		scheme := "http"
 		if r.TLS != nil || r.URL.Scheme == "https" {
 			scheme = "https"
+		} else if forwarded := r.Header.Values("X-Forwarded-Proto"); len(forwarded) == 1 && strings.EqualFold(strings.TrimSpace(forwarded[0]), "https") {
+			// Production terminates TLS at the ingress. A Secure session cookie is
+			// never sent to a direct plaintext request, while the exact single-value
+			// check avoids accepting an ambiguous proxy chain.
+			scheme = "https"
 		}
 		want := scheme + "://" + r.Host
 		if origin == "" || !strings.EqualFold(strings.TrimRight(origin, "/"), want) {

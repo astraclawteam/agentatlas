@@ -78,6 +78,37 @@ func TestBrowserSessionRoutesUseSecureCookieAndCSRF(t *testing.T) {
 	}
 }
 
+func TestSameOriginCSRFAcceptsTLSOriginBehindReverseProxy(t *testing.T) {
+	called := false
+	handler := sameOriginCSRF(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "http://atlas.internal/api/changes", nil)
+	req.Host = "atlas.example"
+	req.Header.Set("Origin", "https://atlas.example")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNoContent || !called {
+		t.Fatalf("TLS-terminated same origin rejected: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestSameOriginCSRFRejectsAmbiguousForwardedProtocol(t *testing.T) {
+	handler := sameOriginCSRF(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	req := httptest.NewRequest(http.MethodPost, "http://atlas.internal/api/changes", nil)
+	req.Host = "atlas.example"
+	req.Header.Set("Origin", "https://atlas.example")
+	req.Header.Add("X-Forwarded-Proto", "https")
+	req.Header.Add("X-Forwarded-Proto", "http")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("ambiguous forwarded protocol accepted: %d", rr.Code)
+	}
+}
+
 type fakeAtlasOIDC struct {
 	profile     browsersession.Identity
 	last        browsersession.AuthorizationRequest
