@@ -81,7 +81,7 @@ func (r *Runtime) RunPublished(ctx context.Context, enterpriseID, workflowID str
 }
 
 func (r *Runtime) RunDreamPublished(ctx context.Context, enterpriseID, workflowID string, version int32, input map[string]any, dream VerifiedDreamContext) (RunResult, error) {
-	if dream.EnterpriseID != enterpriseID || dream.DreamRunID == "" || dream.PolicyID == "" || dream.WorkflowID != workflowID || dream.WorkflowVersion != version {
+	if dream.EnterpriseID != enterpriseID || dream.DreamRunID == "" || dream.PolicyID == "" || dream.WorkflowID != workflowID || dream.WorkflowVersion != version || dream.DreamExecutionOwner == "" {
 		return RunResult{}, fmt.Errorf("invalid verified Dream context")
 	}
 	return r.runPublished(ctx, enterpriseID, workflowID, version, input, &dream)
@@ -201,6 +201,7 @@ func (r *Runtime) startRun(ctx context.Context, enterpriseID, workflowID string,
 			PolicyVersion: dream.PolicyVersion, OrgUnitID: dream.OrgUnitID,
 			WorkflowID: pgtype.Text{String: workflowID, Valid: true}, Version: pgtype.Int4{Int32: version, Valid: true},
 			ID: runID, Status: RunRunning, Input: rawInput, Output: rawState, ExecutionOwner: executionOwner,
+			DreamExecutionOwner: pgtype.Text{String: dream.DreamExecutionOwner, Valid: true},
 		})
 		if err != nil {
 			return runID, RunFailed, fmt.Errorf("create and bind Dream workflow run: %w", err)

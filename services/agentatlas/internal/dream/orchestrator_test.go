@@ -76,7 +76,7 @@ func TestOrchestratorRunsExactlyPinnedPublishedWorkflow(t *testing.T) {
 	orchestrator := NewOrchestrator(runtime)
 	start := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
 	out, err := orchestrator.Run(context.Background(), DreamExecution{
-		EnterpriseID: "ent-1", PolicyID: "policy-1", PolicyVersion: 7,
+		EnterpriseID: "ent-1", PolicyID: "policy-1", PolicyVersion: 7, ExecutionOwner: "dream-owner-1",
 		Workflow: sdkdream.WorkflowRef{ID: "wf-dream", Version: 3},
 		Input: WorkflowInput{OrgUnitID: "department:rd", WindowStart: start, WindowEnd: start.Add(24 * time.Hour),
 			Inputs:   []ResolvedInput{{SourceType: sdkdream.SourceWorkBrief, SourceID: "brief-1", OrgUnitID: "department:rd", SanitizedText: "sanitized", Visibility: []string{"managers"}}},
@@ -155,7 +155,7 @@ func TestOrchestratorEncodesTypedInputWithStableWireFields(t *testing.T) {
 
 func validDreamExecution() DreamExecution {
 	start := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
-	return DreamExecution{EnterpriseID: "ent-1", PolicyID: "policy-1", PolicyVersion: 1,
+	return DreamExecution{EnterpriseID: "ent-1", PolicyID: "policy-1", PolicyVersion: 1, ExecutionOwner: "dream-owner-1",
 		Workflow: sdkdream.WorkflowRef{ID: "wf-dream", Version: 3},
 		Input:    WorkflowInput{OrgUnitID: "department:rd", WindowStart: start, WindowEnd: start.Add(time.Hour), Inputs: []ResolvedInput{}, Missing: []MissingInput{}}}
 }

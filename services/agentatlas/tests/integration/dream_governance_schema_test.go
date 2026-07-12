@@ -127,12 +127,16 @@ values('outbox-dream','outbox-policy',1,'outbox-ent','running',now()-interval '1
 	if _, err := conn.Exec(ctx, seed); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := conn.Exec(ctx, `update dream_runs set execution_owner='outbox-dream-owner',execution_lease_expires_at=now()+interval '1 hour' where id='outbox-dream'`); err != nil {
+		t.Fatal(err)
+	}
 	state := []byte(`{"next_index":0,"outputs":{},"input":{},"dream":{"enterprise_id":"outbox-ent","dream_run_id":"outbox-dream","policy_id":"outbox-policy","policy_version":1,"workflow_id":"outbox-wf","workflow_version":1,"org_unit_id":"department:outbox"}}`)
 	created, err := queries.CreateBoundDreamWorkflowRun(ctx, db.CreateBoundDreamWorkflowRunParams{
 		ID: "outbox-run", WorkflowID: pgtype.Text{String: "outbox-wf", Valid: true}, Version: pgtype.Int4{Int32: 1, Valid: true}, EnterpriseID: "outbox-ent",
 		Status: "running", Input: []byte(`{}`), Output: state, DreamRunID: "outbox-dream",
 		PolicyID: "outbox-policy", PolicyVersion: 1, OrgUnitID: "department:outbox",
-		ExecutionOwner: pgtype.Text{String: "initial-workflow-owner", Valid: true},
+		ExecutionOwner:      pgtype.Text{String: "initial-workflow-owner", Valid: true},
+		DreamExecutionOwner: pgtype.Text{String: "outbox-dream-owner", Valid: true},
 	})
 	if err != nil || created.ID != "outbox-run" {
 		t.Fatalf("atomic create/bind: run=%+v err=%v", created, err)
@@ -141,7 +145,8 @@ values('outbox-dream','outbox-policy',1,'outbox-ent','running',now()-interval '1
 		ID: "forged-run", WorkflowID: pgtype.Text{String: "outbox-wf", Valid: true}, Version: pgtype.Int4{Int32: 1, Valid: true}, EnterpriseID: "outbox-ent",
 		Status: "running", Input: []byte(`{}`), Output: state, DreamRunID: "outbox-dream",
 		PolicyID: "forged-policy", PolicyVersion: 1, OrgUnitID: "department:outbox",
-		ExecutionOwner: pgtype.Text{String: "initial-workflow-owner", Valid: true},
+		ExecutionOwner:      pgtype.Text{String: "initial-workflow-owner", Valid: true},
+		DreamExecutionOwner: pgtype.Text{String: "outbox-dream-owner", Valid: true},
 	}); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("forged bound context created workflow run: %v", err)
 	}

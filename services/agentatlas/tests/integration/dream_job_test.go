@@ -8,12 +8,14 @@ package integration
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
@@ -133,7 +135,8 @@ func TestDreamDirectSuccessLeaseRecovery(t *testing.T) {
 	wfRuntime.SetDreamLifecycleHook(consumer.WorkflowLifecycle)
 	result, err := dream.NewOrchestrator(wfRuntime).Run(ctx, dream.DreamExecution{
 		EnterpriseID: entID, DreamRunID: runID, PolicyID: policyID, PolicyVersion: 1,
-		Workflow: sdkdream.WorkflowRef{ID: wfID, Version: 1},
+		ExecutionOwner: "direct-active-owner",
+		Workflow:       sdkdream.WorkflowRef{ID: wfID, Version: 1},
 		Input: dream.WorkflowInput{OrgUnitID: "department:direct", WindowStart: start, WindowEnd: start.Add(time.Hour),
 			Inputs: []dream.ResolvedInput{}, Missing: []dream.MissingInput{}, RiskSignalRules: []string{}},
 	})
@@ -197,6 +200,11 @@ func TestDreamDirectSuccessLeaseRecovery(t *testing.T) {
 	if _, err := pool.Exec(ctx, `update dream_runs set execution_lease_expires_at=now()-interval '1 second' where id=$1`, prebindID); err != nil {
 		t.Fatal(err)
 	}
+	failingPrebindTasks := tasks.NewRunner(failingPublishBus{})
+	failingPrebindTasks.AllowEnqueue(dream.JobTypeDream)
+	if err := dream.NewRunner(q, nil, dream.NewPolicyService(q), failingPrebindTasks, nil).RecoverExpiredExecutions(ctx); err == nil {
+		t.Fatal("expired pre-binding Dream publish failure was discarded")
+	}
 	prebindBus := &countingPublishBus{}
 	prebindTasks := tasks.NewRunner(prebindBus)
 	prebindTasks.AllowEnqueue(dream.JobTypeDream)
@@ -204,8 +212,32 @@ func TestDreamDirectSuccessLeaseRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	prebind, err := q.GetDreamRun(ctx, prebindID)
-	if err != nil || prebind.Status != "pending" || prebindBus.publishes != 1 {
+	if err != nil || prebind.Status != "pending" || !prebindBus.published(prebindID) {
 		t.Fatalf("expired pre-binding Dream not recovered: run=%+v publishes=%d err=%v", prebind, prebindBus.publishes, err)
+	}
+	ownerB := pgtype.Text{String: "prebind-owner-b", Valid: true}
+	if _, err := q.ClaimDreamRunLease(ctx, db.ClaimDreamRunLeaseParams{ID: prebindID, ExecutionOwner: ownerB}); err != nil {
+		t.Fatal(err)
+	}
+	staleWorkflowID := newID("stale_bind")
+	staleInput := []byte(`{"org_unit_id":"department:direct","window_start":"2026-07-12T00:00:00Z","window_end":"2026-07-12T01:00:00Z","inputs":[{"source_type":"work_brief","source_id":"stale-input","org_unit_id":"department:direct","evidence_pointer_id":"","sanitized_text":"safe","visibility":["members"],"parent_run_id":""}],"coverage":{"expected_children":0,"completed_children":0,"input_count":1},"missing":[],"risk_signal_rules":[]}`)
+	if _, err := q.CreateBoundDreamWorkflowRun(ctx, db.CreateBoundDreamWorkflowRunParams{
+		DreamRunID: prebindID, EnterpriseID: entID, PolicyID: policyID, PolicyVersion: 1,
+		OrgUnitID: "department:direct", WorkflowID: pgtype.Text{String: wfID, Valid: true}, Version: pgtype.Int4{Int32: 1, Valid: true},
+		ID: staleWorkflowID, Status: workflow.RunRunning, Input: staleInput, Output: []byte(`{"next_index":0,"outputs":{},"input":{}}`),
+		ExecutionOwner: pgtype.Text{String: "workflow-owner-a", Valid: true}, DreamExecutionOwner: pgtype.Text{String: "dead-prebind", Valid: true},
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("stale pre-binding owner created workflow/input: %v", err)
+	}
+	var staleInputs, staleWorkflows int
+	if err := pool.QueryRow(ctx, `select count(*) from dream_inputs where run_id=$1`, prebindID).Scan(&staleInputs); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `select count(*) from workflow_runs where id=$1`, staleWorkflowID).Scan(&staleWorkflows); err != nil {
+		t.Fatal(err)
+	}
+	if staleInputs != 0 || staleWorkflows != 0 {
+		t.Fatalf("stale pre-binding effects: inputs=%d workflows=%d", staleInputs, staleWorkflows)
 	}
 	pendingWorkflowID := newID("expired_workflow")
 	if _, err := q.CreateWorkflowRun(ctx, db.CreateWorkflowRunParams{ID: pendingWorkflowID, WorkflowID: wfID, Version: 1, EnterpriseID: entID, Status: workflow.RunPending, Input: []byte(`{}`)}); err != nil {

@@ -38,6 +38,7 @@ type RunnerStore interface {
 	FenceDreamExecutionOwner(ctx context.Context, arg db.FenceDreamExecutionOwnerParams) (string, error)
 	CompleteDreamRunOwned(ctx context.Context, arg db.CompleteDreamRunOwnedParams) (int64, error)
 	RecoverExpiredUnboundDreamRuns(ctx context.Context, resultLimit int32) ([]string, error)
+	ListPendingDreamRuns(ctx context.Context, resultLimit int32) ([]string, error)
 	ClaimDreamRunLease(ctx context.Context, arg db.ClaimDreamRunLeaseParams) (int64, error)
 	RenewDreamRunLease(ctx context.Context, arg db.RenewDreamRunLeaseParams) (int64, error)
 	RecoverExpiredDreamRunAfterWorkflow(ctx context.Context, arg db.RecoverExpiredDreamRunAfterWorkflowParams) (db.DreamRun, error)
@@ -193,16 +194,12 @@ func (r *Runner) execute(ctx context.Context, runID string) error {
 		EnterpriseID: run.EnterpriseID, DreamRunID: run.ID, PolicyID: run.PolicyID, PolicyVersion: run.PolicyVersion,
 		Workflow:              policy.Workflow,
 		ExistingWorkflowRunID: run.WorkflowRunID.String,
+		ExecutionOwner:        r.executionOwner,
 	}
 	if !run.WorkflowRunID.Valid {
 		inputs, coverage, missing, err = r.resolver.Resolve(ctx, ResolveRequest{EnterpriseID: run.EnterpriseID, OrgUnitID: run.OrgUnitID, WindowStart: run.WindowStart.Time, WindowEnd: run.WindowEnd.Time, Timezone: run.Timezone, Sources: policy.InputSources, MaskingRules: policy.MaskingRules, Visibility: []string{string(policy.VisibilityLevel), policy.OrgUnitID}, SpaceID: space.ID})
 		if err != nil {
 			return fmt.Errorf("resolve Dream inputs: %w", err)
-		}
-		for _, input := range inputs {
-			if err := r.store.InsertDreamInput(ctx, db.InsertDreamInputParams{RunID: runID, SourceType: string(input.SourceType), SourceID: input.SourceID}); err != nil {
-				return err
-			}
 		}
 		dreamExec.Input = WorkflowInput{OrgUnitID: run.OrgUnitID, WindowStart: run.WindowStart.Time, WindowEnd: run.WindowEnd.Time, Inputs: inputs, Coverage: coverage, Missing: missing, RiskSignalRules: policy.RiskSignalRules}
 	}
@@ -482,9 +479,12 @@ func (r *Runner) ReconcileWorkflowLifecycle(ctx context.Context) error {
 // RecoverExpiredExecutions republishes Dream claims that expired before a
 // workflow was bound. Bound runs are recovered at the workflow layer.
 func (r *Runner) RecoverExpiredExecutions(ctx context.Context) error {
-	ids, err := r.store.RecoverExpiredUnboundDreamRuns(ctx, 100)
-	if err != nil {
+	if _, err := r.store.RecoverExpiredUnboundDreamRuns(ctx, 100); err != nil {
 		return fmt.Errorf("recover expired unbound Dream runs: %w", err)
+	}
+	ids, err := r.store.ListPendingDreamRuns(ctx, 100)
+	if err != nil {
+		return fmt.Errorf("list pending Dream runs: %w", err)
 	}
 	var failures []error
 	for _, id := range ids {

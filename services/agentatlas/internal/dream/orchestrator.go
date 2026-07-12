@@ -57,6 +57,7 @@ type DreamExecution struct {
 	Workflow              sdkdream.WorkflowRef
 	Input                 WorkflowInput
 	ExistingWorkflowRunID string
+	ExecutionOwner        string
 }
 
 type ExecutionResult struct {
@@ -85,12 +86,15 @@ func (o *Orchestrator) Run(ctx context.Context, execution DreamExecution) (Execu
 	if execution.Workflow.ID == "" || execution.Workflow.Version < 1 {
 		return ExecutionResult{}, fmt.Errorf("Dream execution requires a pinned published workflow")
 	}
-	verified := workflow.VerifiedDreamContext{EnterpriseID: execution.EnterpriseID, DreamRunID: execution.DreamRunID, PolicyID: execution.PolicyID, PolicyVersion: execution.PolicyVersion, WorkflowID: execution.Workflow.ID, WorkflowVersion: execution.Workflow.Version}
+	verified := workflow.VerifiedDreamContext{EnterpriseID: execution.EnterpriseID, DreamRunID: execution.DreamRunID, PolicyID: execution.PolicyID, PolicyVersion: execution.PolicyVersion, WorkflowID: execution.Workflow.ID, WorkflowVersion: execution.Workflow.Version, DreamExecutionOwner: execution.ExecutionOwner}
 	var result workflow.RunResult
 	var err error
 	if execution.ExistingWorkflowRunID != "" {
 		result, err = o.runtime.DreamResult(ctx, execution.ExistingWorkflowRunID, verified)
 	} else {
+		if execution.ExecutionOwner == "" {
+			return ExecutionResult{}, fmt.Errorf("Dream execution owner is required")
+		}
 		if err := validateWorkflowInput(execution.Input); err != nil {
 			return ExecutionResult{}, err
 		}

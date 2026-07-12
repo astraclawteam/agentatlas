@@ -142,6 +142,9 @@ WHERE id IN (
 )
 RETURNING id;
 
+-- name: ListPendingDreamRuns :many
+SELECT id FROM dream_runs WHERE status='pending' ORDER BY created_at LIMIT sqlc.arg(result_limit);
+
 -- name: GetLatestDreamRunForPolicy :one
 SELECT * FROM dream_runs WHERE policy_id = $1 ORDER BY window_end DESC LIMIT 1;
 

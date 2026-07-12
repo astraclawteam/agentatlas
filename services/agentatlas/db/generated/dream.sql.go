@@ -1376,6 +1376,30 @@ func (q *Queries) ListDreamSummariesBySpace(ctx context.Context, arg ListDreamSu
 	return items, nil
 }
 
+const listPendingDreamRuns = `-- name: ListPendingDreamRuns :many
+SELECT id FROM dream_runs WHERE status='pending' ORDER BY created_at LIMIT $1
+`
+
+func (q *Queries) ListPendingDreamRuns(ctx context.Context, resultLimit int32) ([]string, error) {
+	rows, err := q.db.Query(ctx, listPendingDreamRuns, resultLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPendingDreamWorkflowLifecycle = `-- name: ListPendingDreamWorkflowLifecycle :many
 SELECT id, enterprise_id, dream_run_id, workflow_run_id, status, lifecycle_error, attempts, last_error, created_at, updated_at, processed_at FROM dream_workflow_lifecycle_outbox
 WHERE processed_at IS NULL

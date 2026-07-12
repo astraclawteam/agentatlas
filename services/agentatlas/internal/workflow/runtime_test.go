@@ -51,7 +51,7 @@ func TestDreamPauseRemainsDurableWhenEagerLifecycleFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.dreamRuns["dr_pause"] = db.DreamRun{ID: "dr_pause", EnterpriseID: "ent_1", PolicyID: "p_1", PolicyVersion: 1,
-		OrgUnitID: "department:one", WorkflowID: pgtype.Text{String: id, Valid: true}, WorkflowVersion: pgtype.Int4{Int32: 1, Valid: true}, Status: "running"}
+		OrgUnitID: "department:one", WorkflowID: pgtype.Text{String: id, Valid: true}, WorkflowVersion: pgtype.Int4{Int32: 1, Valid: true}, Status: "running", ExecutionOwner: pgtype.Text{String: "dream-owner", Valid: true}, ExecutionLeaseExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(time.Minute), Valid: true}}
 	rt.SetDreamLifecycleHook(func(_ context.Context, result RunResult) error {
 		if result.Status == RunWaitingConfirmation {
 			return errors.New("injected reconciliation failure")
@@ -60,7 +60,7 @@ func TestDreamPauseRemainsDurableWhenEagerLifecycleFails(t *testing.T) {
 	})
 	result, err := rt.RunDreamPublished(ctx, "ent_1", id, 1, map[string]any{}, VerifiedDreamContext{
 		EnterpriseID: "ent_1", DreamRunID: "dr_pause", PolicyID: "p_1", PolicyVersion: 1,
-		WorkflowID: id, WorkflowVersion: 1, OrgUnitID: "department:one",
+		WorkflowID: id, WorkflowVersion: 1, OrgUnitID: "department:one", DreamExecutionOwner: "dream-owner",
 	})
 	if err != nil || result.Status != RunWaitingConfirmation || store.runs[result.RunID].Status != RunWaitingConfirmation {
 		t.Fatalf("pause was not durably persisted: result=%+v row=%+v err=%v", result, store.runs[result.RunID], err)
@@ -80,14 +80,14 @@ func TestDreamWorkflowBindingRejectsForgedPolicyOrOrg(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.dreamRuns["dr_bound"] = db.DreamRun{ID: "dr_bound", EnterpriseID: "ent_1", PolicyID: "p_real", PolicyVersion: 7,
-		OrgUnitID: "department:real", WorkflowID: pgtype.Text{String: id, Valid: true}, WorkflowVersion: pgtype.Int4{Int32: 1, Valid: true}, Status: "running"}
+		OrgUnitID: "department:real", WorkflowID: pgtype.Text{String: id, Valid: true}, WorkflowVersion: pgtype.Int4{Int32: 1, Valid: true}, Status: "running", ExecutionOwner: pgtype.Text{String: "dream-owner", Valid: true}, ExecutionLeaseExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(time.Minute), Valid: true}}
 	for name, mutate := range map[string]func(*VerifiedDreamContext){
 		"policy": func(d *VerifiedDreamContext) { d.PolicyID = "p_forged" },
 		"org":    func(d *VerifiedDreamContext) { d.OrgUnitID = "department:forged" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			dream := VerifiedDreamContext{EnterpriseID: "ent_1", DreamRunID: "dr_bound", PolicyID: "p_real", PolicyVersion: 7,
-				WorkflowID: id, WorkflowVersion: 1, OrgUnitID: "department:real"}
+				WorkflowID: id, WorkflowVersion: 1, OrgUnitID: "department:real", DreamExecutionOwner: "dream-owner"}
 			mutate(&dream)
 			if _, err := rt.RunDreamPublished(ctx, "ent_1", id, 1, map[string]any{}, dream); err == nil {
 				t.Fatal("forged Dream context created a workflow run")
@@ -176,7 +176,7 @@ func (f *fakeStore) CreateWorkflowRun(_ context.Context, arg db.CreateWorkflowRu
 
 func (f *fakeStore) CreateBoundDreamWorkflowRun(_ context.Context, arg db.CreateBoundDreamWorkflowRunParams) (db.CreateBoundDreamWorkflowRunRow, error) {
 	dream, ok := f.dreamRuns[arg.DreamRunID]
-	if !ok || dream.EnterpriseID != arg.EnterpriseID || dream.PolicyID != arg.PolicyID || dream.PolicyVersion != arg.PolicyVersion ||
+	if !ok || dream.EnterpriseID != arg.EnterpriseID || dream.PolicyID != arg.PolicyID || dream.PolicyVersion != arg.PolicyVersion || dream.ExecutionOwner != arg.DreamExecutionOwner ||
 		dream.OrgUnitID != arg.OrgUnitID || dream.WorkflowID != arg.WorkflowID || dream.WorkflowVersion != arg.Version || dream.Status != "running" || dream.WorkflowRunID.Valid {
 		return db.CreateBoundDreamWorkflowRunRow{}, pgx.ErrNoRows
 	}
@@ -314,10 +314,10 @@ func setupBoundDreamRuntime(t *testing.T, workflowID string, nodes []sdkworkflow
 		t.Fatal(err)
 	}
 	dream := VerifiedDreamContext{EnterpriseID: "ent_atomic", DreamRunID: "dr_" + workflowID, PolicyID: "policy_atomic", PolicyVersion: 1,
-		WorkflowID: id, WorkflowVersion: 1, OrgUnitID: "department:atomic"}
+		WorkflowID: id, WorkflowVersion: 1, OrgUnitID: "department:atomic", DreamExecutionOwner: "dream-owner"}
 	store.dreamRuns[dream.DreamRunID] = db.DreamRun{ID: dream.DreamRunID, EnterpriseID: dream.EnterpriseID, PolicyID: dream.PolicyID,
 		PolicyVersion: dream.PolicyVersion, OrgUnitID: dream.OrgUnitID, WorkflowID: pgtype.Text{String: id, Valid: true},
-		WorkflowVersion: pgtype.Int4{Int32: 1, Valid: true}, Status: "running"}
+		WorkflowVersion: pgtype.Int4{Int32: 1, Valid: true}, Status: "running", ExecutionOwner: pgtype.Text{String: "dream-owner", Valid: true}, ExecutionLeaseExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(time.Minute), Valid: true}}
 	return store, svc, rt, dream
 }
 
@@ -611,13 +611,13 @@ func TestFailedDreamWorkflowNotifiesTerminalLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.dreamRuns["dr_1"] = db.DreamRun{ID: "dr_1", EnterpriseID: "ent_1", PolicyID: "p_1", PolicyVersion: 1,
-		OrgUnitID: "department:one", WorkflowID: pgtype.Text{String: id, Valid: true}, WorkflowVersion: pgtype.Int4{Int32: 1, Valid: true}, Status: "running"}
+		OrgUnitID: "department:one", WorkflowID: pgtype.Text{String: id, Valid: true}, WorkflowVersion: pgtype.Int4{Int32: 1, Valid: true}, Status: "running", ExecutionOwner: pgtype.Text{String: "dream-owner", Valid: true}, ExecutionLeaseExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(time.Minute), Valid: true}}
 	var statuses []string
 	rt.SetDreamLifecycleHook(func(_ context.Context, result RunResult) error {
 		statuses = append(statuses, result.Status)
 		return nil
 	})
-	_, err = rt.RunDreamPublished(ctx, "ent_1", id, 1, map[string]any{}, VerifiedDreamContext{EnterpriseID: "ent_1", DreamRunID: "dr_1", PolicyID: "p_1", PolicyVersion: 1, WorkflowID: id, WorkflowVersion: 1, OrgUnitID: "department:one"})
+	_, err = rt.RunDreamPublished(ctx, "ent_1", id, 1, map[string]any{}, VerifiedDreamContext{EnterpriseID: "ent_1", DreamRunID: "dr_1", PolicyID: "p_1", PolicyVersion: 1, WorkflowID: id, WorkflowVersion: 1, OrgUnitID: "department:one", DreamExecutionOwner: "dream-owner"})
 	if err == nil || !reflect.DeepEqual(statuses, []string{RunFailed}) {
 		t.Fatalf("statuses=%v err=%v runs=%d", statuses, err, len(store.runs))
 	}

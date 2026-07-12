@@ -57,11 +57,19 @@ WITH target AS (
       AND dream.workflow_version = $7
       AND dream.status = 'running'
       AND dream.workflow_run_id IS NULL
+      AND dream.execution_owner = $8
+      AND dream.execution_lease_expires_at > now()
     FOR UPDATE
+), persisted_inputs AS (
+    INSERT INTO dream_inputs(run_id,source_type,source_id)
+    SELECT target.id, item->>'source_type', item->>'source_id'
+    FROM target, jsonb_array_elements($9::jsonb->'inputs') AS item
+    ON CONFLICT (run_id,source_type,source_id) DO NOTHING
+    RETURNING run_id
 ), created AS (
     INSERT INTO workflow_runs (id, workflow_id, version, enterprise_id, status, input, output, execution_owner, execution_lease_expires_at)
-    SELECT $8, $6, $7, $2,
-           $9, $10, $11, $12, now()+interval '2 minutes'
+    SELECT $10, $6, $7, $2,
+           $11, $9::jsonb, $12::jsonb, $13, now()+interval '2 minutes'
     FROM target
     RETURNING id, workflow_id, version, enterprise_id, status, input, output, started_at, finished_at, execution_owner, execution_lease_expires_at, state_revision
 ), bound AS (
@@ -75,18 +83,19 @@ SELECT created.id, created.workflow_id, created.version, created.enterprise_id, 
 `
 
 type CreateBoundDreamWorkflowRunParams struct {
-	DreamRunID     string      `json:"dream_run_id"`
-	EnterpriseID   string      `json:"enterprise_id"`
-	PolicyID       string      `json:"policy_id"`
-	PolicyVersion  int32       `json:"policy_version"`
-	OrgUnitID      string      `json:"org_unit_id"`
-	WorkflowID     pgtype.Text `json:"workflow_id"`
-	Version        pgtype.Int4 `json:"version"`
-	ID             string      `json:"id"`
-	Status         string      `json:"status"`
-	Input          []byte      `json:"input"`
-	Output         []byte      `json:"output"`
-	ExecutionOwner pgtype.Text `json:"execution_owner"`
+	DreamRunID          string      `json:"dream_run_id"`
+	EnterpriseID        string      `json:"enterprise_id"`
+	PolicyID            string      `json:"policy_id"`
+	PolicyVersion       int32       `json:"policy_version"`
+	OrgUnitID           string      `json:"org_unit_id"`
+	WorkflowID          pgtype.Text `json:"workflow_id"`
+	Version             pgtype.Int4 `json:"version"`
+	DreamExecutionOwner pgtype.Text `json:"dream_execution_owner"`
+	Input               []byte      `json:"input"`
+	ID                  string      `json:"id"`
+	Status              string      `json:"status"`
+	Output              []byte      `json:"output"`
+	ExecutionOwner      pgtype.Text `json:"execution_owner"`
 }
 
 type CreateBoundDreamWorkflowRunRow struct {
@@ -113,9 +122,10 @@ func (q *Queries) CreateBoundDreamWorkflowRun(ctx context.Context, arg CreateBou
 		arg.OrgUnitID,
 		arg.WorkflowID,
 		arg.Version,
+		arg.DreamExecutionOwner,
+		arg.Input,
 		arg.ID,
 		arg.Status,
-		arg.Input,
 		arg.Output,
 		arg.ExecutionOwner,
 	)

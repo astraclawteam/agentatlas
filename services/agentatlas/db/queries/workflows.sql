@@ -50,11 +50,19 @@ WITH target AS (
       AND dream.workflow_version = sqlc.arg(version)
       AND dream.status = 'running'
       AND dream.workflow_run_id IS NULL
+      AND dream.execution_owner = sqlc.arg(dream_execution_owner)
+      AND dream.execution_lease_expires_at > now()
     FOR UPDATE
+), persisted_inputs AS (
+    INSERT INTO dream_inputs(run_id,source_type,source_id)
+    SELECT target.id, item->>'source_type', item->>'source_id'
+    FROM target, jsonb_array_elements(sqlc.arg(input)::jsonb->'inputs') AS item
+    ON CONFLICT (run_id,source_type,source_id) DO NOTHING
+    RETURNING run_id
 ), created AS (
     INSERT INTO workflow_runs (id, workflow_id, version, enterprise_id, status, input, output, execution_owner, execution_lease_expires_at)
     SELECT sqlc.arg(id), sqlc.arg(workflow_id), sqlc.arg(version), sqlc.arg(enterprise_id),
-           sqlc.arg(status), sqlc.arg(input), sqlc.arg(output), sqlc.arg(execution_owner), now()+interval '2 minutes'
+           sqlc.arg(status), sqlc.arg(input)::jsonb, sqlc.arg(output)::jsonb, sqlc.arg(execution_owner), now()+interval '2 minutes'
     FROM target
     RETURNING *
 ), bound AS (
