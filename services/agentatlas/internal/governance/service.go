@@ -64,6 +64,11 @@ type PublishOperation struct {
 	Result      PublishedVersion
 	Complete    bool
 }
+type DecisionOperation struct {
+	ChangeID, ActorUserID, Decision, PayloadHash, AuditRefID string
+	Revision                                                 int32
+	Complete                                                 bool
+}
 
 type Store interface {
 	Create(context.Context, Record) (Record, error)
@@ -71,6 +76,8 @@ type Store interface {
 	List(context.Context, string, string, int) ([]Record, error)
 	Update(context.Context, string, string, int32, json.RawMessage) (Record, error)
 	SaveReview(context.Context, string, Record) error
+	BeginDecision(context.Context, string, string, Actor, Record, DecisionInput, string) (DecisionOperation, bool, error)
+	FinalizeDecision(context.Context, string, string, Actor, Record, DecisionInput, string) error
 	BeginPublish(context.Context, string, string, string, int32, string) (PublishOperation, bool, error)
 	FinalizePublish(context.Context, string, string, Actor, Record, string) (PublishedVersion, error)
 }
@@ -95,7 +102,7 @@ type decisionAuthorizer interface {
 	AuthorizeDecision(context.Context, Actor, Record, DecisionInput) error
 }
 type decisionAuditAppender interface {
-	AppendDecision(context.Context, Actor, Record, DecisionInput) error
+	AppendDecision(context.Context, Actor, Record, DecisionInput, string) (string, error)
 }
 
 type Service struct {
@@ -273,16 +280,13 @@ func (s *Service) Submit(ctx context.Context, actor Actor, id string) (model.Rev
 	return route, nil
 }
 
-func (s *Service) Decide(ctx context.Context, actor Actor, id string, in DecisionInput) error {
-	if (in.Decision != "approve" && in.Decision != "reject") || len(in.Comment) > 4000 {
+func (s *Service) Decide(ctx context.Context, actor Actor, id, idempotencyKey string, in DecisionInput) error {
+	if len(idempotencyKey) < 16 || len(idempotencyKey) > 128 || (in.Decision != "approve" && in.Decision != "reject") || len(in.Comment) > 4000 {
 		return ErrInvalidState
 	}
 	rec, err := s.store.Get(ctx, actor.EnterpriseID, id)
 	if err != nil {
 		return err
-	}
-	if rec.Draft.State != model.ChangeSubmitted || rec.Route.State != model.RoutePending {
-		return ErrInvalidState
 	}
 	var authErr error
 	if authorizer, ok := s.authorizer.(decisionAuthorizer); ok {
@@ -309,20 +313,41 @@ func (s *Service) Decide(ctx context.Context, actor Actor, id string, in Decisio
 	default:
 		return ErrForbidden
 	}
-	rec.Decision, rec.DecisionBy, rec.DecisionComment = in.Decision, actor.UserID, in.Comment
+	payloadHash := decisionPayloadHash(actor, rec, in)
+	op, existing, err := s.store.BeginDecision(ctx, actor.EnterpriseID, idempotencyKey, actor, rec, in, payloadHash)
+	if err != nil {
+		return err
+	}
+	if existing {
+		if op.ChangeID != id || op.Revision != rec.Draft.Revision || op.ActorUserID != actor.UserID || op.Decision != in.Decision || op.PayloadHash != payloadHash {
+			return ErrConflict
+		}
+		if op.Complete {
+			return nil
+		}
+	}
+	auditRef := stableID("decision", actor.EnterpriseID, idempotencyKey)
 	if auditor, ok := s.audit.(decisionAuditAppender); ok {
-		if err := auditor.AppendDecision(ctx, actor, rec, in); err != nil {
+		auditRef, err = auditor.AppendDecision(ctx, actor, rec, in, idempotencyKey)
+		if err != nil {
 			return err
 		}
 	}
-	if in.Decision == "approve" {
-		rec.Draft.State = model.ChangeApproved
-		rec.Route.State = model.RouteApproved
-	} else {
-		rec.Draft.State = model.ChangeRejected
-		rec.Route.State = model.RouteRejected
+	if auditRef == "" {
+		return ErrInvalidState
 	}
-	return s.store.SaveReview(ctx, actor.EnterpriseID, rec)
+	return s.store.FinalizeDecision(ctx, actor.EnterpriseID, idempotencyKey, actor, rec, in, auditRef)
+}
+
+func decisionPayloadHash(actor Actor, rec Record, in DecisionInput) string {
+	orgPath, _ := json.Marshal(rec.Route.OrgPath)
+	return stableID("",
+		actor.EnterpriseID, actor.UserID, fmt.Sprint(actor.OrgVersion),
+		rec.Draft.ChangeID, fmt.Sprint(rec.Draft.Revision), rec.Draft.OrgUnitID,
+		string(rec.Draft.ResourceType), rec.Draft.ResourceID, string(rec.Draft.Action),
+		string(rec.Route.Mode), rec.Route.ReviewerUserID, rec.Route.Queue, string(orgPath),
+		in.Decision, in.Comment,
+	)
 }
 
 func (s *Service) Publish(ctx context.Context, actor Actor, id, key string) (PublishedVersion, error) {

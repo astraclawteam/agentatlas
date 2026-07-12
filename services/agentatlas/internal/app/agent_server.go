@@ -72,6 +72,50 @@ func ticketGuard(client nexus.Client) func(http.Handler) http.Handler {
 	}
 }
 
+func rejectScopedTicket(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized", "no verified actor")
+			return
+		}
+		if ticketIsScoped(actor.Ticket) {
+			writeError(w, http.StatusForbidden, "ticket_scope_denied", "scoped ticket is not valid for this route")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func exactScopedWorkflowPublish(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized", "no verified actor")
+			return
+		}
+		ticket := actor.Ticket
+		if !ticketIsScoped(ticket) || ticket.OrgVersion < 1 || ticket.ResourceType != "workflow" || ticket.ResourceID != chi.URLParam(r, "id") || len(ticket.OrgUnitIDs) == 0 || !containsTicketAction(ticket.AllowedActions, "workflow.edit") || !containsTicketAction(ticket.AllowedActions, "publish") {
+			writeError(w, http.StatusForbidden, "ticket_scope_denied", "ticket is not bound to this workflow publication")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func ticketIsScoped(ticket nexus.VerifyTicketResponse) bool {
+	return ticket.OrgVersion > 0 || len(ticket.OrgUnitIDs) > 0 || ticket.ResourceType != "" || ticket.ResourceID != "" || len(ticket.AllowedActions) > 0 || ticket.ReviewMode != "" || ticket.Queue != ""
+}
+
+func containsTicketAction(actions []string, want string) bool {
+	for _, action := range actions {
+		if action == want {
+			return true
+		}
+	}
+	return false
+}
+
 // NewAgentRouter builds the atlas-agent HTTP surface. The /v1 route group is
 // ticket-guarded (fail closed); handlers are backed by the real services.
 func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
@@ -129,33 +173,36 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(ticketGuard(deps.Nexus))
-		r.Post("/workflows", wf.create)
-		r.Get("/workflows", wf.list)
-		r.Get("/workflows/{id}", wf.get)
-		r.Put("/workflows/{id}", wf.update)
-		r.Get("/workflows/{id}/diff", wf.diff)
-		r.Post("/workflows/{id}/publish", wf.publish)
-		r.Post("/workflows/{id}/runs", wf.startRun)
-		r.Post("/dream-policies", dp.create)
-		r.Get("/dream-policies", dp.list)
-		r.Put("/dream-policies/{id}", dp.update)
-		r.Post("/dream-policies/{id}/check", dp.check)
-		r.Post("/dream-policies/{id}/review", dp.review)
-		r.Post("/dream-policies/{id}/decisions", dp.decide)
-		r.Post("/dream-policies/{id}/publish", dp.publish)
-		r.Post("/dream-policies/{id}/disable", dp.disable)
-		r.Post("/dream-policies/{id}/backfills", dp.backfill)
-		r.Get("/dream/overview", dr.overview)
-		r.Get("/dream/runs", dr.list)
-		r.Get("/dream/runs/{id}", dr.detail)
-		r.Post("/dream/runs/{id}/annotations", dr.annotate)
-		r.Post("/dream/runs/{id}/reruns", dr.rerunRun)
-		r.Post("/dream/runs/{id}/evidence-access", dr.evidenceAccess)
-		r.Post("/method-outlines", mo.create)
-		r.Get("/method-outlines", mo.list)
-		r.Post("/agent/runs", ar.start)
-		r.Post("/agent/runs/{id}/messages", ar.message)
-		r.Post("/agent/runs/{id}/confirmations", ar.confirm)
+		r.Group(func(r chi.Router) {
+			r.Use(rejectScopedTicket)
+			r.Post("/workflows", wf.create)
+			r.Get("/workflows", wf.list)
+			r.Get("/workflows/{id}", wf.get)
+			r.Put("/workflows/{id}", wf.update)
+			r.Get("/workflows/{id}/diff", wf.diff)
+			r.Post("/workflows/{id}/runs", wf.startRun)
+			r.Post("/dream-policies", dp.create)
+			r.Get("/dream-policies", dp.list)
+			r.Put("/dream-policies/{id}", dp.update)
+			r.Post("/dream-policies/{id}/check", dp.check)
+			r.Post("/dream-policies/{id}/review", dp.review)
+			r.Post("/dream-policies/{id}/decisions", dp.decide)
+			r.Post("/dream-policies/{id}/publish", dp.publish)
+			r.Post("/dream-policies/{id}/disable", dp.disable)
+			r.Post("/dream-policies/{id}/backfills", dp.backfill)
+			r.Get("/dream/overview", dr.overview)
+			r.Get("/dream/runs", dr.list)
+			r.Get("/dream/runs/{id}", dr.detail)
+			r.Post("/dream/runs/{id}/annotations", dr.annotate)
+			r.Post("/dream/runs/{id}/reruns", dr.rerunRun)
+			r.Post("/dream/runs/{id}/evidence-access", dr.evidenceAccess)
+			r.Post("/method-outlines", mo.create)
+			r.Get("/method-outlines", mo.list)
+			r.Post("/agent/runs", ar.start)
+			r.Post("/agent/runs/{id}/messages", ar.message)
+			r.Post("/agent/runs/{id}/confirmations", ar.confirm)
+		})
+		r.With(exactScopedWorkflowPublish).Post("/workflows/{id}/publish", wf.publish)
 	})
 	return r
 }

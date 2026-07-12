@@ -64,7 +64,7 @@ func TestAdminQueueDecisionBindsModeQueueAndAuditsTransition(t *testing.T) {
 	if client.request.Action != "workflow.approve_high_risk" || client.request.ReviewMode != string(model.ReviewAdminQueue) || client.request.Queue != "enterprise_knowledge_admin" {
 		t.Fatalf("unbound decision request: %+v", client.request)
 	}
-	if err := (NexusAuditAppender{Client: client}).AppendDecision(context.Background(), actor, rec, decision); err != nil {
+	if _, err := (NexusAuditAppender{Client: client}).AppendDecision(context.Background(), actor, rec, decision, "decision-operation-key-001"); err != nil {
 		t.Fatalf("decision audit: %v", err)
 	}
 	if client.auditRequest.Action != nexus.AuditGovernanceChangeDecided || client.auditRequest.OrgVersion != 8 || client.auditRequest.OrgUnitID != "team" || client.auditRequest.AuthorizedAction != "workflow.approve_high_risk" || client.auditRequest.ReviewMode != string(model.ReviewAdminQueue) || client.auditRequest.Queue != "enterprise_knowledge_admin" || client.auditRequest.Details["review_mode"] != string(model.ReviewAdminQueue) || client.auditRequest.Details["queue"] != "enterprise_knowledge_admin" {

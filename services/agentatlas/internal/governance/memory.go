@@ -4,22 +4,25 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
 
 type MemoryStore struct {
-	mu         sync.Mutex
-	now        func() time.Time
-	records    map[string]Record
-	operations map[string]PublishOperation
+	mu               sync.Mutex
+	now              func() time.Time
+	records          map[string]Record
+	operations       map[string]PublishOperation
+	decisions        map[string]DecisionOperation
+	decisionByChange map[string]string
 }
 
 func NewMemoryStore(now func() time.Time) *MemoryStore {
 	if now == nil {
 		now = time.Now
 	}
-	return &MemoryStore{now: now, records: map[string]Record{}, operations: map[string]PublishOperation{}}
+	return &MemoryStore{now: now, records: map[string]Record{}, operations: map[string]PublishOperation{}, decisions: map[string]DecisionOperation{}, decisionByChange: map[string]string{}}
 }
 func key(ent, id string) string { return ent + "\x00" + id }
 func (s *MemoryStore) Create(_ context.Context, r Record) (Record, error) {
@@ -77,10 +80,65 @@ func (s *MemoryStore) SaveReview(_ context.Context, ent string, r Record) error 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	k := key(ent, r.Draft.ChangeID)
-	if _, ok := s.records[k]; !ok {
+	current, ok := s.records[k]
+	if !ok {
 		return ErrNotFound
 	}
+	if r.Draft.State == "submitted" && (current.Draft.State != "draft" || current.Draft.Revision != r.Draft.Revision) {
+		return ErrConflict
+	}
 	s.records[k] = r
+	return nil
+}
+func (s *MemoryStore) BeginDecision(_ context.Context, ent, idem string, actor Actor, rec Record, in DecisionInput, payload string) (DecisionOperation, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	idemKey := key(ent, idem)
+	if op, ok := s.decisions[idemKey]; ok {
+		return op, true, nil
+	}
+	recordKey := key(ent, rec.Draft.ChangeID)
+	current, ok := s.records[recordKey]
+	if !ok {
+		return DecisionOperation{}, false, ErrNotFound
+	}
+	semanticKey := key(ent, rec.Draft.ChangeID+"\x00"+fmt.Sprint(rec.Draft.Revision))
+	if _, exists := s.decisionByChange[semanticKey]; exists || current.Draft.State != "submitted" || current.Route.State != "pending" || current.Draft.Revision != rec.Draft.Revision {
+		return DecisionOperation{}, false, ErrConflict
+	}
+	op := DecisionOperation{ChangeID: rec.Draft.ChangeID, Revision: rec.Draft.Revision, ActorUserID: actor.UserID, Decision: in.Decision, PayloadHash: payload}
+	s.decisions[idemKey] = op
+	s.decisionByChange[semanticKey] = idemKey
+	return op, false, nil
+}
+func (s *MemoryStore) FinalizeDecision(_ context.Context, ent, idem string, actor Actor, rec Record, in DecisionInput, auditRef string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	idemKey := key(ent, idem)
+	op, ok := s.decisions[idemKey]
+	if !ok || op.ChangeID != rec.Draft.ChangeID || op.Revision != rec.Draft.Revision || op.ActorUserID != actor.UserID || op.Decision != in.Decision || auditRef == "" {
+		return ErrConflict
+	}
+	if op.Complete {
+		return nil
+	}
+	recordKey := key(ent, rec.Draft.ChangeID)
+	current, ok := s.records[recordKey]
+	if !ok {
+		return ErrNotFound
+	}
+	if current.Draft.State != "submitted" || current.Route.State != "pending" || current.Draft.Revision != rec.Draft.Revision {
+		return ErrConflict
+	}
+	current.Decision, current.DecisionBy, current.DecisionComment = in.Decision, actor.UserID, in.Comment
+	if in.Decision == "approve" {
+		current.Draft.State, current.Route.State = "approved", "approved"
+	} else {
+		current.Draft.State, current.Route.State = "rejected", "rejected"
+	}
+	s.records[recordKey] = current
+	op.Complete, op.AuditRefID = true, auditRef
+	s.decisions[idemKey] = op
 	return nil
 }
 func (s *MemoryStore) BeginPublish(_ context.Context, ent, idem, id string, rev int32, payload string) (PublishOperation, bool, error) {

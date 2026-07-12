@@ -142,15 +142,15 @@ func (a NexusAuditAppender) Append(ctx context.Context, actor Actor, rec Record,
 	return out.AuditRefID, nil
 }
 
-func (a NexusAuditAppender) AppendDecision(ctx context.Context, actor Actor, rec Record, in DecisionInput) error {
+func (a NexusAuditAppender) AppendDecision(ctx context.Context, actor Actor, rec Record, in DecisionInput, operationKey string) (string, error) {
 	if rec.Route.Mode != model.ReviewAdminQueue {
-		return nil
+		return stableID("decision", actor.EnterpriseID, operationKey), nil
 	}
 	if a.Client == nil || (actor.UpstreamAccessToken == "" && actor.UpstreamTicketID == "") {
-		return ErrForbidden
+		return "", ErrForbidden
 	}
 	req := nexus.AppendAuditEvidenceRequest{
-		IdempotencyKey: stableID("decision", actor.EnterpriseID, rec.Draft.ChangeID, fmt.Sprint(rec.Draft.Revision), actor.UserID, in.Decision),
+		IdempotencyKey: stableID("decision", actor.EnterpriseID, operationKey),
 		TicketID:       actor.UpstreamTicketID,
 		EnterpriseID:   actor.EnterpriseID,
 		Action:         nexus.AuditGovernanceChangeDecided,
@@ -173,9 +173,9 @@ func (a NexusAuditAppender) AppendDecision(ctx context.Context, actor Actor, rec
 		out, err = a.Client.AppendAuditEvidence(ctx, req)
 	}
 	if err != nil || out.AuditRefID == "" {
-		return fmt.Errorf("mandatory governance decision audit: %w", err)
+		return "", fmt.Errorf("mandatory governance decision audit: %w", err)
 	}
-	return nil
+	return out.AuditRefID, nil
 }
 func authorizeNexus(ctx context.Context, client nexus.GovernanceClient, actor Actor, req nexus.BrowserAuthorizationRequest) (nexus.BrowserAuthorizationDecision, error) {
 	if actor.UpstreamAccessToken != "" {

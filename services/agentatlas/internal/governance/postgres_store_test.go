@@ -13,6 +13,7 @@ func TestPostgresGovernedPublishFinalizesOneTransactionAfterAuditReceipt(t *test
 		t.Fatal(err)
 	}
 	src := strings.ToLower(string(raw))
+	src = src[strings.Index(src, "func (s *postgresstore) finalizepublish"):]
 	begin := strings.Index(src, "begin(ctx")
 	audit := strings.Index(src, "audit_ref_id")
 	version := strings.Index(src, "insert into change_versions")

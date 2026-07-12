@@ -125,7 +125,12 @@ func (h *changeHandler) decide(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "bad_request", "invalid JSON")
 		return
 	}
-	err := h.service.Decide(r.Context(), a, chi.URLParam(r, "id"), governance.DecisionInput{Decision: in.Decision, Comment: in.Comment})
+	key := r.Header.Get("Idempotency-Key")
+	if len(key) < 16 || len(key) > 128 {
+		writeError(w, http.StatusBadRequest, "bad_request", "Idempotency-Key must be 16 to 128 characters")
+		return
+	}
+	err := h.service.Decide(r.Context(), a, chi.URLParam(r, "id"), key, governance.DecisionInput{Decision: in.Decision, Comment: in.Comment})
 	writeChangeResult(w, 204, nil, err)
 }
 func (h *changeHandler) publish(w http.ResponseWriter, r *http.Request) {
@@ -146,6 +151,8 @@ func writeChangeResult(w http.ResponseWriter, status int, v any, err error) {
 	switch {
 	case errors.As(err, &conflict):
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "revision_conflict", "current_revision": conflict.CurrentRevision, "diff": conflict.Diff})
+	case errors.Is(err, governance.ErrConflict):
+		writeError(w, http.StatusConflict, "decision_conflict", err.Error())
 	case errors.Is(err, governance.ErrForbidden):
 		writeError(w, 403, "forbidden", err.Error())
 	case errors.Is(err, governance.ErrNotFound):

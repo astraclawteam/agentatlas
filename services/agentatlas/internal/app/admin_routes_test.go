@@ -648,7 +648,7 @@ func adminMock() *nexusclient.Mock {
 	mock := nexusclient.NewMock()
 	mock.Tickets["tick_admin"] = nexus.VerifyTicketResponse{
 		Valid: true, EnterpriseID: "ent_1", ActorUserID: "admin",
-		Scopes: []string{"admin"}, OrgVersion: 1, OrgUnitIDs: []string{"team", "company"}, ExpiresAt: time.Now().Add(time.Hour),
+		Scopes: []string{"admin"}, ExpiresAt: time.Now().Add(time.Hour),
 	}
 	mock.Tickets["tick_other"] = nexus.VerifyTicketResponse{
 		Valid: true, EnterpriseID: "ent_1", ActorUserID: "u_li",
@@ -792,6 +792,11 @@ func TestWorkflowCreatePublishRoute(t *testing.T) {
 	if wfID == "" {
 		t.Fatalf("create response: %v", created)
 	}
+	mock.Tickets["tick_admin"] = nexus.VerifyTicketResponse{
+		Valid: true, EnterpriseID: "ent_1", ActorUserID: "admin", Scopes: []string{"admin"},
+		OrgVersion: 1, OrgUnitIDs: []string{"team"}, ResourceType: "workflow", ResourceID: wfID,
+		AllowedActions: []string{"workflow.edit", "publish"}, ExpiresAt: time.Now().Add(time.Hour),
+	}
 
 	resp = postJSONReq(t, srv.URL+"/v1/workflows/"+wfID+"/publish", "tick_admin", map[string]any{"org_unit_id": "team"})
 	if resp.StatusCode != http.StatusAccepted {
@@ -822,6 +827,11 @@ func TestWorkflowCompatibilityPublishRejectsChangeForDifferentWorkflow(t *testin
 		return decodeBody(t, resp)["workflow_id"].(string)
 	}
 	wfA, wfB := create("A"), create("B")
+	mock.Tickets["tick_admin"] = nexus.VerifyTicketResponse{
+		Valid: true, EnterpriseID: "ent_1", ActorUserID: "admin", Scopes: []string{"admin"},
+		OrgVersion: 1, OrgUnitIDs: []string{"team"}, ResourceType: "workflow", ResourceID: wfA,
+		AllowedActions: []string{"workflow.edit", "publish"}, ExpiresAt: time.Now().Add(time.Hour),
+	}
 	resp := postJSONReq(t, srv.URL+"/v1/workflows/"+wfA+"/publish", "tick_admin", map[string]any{"org_unit_id": "team"})
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("submit A = %d", resp.StatusCode)
@@ -831,13 +841,14 @@ func TestWorkflowCompatibilityPublishRejectsChangeForDifferentWorkflow(t *testin
 
 	resp = postJSONReq(t, srv.URL+"/v1/workflows/"+wfB+"/publish", "tick_admin", map[string]any{"org_unit_id": "team", "change_id": changeID})
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
+	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("cross-workflow change accepted: %d", resp.StatusCode)
 	}
 }
 
 func TestWorkflowPublishFailsClosedWhenAuditDown(t *testing.T) {
-	srv, _ := newAgentTestServer(t, &failingAuditNexus{Mock: adminMock()})
+	mock := adminMock()
+	srv, _ := newAgentTestServer(t, &failingAuditNexus{Mock: mock})
 	def := workflow.Definition{
 		Kind: sdkworkflow.KindSOP, RiskLevel: sdkworkflow.RiskLow,
 		Nodes: []sdkworkflow.Node{{ID: "in", Type: sdkworkflow.NodeInputManual}},
@@ -845,6 +856,11 @@ func TestWorkflowPublishFailsClosedWhenAuditDown(t *testing.T) {
 	}
 	resp := postJSONReq(t, srv.URL+"/v1/workflows", "tick_admin", map[string]any{"name": "X", "definition": def})
 	wfID := decodeBody(t, resp)["workflow_id"].(string)
+	mock.Tickets["tick_admin"] = nexus.VerifyTicketResponse{
+		Valid: true, EnterpriseID: "ent_1", ActorUserID: "admin", Scopes: []string{"admin"},
+		OrgVersion: 1, OrgUnitIDs: []string{"team"}, ResourceType: "workflow", ResourceID: wfID,
+		AllowedActions: []string{"workflow.edit", "publish"}, ExpiresAt: time.Now().Add(time.Hour),
+	}
 
 	resp = postJSONReq(t, srv.URL+"/v1/workflows/"+wfID+"/publish", "tick_admin", map[string]any{"org_unit_id": "team"})
 	resp.Body.Close()

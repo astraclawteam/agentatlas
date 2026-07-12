@@ -74,7 +74,7 @@ func TestBrowserGovernancePostgres(t *testing.T) {
 	store, _ := governance.NewPostgresStore(pool, time.Now)
 	audits := &governance.MemoryAuditAppender{}
 	svc := governance.NewService(store, governance.StaticRouteResolver{ReviewerUserID: "manager", OrgPath: []string{"team", "department"}}, audits, nil, time.Now)
-	editor := governance.Actor{EnterpriseID: ent, UserID: "editor", OrgUnitIDs: []string{"team"}, Permissions: []string{"edit"}}
+	editor := governance.Actor{EnterpriseID: ent, UserID: "editor", OrgUnitIDs: []string{"team"}, Permissions: []string{"workflow_edit"}}
 	draft, err := svc.CreateDraft(ctx, editor, governance.SuggestionInput{OrgUnitID: "team", ResourceType: governancemodel.ResourceWorkflow, ResourceID: workflowID, Action: governancemodel.ActionPublish, ProposedContent: raw})
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestBrowserGovernancePostgres(t *testing.T) {
 		t.Fatalf("route=%+v err=%v", route, err)
 	}
 	reviewer := governance.Actor{EnterpriseID: ent, UserID: "manager", OrgUnitIDs: []string{"department"}, Permissions: []string{"approve_high_risk"}}
-	if err = svc.Decide(ctx, reviewer, draft.ChangeID, governance.DecisionInput{Decision: "approve"}); err != nil {
+	if err = svc.Decide(ctx, reviewer, draft.ChangeID, "postgres-review-decision-key-0001", governance.DecisionInput{Decision: "approve"}); err != nil {
 		t.Fatal(err)
 	}
 	type outcome struct {
@@ -128,11 +128,90 @@ func TestBrowserGovernancePostgres(t *testing.T) {
 	if _, err = svc.Submit(ctx, editor, stale.ChangeID); err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Decide(ctx, reviewer, stale.ChangeID, governance.DecisionInput{Decision: "approve"}); err != nil {
+	if err = svc.Decide(ctx, reviewer, stale.ChangeID, "postgres-review-decision-key-0002", governance.DecisionInput{Decision: "approve"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = svc.Publish(ctx, editor, stale.ChangeID, "pg-stale-base-key-1234"); !errors.Is(err, governance.ErrConflict) {
 		t.Fatalf("stale base published: %v", err)
+	}
+
+	tracingDraft, err := svc.CreateDraft(ctx, editor, governance.SuggestionInput{OrgUnitID: "team", ResourceType: governancemodel.ResourceWorkflow, ResourceID: workflowID, Action: governancemodel.ActionPublish, BaseVersion: 1, ProposedContent: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Submit(ctx, editor, tracingDraft.ChangeID); err != nil {
+		t.Fatal(err)
+	}
+	decisionStart := make(chan struct{})
+	decisionResults := make(chan error, 2)
+	for i, decision := range []string{"approve", "reject"} {
+		go func(i int, decision string) {
+			<-decisionStart
+			decisionResults <- svc.Decide(ctx, reviewer, tracingDraft.ChangeID, []string{"pg-race-approve-key-0001", "pg-race-reject-key-0001"}[i], governance.DecisionInput{Decision: decision})
+		}(i, decision)
+	}
+	close(decisionStart)
+	decisionErrs := []error{<-decisionResults, <-decisionResults}
+	if (decisionErrs[0] == nil) == (decisionErrs[1] == nil) || (decisionErrs[0] != nil && !errors.Is(decisionErrs[0], governance.ErrConflict)) || (decisionErrs[1] != nil && !errors.Is(decisionErrs[1], governance.ErrConflict)) {
+		t.Fatalf("concurrent decision results=%v, want one success and one conflict", decisionErrs)
+	}
+	var decisionOperations, decisionAudits int
+	if err = pool.QueryRow(ctx, `SELECT COUNT(*) FROM change_decision_operations WHERE enterprise_id=$1 AND change_id=$2`, ent, tracingDraft.ChangeID).Scan(&decisionOperations); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT COUNT(*) FROM change_decision_audits WHERE enterprise_id=$1 AND change_id=$2`, ent, tracingDraft.ChangeID).Scan(&decisionAudits); err != nil {
+		t.Fatal(err)
+	}
+	if decisionOperations != 1 || decisionAudits != 1 {
+		t.Fatalf("decision operations=%d audits=%d, want 1/1", decisionOperations, decisionAudits)
+	}
+
+	retryDraft, err := svc.CreateDraft(ctx, editor, governance.SuggestionInput{OrgUnitID: "team", ResourceType: governancemodel.ResourceWorkflow, ResourceID: workflowID, Action: governancemodel.ActionPublish, BaseVersion: 1, ProposedContent: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Submit(ctx, editor, retryDraft.ChangeID); err != nil {
+		t.Fatal(err)
+	}
+	lostStore := &postgresLostDecisionResponseStore{Store: store}
+	retrySvc := governance.NewService(lostStore, governance.StaticRouteResolver{ReviewerUserID: "manager", OrgPath: []string{"team", "department"}}, audits, nil, time.Now)
+	retryKey := "pg-response-loss-key-0001"
+	if err = retrySvc.Decide(ctx, reviewer, retryDraft.ChangeID, retryKey, governance.DecisionInput{Decision: "approve"}); err == nil {
+		t.Fatal("first decision response was not lost")
+	}
+	if err = retrySvc.Decide(ctx, reviewer, retryDraft.ChangeID, retryKey, governance.DecisionInput{Decision: "approve"}); err != nil {
+		t.Fatalf("decision retry: %v", err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT COUNT(*) FROM change_decision_audits WHERE enterprise_id=$1 AND change_id=$2`, ent, retryDraft.ChangeID).Scan(&decisionAudits); err != nil {
+		t.Fatal(err)
+	}
+	if decisionAudits != 1 {
+		t.Fatalf("response-loss decision audits=%d, want 1", decisionAudits)
+	}
+
+	staleSubmitDraft, err := svc.CreateDraft(ctx, editor, governance.SuggestionInput{OrgUnitID: "team", ResourceType: governancemodel.ResourceWorkflow, ResourceID: workflowID, Action: governancemodel.ActionPublish, BaseVersion: 1, ProposedContent: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleSubmit, err := store.Get(ctx, ent, staleSubmitDraft.ChangeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleSubmit.Draft.State = governancemodel.ChangeSubmitted
+	staleSubmit.Assessment = governancemodel.RiskAssessment{RiskLevel: governancemodel.RiskHigh, RiskReasons: []string{"workflow"}}
+	staleSubmit.Route = governancemodel.ReviewRoute{ChangeID: staleSubmitDraft.ChangeID, ResourceType: governancemodel.ResourceWorkflow, ResourceID: workflowID, RequesterUserID: "editor", ReviewerUserID: "manager", RiskLevel: governancemodel.RiskHigh, Mode: governancemodel.ReviewUpward, State: governancemodel.RoutePending, OrgPath: []string{"team", "department"}}
+	if _, err = svc.Submit(ctx, editor, staleSubmitDraft.ChangeID); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Decide(ctx, reviewer, staleSubmitDraft.ChangeID, "pg-stale-submit-decision-001", governance.DecisionInput{Decision: "approve"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.SaveReview(ctx, ent, staleSubmit); !errors.Is(err, governance.ErrConflict) {
+		t.Fatalf("stale postgres submit=%v, want conflict", err)
+	}
+	staleCurrent, err := store.Get(ctx, ent, staleSubmitDraft.ChangeID)
+	if err != nil || staleCurrent.Draft.State != governancemodel.ChangeApproved || staleCurrent.Route.State != governancemodel.RouteApproved {
+		t.Fatalf("postgres final decision resurrected: %+v err=%v", staleCurrent, err)
 	}
 	var versions, pointers, operations int
 	if err = pool.QueryRow(ctx, `SELECT COUNT(*) FROM workflow_versions WHERE workflow_id=$1`, workflowID).Scan(&versions); err != nil {
@@ -147,4 +226,23 @@ func TestBrowserGovernancePostgres(t *testing.T) {
 	if versions != 1 || pointers != 1 || operations != 1 {
 		t.Fatalf("versions=%d pointers=%d operations=%d", versions, pointers, operations)
 	}
+}
+
+type postgresLostDecisionResponseStore struct {
+	governance.Store
+	mu   sync.Mutex
+	lost bool
+}
+
+func (s *postgresLostDecisionResponseStore) FinalizeDecision(ctx context.Context, ent, key string, actor governance.Actor, rec governance.Record, in governance.DecisionInput, auditRef string) error {
+	if err := s.Store.FinalizeDecision(ctx, ent, key, actor, rec, in, auditRef); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.lost {
+		s.lost = true
+		return errors.New("response lost after postgres commit")
+	}
+	return nil
 }

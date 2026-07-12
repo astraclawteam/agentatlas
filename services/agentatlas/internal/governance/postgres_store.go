@@ -137,7 +137,7 @@ func (s *PostgresStore) SaveReview(ctx context.Context, ent string, r Record) er
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	tag, err := tx.Exec(ctx, `UPDATE change_drafts SET state=$4,updated_at=$5 WHERE enterprise_id=$1 AND id=$2 AND revision=$3`, ent, r.Draft.ChangeID, r.Draft.Revision, r.Draft.State, s.now().UTC())
+	tag, err := tx.Exec(ctx, `UPDATE change_drafts SET state=$4,updated_at=$5 WHERE enterprise_id=$1 AND id=$2 AND revision=$3 AND state='draft' AND $4='submitted'`, ent, r.Draft.ChangeID, r.Draft.Revision, r.Draft.State, s.now().UTC())
 	if err != nil || tag.RowsAffected() != 1 {
 		if err == nil {
 			err = ErrConflict
@@ -153,7 +153,7 @@ func (s *PostgresStore) SaveReview(ctx context.Context, ent string, r Record) er
 	if r.Route.Queue != "" {
 		queue = r.Route.Queue
 	}
-	tag, err = tx.Exec(ctx, `UPDATE change_reviews SET state=$5,decision=$6,comment=$7 WHERE enterprise_id=$1 AND change_id=$2 AND change_revision=$3 AND ((reviewer_user_id IS NULL AND $4::text IS NULL) OR reviewer_user_id=$4)`, ent, r.Draft.ChangeID, r.Draft.Revision, reviewer, r.Route.State, r.Decision, r.DecisionComment)
+	tag, err = tx.Exec(ctx, `UPDATE change_reviews SET state=$5,decision=$6,comment=$7 WHERE enterprise_id=$1 AND change_id=$2 AND change_revision=$3 AND state='pending' AND decision='' AND ((reviewer_user_id IS NULL AND $4::text IS NULL) OR reviewer_user_id=$4)`, ent, r.Draft.ChangeID, r.Draft.Revision, reviewer, r.Route.State, r.Decision, r.DecisionComment)
 	if err != nil {
 		return err
 	}
@@ -162,6 +162,83 @@ func (s *PostgresStore) SaveReview(ctx context.Context, ent string, r Record) er
 		if err != nil {
 			return err
 		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *PostgresStore) BeginDecision(ctx context.Context, ent, idem string, actor Actor, rec Record, in DecisionInput, payload string) (DecisionOperation, bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO change_decision_operations(id,enterprise_id,idempotency_key,change_id,change_revision,actor_user_id,decision,request_hash,status)
+		SELECT $1,$2,$3,$4,$5,$6,$7,$8,'pending'
+		FROM change_drafts d
+		JOIN change_reviews r ON r.enterprise_id=d.enterprise_id AND r.change_id=d.id AND r.change_revision=d.revision
+		WHERE d.enterprise_id=$2 AND d.id=$4 AND d.revision=$5 AND d.state='submitted' AND r.state='pending' AND r.decision=''
+		ON CONFLICT DO NOTHING`, stableID("decision_op", ent, idem), ent, idem, rec.Draft.ChangeID, rec.Draft.Revision, actor.UserID, in.Decision, payload)
+	if err != nil {
+		return DecisionOperation{}, false, err
+	}
+	var op DecisionOperation
+	var status string
+	err = s.pool.QueryRow(ctx, `SELECT change_id,change_revision,actor_user_id,decision,request_hash,status,COALESCE(audit_ref_id,'') FROM change_decision_operations WHERE enterprise_id=$1 AND idempotency_key=$2`, ent, idem).
+		Scan(&op.ChangeID, &op.Revision, &op.ActorUserID, &op.Decision, &op.PayloadHash, &status, &op.AuditRefID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return DecisionOperation{}, false, ErrConflict
+	}
+	if err != nil {
+		return DecisionOperation{}, false, err
+	}
+	op.Complete = status == "succeeded"
+	return op, tag.RowsAffected() == 0, nil
+}
+
+func (s *PostgresStore) FinalizeDecision(ctx context.Context, ent, idem string, actor Actor, rec Record, in DecisionInput, auditRef string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var operationID, status, changeID, operationActor, decision string
+	var revision int32
+	if err = tx.QueryRow(ctx, `SELECT id,status,change_id,change_revision,actor_user_id,decision FROM change_decision_operations WHERE enterprise_id=$1 AND idempotency_key=$2 FOR UPDATE`, ent, idem).
+		Scan(&operationID, &status, &changeID, &revision, &operationActor, &decision); err != nil {
+		return err
+	}
+	if changeID != rec.Draft.ChangeID || revision != rec.Draft.Revision || operationActor != actor.UserID || decision != in.Decision || auditRef == "" {
+		return ErrConflict
+	}
+	if status == "succeeded" {
+		return nil
+	}
+	if status != "pending" {
+		return ErrConflict
+	}
+	draftState, routeState := "approved", "approved"
+	if in.Decision == "reject" {
+		draftState, routeState = "rejected", "rejected"
+	}
+	draftTag, err := tx.Exec(ctx, `UPDATE change_drafts SET state=$4,updated_at=$5 WHERE enterprise_id=$1 AND id=$2 AND revision=$3 AND state='submitted'`, ent, rec.Draft.ChangeID, rec.Draft.Revision, draftState, s.now().UTC())
+	if err != nil || draftTag.RowsAffected() != 1 {
+		if err == nil {
+			err = ErrConflict
+		}
+		return err
+	}
+	reviewTag, err := tx.Exec(ctx, `UPDATE change_reviews SET state=$4,decision=$5,comment=$6 WHERE enterprise_id=$1 AND change_id=$2 AND change_revision=$3 AND state='pending' AND decision=''`, ent, rec.Draft.ChangeID, rec.Draft.Revision, routeState, in.Decision, in.Comment)
+	if err != nil || reviewTag.RowsAffected() != 1 {
+		if err == nil {
+			err = ErrConflict
+		}
+		return err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO change_decision_audits(id,enterprise_id,operation_id,change_id,change_revision,actor_user_id,decision,audit_ref_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, stableID("decision_audit", ent, rec.Draft.ChangeID, fmt.Sprint(rec.Draft.Revision)), ent, operationID, rec.Draft.ChangeID, rec.Draft.Revision, actor.UserID, in.Decision, auditRef); err != nil {
+		return err
+	}
+	opTag, err := tx.Exec(ctx, `UPDATE change_decision_operations SET status='succeeded',audit_ref_id=$3,finished_at=now() WHERE enterprise_id=$1 AND idempotency_key=$2 AND status='pending'`, ent, idem, auditRef)
+	if err != nil || opTag.RowsAffected() != 1 {
+		if err == nil {
+			err = ErrConflict
+		}
+		return err
 	}
 	return tx.Commit(ctx)
 }

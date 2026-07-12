@@ -71,11 +71,11 @@ func TestBrowserGovernance(t *testing.T) {
 	if err != nil || route.ReviewerUserID != "manager" || route.Mode != governancemodel.ReviewUpward {
 		t.Fatalf("upward route: %+v %v", route, err)
 	}
-	if err := svc.Decide(ctx, editor, draft.ChangeID, governance.DecisionInput{Decision: "approve"}); !errors.Is(err, governance.ErrForbidden) {
+	if err := svc.Decide(ctx, editor, draft.ChangeID, "e2e-self-decision-key-0001", governance.DecisionInput{Decision: "approve"}); !errors.Is(err, governance.ErrForbidden) {
 		t.Fatalf("self review accepted: %v", err)
 	}
 	reviewer := governance.Actor{EnterpriseID: "ent-1", UserID: "manager", OrgUnitIDs: []string{"department"}, Permissions: []string{"approve_high_risk"}}
-	if err := svc.Decide(ctx, reviewer, draft.ChangeID, governance.DecisionInput{Decision: "approve"}); err != nil {
+	if err := svc.Decide(ctx, reviewer, draft.ChangeID, "e2e-review-decision-key-0001", governance.DecisionInput{Decision: "approve"}); err != nil {
 		t.Fatalf("upward decision: %v", err)
 	}
 	first, err := svc.Publish(ctx, editor, draft.ChangeID, "publish-key-1234567890")
