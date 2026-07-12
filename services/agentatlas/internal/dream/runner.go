@@ -1,11 +1,15 @@
 package dream
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 
+	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.opentelemetry.io/otel/attribute"
@@ -23,6 +27,9 @@ type RunnerStore interface {
 	BindDreamWorkflowRun(ctx context.Context, arg db.BindDreamWorkflowRunParams) (db.DreamRun, error)
 	GetDreamRunByWorkflowRun(ctx context.Context, arg db.GetDreamRunByWorkflowRunParams) (db.DreamRun, error)
 	RequeueDreamRunAfterWorkflow(ctx context.Context, arg db.RequeueDreamRunAfterWorkflowParams) (db.DreamRun, error)
+	PublishDreamWorkflowWait(ctx context.Context, arg db.PublishDreamWorkflowWaitParams) (db.DreamRun, error)
+	FailDreamRunAfterWorkflow(ctx context.Context, arg db.FailDreamRunAfterWorkflowParams) (db.DreamRun, error)
+	ReserveDreamOutputHash(ctx context.Context, arg db.ReserveDreamOutputHashParams) (db.DreamRun, error)
 	ClaimDreamRun(ctx context.Context, id string) (int64, error)
 	UpdateDreamRunStatus(ctx context.Context, arg db.UpdateDreamRunStatusParams) (int64, error)
 	InsertDreamInput(ctx context.Context, arg db.InsertDreamInputParams) error
@@ -72,10 +79,11 @@ func (r *Runner) RegisterJobHandler() error {
 		},
 		Execute: r.execute,
 		Complete: func(ctx context.Context, runID string, execErr error) error {
-			status, msg := "succeeded", ""
 			if errors.Is(execErr, ErrDreamWorkflowPaused) {
-				status = "waiting_confirmation"
-			} else if execErr != nil {
+				return nil
+			}
+			status, msg := "succeeded", ""
+			if execErr != nil {
 				status, msg = "failed", truncateRunes(execErr.Error(), 1000)
 			}
 			if r.metrics != nil {
@@ -123,34 +131,34 @@ func (r *Runner) execute(ctx context.Context, runID string) error {
 	if r.resolver == nil || r.orchestrator == nil {
 		return fmt.Errorf("Dream runner requires input resolver and workflow orchestrator")
 	}
-	inputs, coverage, missing, err := r.resolver.Resolve(ctx, ResolveRequest{
-		EnterpriseID: run.EnterpriseID, OrgUnitID: run.OrgUnitID,
-		WindowStart: run.WindowStart.Time, WindowEnd: run.WindowEnd.Time, Timezone: run.Timezone,
-		Sources: policy.InputSources, MaskingRules: policy.MaskingRules,
-		Visibility: []string{string(policy.VisibilityLevel), policy.OrgUnitID}, SpaceID: space.ID,
-	})
-	if err != nil {
-		return fmt.Errorf("resolve Dream inputs: %w", err)
-	}
-	for _, input := range inputs {
-		if err := r.store.InsertDreamInput(ctx, db.InsertDreamInputParams{
-			RunID: runID, SourceType: string(input.SourceType), SourceID: input.SourceID,
-		}); err != nil {
-			return err
-		}
-	}
-	execution, err := r.orchestrator.Run(ctx, DreamExecution{
+	var inputs []ResolvedInput
+	var coverage Coverage
+	var missing []MissingInput
+	dreamExec := DreamExecution{
 		EnterpriseID: run.EnterpriseID, DreamRunID: run.ID, PolicyID: run.PolicyID, PolicyVersion: run.PolicyVersion,
 		Workflow:              policy.Workflow,
 		ExistingWorkflowRunID: run.WorkflowRunID.String,
-		Input: WorkflowInput{OrgUnitID: run.OrgUnitID, WindowStart: run.WindowStart.Time, WindowEnd: run.WindowEnd.Time,
-			Inputs: inputs, Coverage: coverage, Missing: missing, RiskSignalRules: policy.RiskSignalRules},
-	})
+	}
+	if !run.WorkflowRunID.Valid {
+		inputs, coverage, missing, err = r.resolver.Resolve(ctx, ResolveRequest{EnterpriseID: run.EnterpriseID, OrgUnitID: run.OrgUnitID, WindowStart: run.WindowStart.Time, WindowEnd: run.WindowEnd.Time, Timezone: run.Timezone, Sources: policy.InputSources, MaskingRules: policy.MaskingRules, Visibility: []string{string(policy.VisibilityLevel), policy.OrgUnitID}, SpaceID: space.ID})
+		if err != nil {
+			return fmt.Errorf("resolve Dream inputs: %w", err)
+		}
+		for _, input := range inputs {
+			if err := r.store.InsertDreamInput(ctx, db.InsertDreamInputParams{RunID: runID, SourceType: string(input.SourceType), SourceID: input.SourceID}); err != nil {
+				return err
+			}
+		}
+		dreamExec.Input = WorkflowInput{OrgUnitID: run.OrgUnitID, WindowStart: run.WindowStart.Time, WindowEnd: run.WindowEnd.Time, Inputs: inputs, Coverage: coverage, Missing: missing, RiskSignalRules: policy.RiskSignalRules}
+	}
+	execution, err := r.orchestrator.Run(ctx, dreamExec)
 	if err != nil {
 		return err
 	}
-	if _, err := r.store.BindDreamWorkflowRun(ctx, db.BindDreamWorkflowRunParams{EnterpriseID: run.EnterpriseID, RunID: run.ID, WorkflowRunID: pgtype.Text{String: execution.WorkflowRunID, Valid: true}}); err != nil {
-		return fmt.Errorf("bind Dream workflow run: %w", err)
+	if run.WorkflowRunID.Valid {
+		inputs = execution.Input.Inputs
+		coverage = execution.Input.Coverage
+		missing = execution.Input.Missing
 	}
 	if execution.Status == workflow.RunWaitingConfirmation {
 		return ErrDreamWorkflowPaused
@@ -187,6 +195,25 @@ func (r *Runner) execute(ctx context.Context, runID string) error {
 
 	// Sealed detailed summary: object storage only, pointer in DB.
 	sealedKey := fmt.Sprintf("dreams/%s/%s.md", run.EnterpriseID, runID)
+	hashPayload, err := json.Marshal(struct {
+		Output            DreamOutput   `json:"output"`
+		Input             WorkflowInput `json:"input"`
+		PolicyID          string        `json:"policy_id"`
+		PolicyVersion     int32         `json:"policy_version"`
+		WorkflowRunID     string        `json:"workflow_run_id"`
+		EvidenceRetention string        `json:"evidence_retention"`
+	}{out, execution.Input, run.PolicyID, run.PolicyVersion, execution.WorkflowRunID, string(policy.EvidenceRetention)})
+	if err != nil {
+		return fmt.Errorf("hash Dream output: %w", err)
+	}
+	sum := sha256.Sum256(hashPayload)
+	outputHash := "sha256:" + hex.EncodeToString(sum[:])
+	if _, err := r.store.ReserveDreamOutputHash(ctx, db.ReserveDreamOutputHashParams{EnterpriseID: run.EnterpriseID, RunID: run.ID, OutputHash: pgtype.Text{String: outputHash, Valid: true}}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("Dream output conflicts with reserved committed output")
+		}
+		return err
+	}
 	if err := r.objects.Put(ctx, sealedKey, "text/markdown", []byte(out.SealedDetail)); err != nil {
 		return fmt.Errorf("seal detail: %w", err)
 	}
@@ -287,14 +314,13 @@ func validateRunPolicySnapshot(run db.DreamRun, policyEnterprise string, policy 
 	if run.EnterpriseID == "" || run.EnterpriseID != policyEnterprise || run.Version != run.PolicyVersion || run.PolicyVersion < 1 || run.OrgUnitID != policy.OrgUnitID || run.Timezone != policy.Timezone || !run.WindowStart.Valid || !run.WindowEnd.Valid || !run.WindowEnd.Time.After(run.WindowStart.Time) || !run.WorkflowID.Valid || run.WorkflowID.String != policy.Workflow.ID || !run.WorkflowVersion.Valid || run.WorkflowVersion.Int32 != policy.Workflow.Version || run.ModelRoute != "workflow/"+policy.Workflow.ID || run.ModelVersion != fmt.Sprintf("v%d", policy.Workflow.Version) {
 		return fmt.Errorf("Dream run immutable snapshot disagrees with published policy")
 	}
-	var visibility struct {
-		VisibilityLevel string   `json:"visibility_level"`
-		OrgUnitIDs      []string `json:"org_unit_ids"`
-	}
-	if err := json.Unmarshal(run.VisibilitySnapshot, &visibility); err != nil {
+	var visibility sdkdream.VisibilitySnapshotSummary
+	decoder := json.NewDecoder(bytes.NewReader(run.VisibilitySnapshot))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&visibility); err != nil {
 		return fmt.Errorf("decode Dream visibility snapshot: %w", err)
 	}
-	if visibility.VisibilityLevel != string(policy.VisibilityLevel) {
+	if visibility.OrgUnitIDs == nil || visibility.MaskedFieldCount < 0 || visibility.VisibilityLevel != policy.VisibilityLevel {
 		return fmt.Errorf("Dream visibility snapshot disagrees with policy")
 	}
 	found := false
@@ -306,29 +332,58 @@ func validateRunPolicySnapshot(run db.DreamRun, policyEnterprise string, policy 
 	if !found {
 		return fmt.Errorf("Dream visibility snapshot omits policy org unit")
 	}
-	var input struct {
-		SourceCounts []struct {
-			SourceType string `json:"source_type"`
-		} `json:"source_counts"`
-		SanitizedInputIDs []string `json:"sanitized_input_ids"`
-	}
-	if err := json.Unmarshal(run.InputSnapshot, &input); err != nil {
+	var input sdkdream.InputSnapshotSummary
+	decoder = json.NewDecoder(bytes.NewReader(run.InputSnapshot))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
 		return fmt.Errorf("decode Dream input snapshot: %w", err)
 	}
-	if len(input.SourceCounts) != len(policy.InputSources) {
+	if input.SourceCounts == nil || input.SanitizedInputIDs == nil || len(input.SourceCounts) != len(policy.InputSources) {
 		return fmt.Errorf("Dream input snapshot disagrees with policy sources")
 	}
 	for i, source := range policy.InputSources {
-		if input.SourceCounts[i].SourceType != string(source) {
+		if input.SourceCounts[i].SourceType != source || input.SourceCounts[i].Count < 0 {
 			return fmt.Errorf("Dream input snapshot source mismatch")
 		}
+	}
+	total := int32(0)
+	for _, count := range input.SourceCounts {
+		total += count.Count
+	}
+	if int(total) != len(input.SanitizedInputIDs) {
+		return fmt.Errorf("Dream input snapshot count mismatch")
+	}
+	seen := map[string]bool{}
+	for _, id := range input.SanitizedInputIDs {
+		if id == "" || len([]rune(id)) > 256 || seen[id] {
+			return fmt.Errorf("Dream input snapshot IDs are noncanonical")
+		}
+		seen[id] = true
 	}
 	return nil
 }
 
-// WorkflowCompleted reconciles a resumed workflow back to its bound Dream.
-func (r *Runner) WorkflowCompleted(ctx context.Context, result workflow.RunResult) error {
-	if result.Status != workflow.RunSucceeded {
+// WorkflowLifecycle atomically binds/waits/terminalizes the owning Dream.
+func (r *Runner) WorkflowLifecycle(ctx context.Context, result workflow.RunResult) error {
+	wfID := pgtype.Text{String: result.RunID, Valid: true}
+	if result.Dream == nil {
+		return nil
+	}
+	switch result.Status {
+	case workflow.RunRunning:
+		_, err := r.store.BindDreamWorkflowRun(ctx, db.BindDreamWorkflowRunParams{EnterpriseID: result.EnterpriseID, RunID: result.Dream.DreamRunID, WorkflowRunID: wfID})
+		return err
+	case workflow.RunWaitingConfirmation:
+		_, err := r.store.PublishDreamWorkflowWait(ctx, db.PublishDreamWorkflowWaitParams{EnterpriseID: result.EnterpriseID, RunID: result.Dream.DreamRunID, WorkflowRunID: wfID})
+		return err
+	case workflow.RunFailed, workflow.RunCancelled:
+		_, err := r.store.FailDreamRunAfterWorkflow(ctx, db.FailDreamRunAfterWorkflowParams{EnterpriseID: result.EnterpriseID, WorkflowRunID: wfID, Error: truncateRunes(result.Error, 1000)})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return err
+	case workflow.RunSucceeded:
+	default:
 		return nil
 	}
 	run, err := r.store.GetDreamRunByWorkflowRun(ctx, db.GetDreamRunByWorkflowRunParams{EnterpriseID: result.EnterpriseID, WorkflowRunID: pgtype.Text{String: result.RunID, Valid: true}})
@@ -339,7 +394,14 @@ func (r *Runner) WorkflowCompleted(ctx context.Context, result workflow.RunResul
 		return err
 	}
 	if _, err := r.store.RequeueDreamRunAfterWorkflow(ctx, db.RequeueDreamRunAfterWorkflowParams{EnterpriseID: run.EnterpriseID, WorkflowRunID: pgtype.Text{String: result.RunID, Valid: true}}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
 		return err
 	}
-	return r.tasks.Enqueue(ctx, JobTypeDream, run.ID)
+	if err := r.tasks.Enqueue(ctx, JobTypeDream, run.ID); err != nil {
+		_, _ = r.store.FailDreamRunAfterWorkflow(ctx, db.FailDreamRunAfterWorkflowParams{EnterpriseID: run.EnterpriseID, WorkflowRunID: wfID, Error: "Dream redispatch failed: " + truncateRunes(err.Error(), 900)})
+		return nil
+	}
+	return nil
 }

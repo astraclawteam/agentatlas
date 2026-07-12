@@ -72,6 +72,45 @@ func TestDreamGovernanceSchemaUpgradeFromPopulatedV1(t *testing.T) {
 	}
 }
 
+func TestDreamWorkflowExecutionMigrationContracts(t *testing.T) {
+	dsn := os.Getenv("ATLAS_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("set ATLAS_TEST_POSTGRES_DSN")
+	}
+	seed := `insert into enterprises(id,name) values('e','E');
+insert into knowledge_spaces(id,enterprise_id,kind,name,org_scope,org_version) values('s','e','department','S','department:d',1);
+insert into workflows(id,enterprise_id,name,kind,draft,created_by) values('wa','e','A','dream','{}','x'),('wb','e','B','dream','{}','x');
+insert into workflow_versions(workflow_id,version,definition,risk_level,published_by) values('wa',1,'{"workflow_id":"wa","version":1,"kind":"dream","nodes":[{"id":"a","type":"dream.aggregate"}],"edges":[],"risk_level":"low"}','low','x'),('wb',1,'{"workflow_id":"wb","version":1,"kind":"dream","nodes":[{"id":"a","type":"dream.aggregate"}],"edges":[],"risk_level":"low"}','low','x');
+insert into dream_policies(id,enterprise_id,org_scope,status,draft) values('p','e','department:d','published','{}');insert into dream_policy_versions(policy_id,version,definition) values('p',1,'{}');
+insert into dream_runs(id,policy_id,version,enterprise_id,status,window_start,window_end,org_unit_id,policy_version,workflow_id,workflow_version,timezone,input_snapshot,visibility_snapshot,model_route,model_version,attempt,coverage,missing_inputs,idempotency_key) values('dr','p',1,'e','waiting_confirmation',now()-interval '1 day',now(),'department:d',1,'wa',1,'UTC','{"source_counts":[],"sanitized_input_ids":[]}','{"visibility_level":"members","org_unit_ids":["department:d"],"masked_field_count":0}','workflow/wa','v1',1,'{"expected_children":0,"completed_children":0,"input_count":0}','[]','dr');`
+	t.Run("duplicates_fail_named", func(t *testing.T) {
+		ctx, db := openDreamMigrationDB(t, dsn, 4)
+		defer db.Close()
+		if _, err := db.ExecContext(ctx, seed+`insert into dream_inputs(run_id,source_type,source_id) values('dr','work_brief','x'),('dr','work_brief','x');`); err != nil {
+			t.Fatal(err)
+		}
+		goose.SetBaseFS(dbfs.Migrations)
+		err := goose.UpToContext(ctx, db, "migrations", 5)
+		if err == nil || !strings.Contains(err.Error(), "000005 duplicate dream_inputs") {
+			t.Fatalf("err=%v", err)
+		}
+	})
+	t.Run("pinned_workflow_fk", func(t *testing.T) {
+		ctx, db := openDreamMigrationDB(t, dsn, 4)
+		defer db.Close()
+		if _, err := db.ExecContext(ctx, seed+`insert into workflow_runs(id,workflow_id,version,enterprise_id,status,input) values('wrb','wb',1,'e','succeeded','{}');`); err != nil {
+			t.Fatal(err)
+		}
+		goose.SetBaseFS(dbfs.Migrations)
+		if err := goose.UpToContext(ctx, db, "migrations", 5); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `update dream_runs set workflow_run_id='wrb' where id='dr'`); err == nil {
+			t.Fatal("mismatched pinned workflow run accepted")
+		}
+	})
+}
+
 func openDreamMigrationDB(t *testing.T, dsn string, version int64) (context.Context, *sql.DB) {
 	t.Helper()
 	ctx := context.Background()

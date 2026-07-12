@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 
 	"go.opentelemetry.io/otel/attribute"
 
@@ -21,7 +20,7 @@ type Runtime struct {
 	service        *Service
 	registry       Registry
 	metrics        *observability.Metrics
-	completionHook func(context.Context, RunResult) error
+	dreamLifecycle func(context.Context, RunResult) error
 }
 
 // ErrRunForbidden marks a run operation attempted by an actor outside the
@@ -38,8 +37,10 @@ func NewRuntime(store Store, service *Service, registry Registry) *Runtime {
 
 // SetMetrics wires the optional Prometheus surface (WorkflowRuns by terminal
 // status).
-func (r *Runtime) SetMetrics(m *observability.Metrics)                        { r.metrics = m }
-func (r *Runtime) SetCompletionHook(h func(context.Context, RunResult) error) { r.completionHook = h }
+func (r *Runtime) SetMetrics(m *observability.Metrics) { r.metrics = m }
+func (r *Runtime) SetDreamLifecycleHook(h func(context.Context, RunResult) error) {
+	r.dreamLifecycle = h
+}
 
 // runState is persisted in workflow_runs.output while a run is in flight.
 type runState struct {
@@ -57,6 +58,9 @@ type RunResult struct {
 	Outputs         map[string]map[string]any
 	AggregateNodeID string
 	EnterpriseID    string
+	Input           map[string]any
+	Dream           *VerifiedDreamContext
+	Error           string
 }
 
 // RunPublished executes one exact immutable workflow version and returns its
@@ -83,14 +87,14 @@ func (r *Runtime) DreamResult(ctx context.Context, runID string, expected Verifi
 			return RunResult{}, fmt.Errorf("decode Dream workflow state: %w", err)
 		}
 	}
-	if state.Dream == nil || state.Dream.EnterpriseID != expected.EnterpriseID || run.EnterpriseID != expected.EnterpriseID || state.Dream.DreamRunID != expected.DreamRunID || state.Dream.PolicyID != expected.PolicyID || state.Dream.PolicyVersion != expected.PolicyVersion || state.Dream.OrgUnitID != expected.OrgUnitID || run.WorkflowID != expected.WorkflowID || run.Version != expected.WorkflowVersion || !slices.Equal(state.Dream.EvidencePointerIDs, expected.EvidencePointerIDs) || !slices.Equal(state.Dream.ParentDreamRunIDs, expected.ParentDreamRunIDs) {
+	if state.Dream == nil || state.Dream.EnterpriseID != expected.EnterpriseID || run.EnterpriseID != expected.EnterpriseID || state.Dream.DreamRunID != expected.DreamRunID || state.Dream.PolicyID != expected.PolicyID || state.Dream.PolicyVersion != expected.PolicyVersion || run.WorkflowID != expected.WorkflowID || run.Version != expected.WorkflowVersion {
 		return RunResult{}, fmt.Errorf("workflow run is not bound to verified Dream context")
 	}
 	def, err := r.service.VersionDefinition(ctx, run.WorkflowID, run.Version)
 	if err != nil {
 		return RunResult{}, err
 	}
-	return RunResult{RunID: run.ID, Status: run.Status, EnterpriseID: run.EnterpriseID, Outputs: state.Outputs, AggregateNodeID: aggregateNodeID(def)}, nil
+	return RunResult{RunID: run.ID, Status: run.Status, EnterpriseID: run.EnterpriseID, Outputs: state.Outputs, Input: state.Input, Dream: state.Dream, AggregateNodeID: aggregateNodeID(def)}, nil
 }
 
 func (r *Runtime) runPublished(ctx context.Context, enterpriseID, workflowID string, version int32, input map[string]any, dream *VerifiedDreamContext) (RunResult, error) {
@@ -167,6 +171,11 @@ func (r *Runtime) startRun(ctx context.Context, enterpriseID, workflowID string,
 	}); err != nil {
 		return "", "", fmt.Errorf("create run: %w", err)
 	}
+	if dream != nil && r.dreamLifecycle != nil {
+		if err := r.dreamLifecycle(ctx, RunResult{RunID: runID, EnterpriseID: enterpriseID, Status: RunRunning, Dream: dream}); err != nil {
+			return runID, RunFailed, fmt.Errorf("bind Dream workflow lifecycle: %w", err)
+		}
+	}
 
 	state := runState{NextIndex: 0, Outputs: map[string]map[string]any{}, Input: input, Dream: dream}
 	status, err := r.execute(ctx, runID, enterpriseID, def, order, state)
@@ -213,6 +222,9 @@ func (r *Runtime) Resume(ctx context.Context, runID, enterpriseID string, approv
 		if err := r.setRunStatus(ctx, runID, RunCancelled, nil); err != nil {
 			return "", err
 		}
+		if state.Dream != nil && r.dreamLifecycle != nil {
+			_ = r.dreamLifecycle(ctx, RunResult{RunID: runID, EnterpriseID: run.EnterpriseID, Status: RunCancelled, Dream: state.Dream, Error: "human confirmation rejected"})
+		}
 		return RunCancelled, nil
 	}
 
@@ -238,6 +250,11 @@ func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def D
 		node := order[state.NextIndex]
 
 		if node.Type == sdkworkflow.NodeHumanConfirm || node.RequiresConfirmation {
+			if state.Dream != nil && r.dreamLifecycle != nil {
+				if err := r.dreamLifecycle(ctx, RunResult{RunID: runID, EnterpriseID: enterpriseID, Status: RunWaitingConfirmation, Dream: state.Dream}); err != nil {
+					return RunFailed, err
+				}
+			}
 			if err := writeEvent(ctx, r.store, runID, node.ID, NodeWaitingConfirmation, nil); err != nil {
 				return "", err
 			}
@@ -260,6 +277,9 @@ func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def D
 			if serr := r.setRunStatus(ctx, runID, RunFailed, &state); serr != nil {
 				return "", errors.Join(err, serr)
 			}
+			if state.Dream != nil && r.dreamLifecycle != nil {
+				_ = r.dreamLifecycle(ctx, RunResult{RunID: runID, EnterpriseID: enterpriseID, Status: RunFailed, Dream: state.Dream, Error: err.Error()})
+			}
 			return RunFailed, err
 		}
 		if out == nil {
@@ -275,10 +295,8 @@ func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def D
 	if err := r.setRunStatus(ctx, runID, RunSucceeded, &state); err != nil {
 		return "", err
 	}
-	if r.completionHook != nil {
-		if err := r.completionHook(ctx, RunResult{RunID: runID, EnterpriseID: enterpriseID, Status: RunSucceeded, Outputs: state.Outputs, AggregateNodeID: aggregateNodeID(def)}); err != nil {
-			return RunFailed, err
-		}
+	if state.Dream != nil && r.dreamLifecycle != nil {
+		_ = r.dreamLifecycle(ctx, RunResult{RunID: runID, EnterpriseID: enterpriseID, Status: RunSucceeded, Outputs: state.Outputs, AggregateNodeID: aggregateNodeID(def), Dream: state.Dream})
 	}
 	return RunSucceeded, nil
 }

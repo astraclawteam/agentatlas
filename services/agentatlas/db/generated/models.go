@@ -221,6 +221,7 @@ type DreamRun struct {
 	MissingInputs      []byte             `json:"missing_inputs"`
 	IdempotencyKey     string             `json:"idempotency_key"`
 	WorkflowRunID      pgtype.Text        `json:"workflow_run_id"`
+	OutputHash         pgtype.Text        `json:"output_hash"`
 }
 
 type DreamRunAnnotation struct {

@@ -6,6 +6,7 @@
 package integration
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -24,6 +25,15 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/tasks"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/workflow"
 )
+
+type failingPublishBus struct{}
+
+func (failingPublishBus) Publish(context.Context, string, string) error {
+	return fmt.Errorf("injected publish failure")
+}
+func (failingPublishBus) Subscribe(context.Context, string, func(context.Context, string)) (func(), error) {
+	return func() {}, nil
+}
 
 func TestDreamJob(t *testing.T) {
 	dsn := os.Getenv("ATLAS_TEST_POSTGRES_DSN")
@@ -137,7 +147,7 @@ func TestDreamJob(t *testing.T) {
 	synth := dream.NewSynthesizer(nil)
 	wfRuntime := workflow.NewRuntime(q, wfSvc, workflow.NewRegistryWithServices(workflow.Executors{Dream: synth.AggregateWorkflowInput}))
 	dreamRunner := dream.NewRunner(q, objects, policySvc, runner, dream.NewOrchestrator(wfRuntime))
-	wfRuntime.SetCompletionHook(dreamRunner.WorkflowCompleted)
+	wfRuntime.SetDreamLifecycleHook(dreamRunner.WorkflowLifecycle)
 	if err := dreamRunner.RegisterJobHandler(); err != nil {
 		t.Fatal(err)
 	}
@@ -162,6 +172,14 @@ func TestDreamJob(t *testing.T) {
 	}
 	if sums, _ := q.ListDreamSummariesBySpace(ctx, db.ListDreamSummariesBySpaceParams{SpaceID: spaceID, Layer: "display", Limit: 5}); len(sums) != 0 {
 		t.Fatal("paused Dream exposed output")
+	}
+	// A source arriving while paused must not enter the bound workflow input.
+	latePointer := newID("ev")
+	if _, err := q.CreateEvidencePointer(ctx, db.CreateEvidencePointerParams{ID: latePointer, EnterpriseID: entID, ResourceType: "work_brief", ResourceRef: "fs://briefs/late", SourceSystem: "filesystem", RequiredScopes: []string{}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.CreateWorkBrief(ctx, db.CreateWorkBriefParams{ID: newID("wb"), EnterpriseID: entID, EmployeeUserID: "u_zhang", BriefDate: pgtype.Date{Time: windowEnd.Add(-time.Hour), Valid: true}, Summary: "late mutable source", SourceHash: newID("sha"), EvidencePointerID: latePointer, Topics: []string{}, ProjectRefs: []string{}}); err != nil {
+		t.Fatal(err)
 	}
 	status, err := wfRuntime.Resume(ctx, dreamRun.WorkflowRunID.String, entID, true, "approved")
 	if err != nil || status != workflow.RunPending {
@@ -236,6 +254,10 @@ func TestDreamJob(t *testing.T) {
 	if !strings.Contains(display[0].SummaryText, "2 名成员") || !strings.Contains(display[0].SummaryText, "风险信号 1 项") {
 		t.Fatalf("display = %s", display[0].SummaryText)
 	}
+	var boundInputs int
+	if err := pool.QueryRow(ctx, `select count(*) from dream_inputs where run_id=$1`, dreamRun.ID).Scan(&boundInputs); err != nil || boundInputs != 2 {
+		t.Fatalf("bound inputs changed during pause: %d err=%v", boundInputs, err)
+	}
 	retrieval, _ := q.ListDreamSummariesBySpace(ctx, db.ListDreamSummariesBySpaceParams{
 		SpaceID: spaceID, Layer: "retrieval", Limit: 5,
 	})
@@ -253,6 +275,56 @@ func TestDreamJob(t *testing.T) {
 	raw, err := objects.Get(ctx, sealed[0].SealedObjectKey)
 	if err != nil {
 		t.Fatalf("sealed object: %v", err)
+	}
+	// A conflicting full persisted workflow output is rejected by the reserved
+	// hash before the referenced object can be overwritten.
+	if _, err := pool.Exec(ctx, `update workflow_runs set output=jsonb_set(output,'{outputs,aggregate,retrieval}','"conflicting retrieval"'::jsonb) where id=$1`, dreamRun.WorkflowRunID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.UpdateDreamRunStatus(ctx, db.UpdateDreamRunStatusParams{ID: dreamRun.ID, Status: "pending", Error: ""}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Enqueue(ctx, dream.JobTypeDream, dreamRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	conflicted, err := q.GetDreamRun(ctx, dreamRun.ID)
+	if err != nil || conflicted.Status != "failed" || !strings.Contains(conflicted.Error, "conflict") {
+		t.Fatalf("conflict run=%+v err=%v", conflicted, err)
+	}
+	afterConflict, err := objects.Get(ctx, sealed[0].SealedObjectKey)
+	if err != nil || !bytes.Equal(raw, afterConflict) {
+		t.Fatal("conflicting retry overwrote referenced sealed object")
+	}
+	// A redispatch publication failure terminalizes Dream instead of leaving an
+	// undispatchable pending row.
+	if _, err := q.UpdateDreamRunStatus(ctx, db.UpdateDreamRunStatusParams{ID: dreamRun.ID, Status: "waiting_confirmation", Error: ""}); err != nil {
+		t.Fatal(err)
+	}
+	failingTasks := tasks.NewRunner(failingPublishBus{})
+	failingTasks.AllowEnqueue(dream.JobTypeDream)
+	failingRunner := dream.NewRunner(q, objects, policySvc, failingTasks, dream.NewOrchestrator(wfRuntime))
+	if err := failingRunner.WorkflowLifecycle(ctx, workflow.RunResult{RunID: dreamRun.WorkflowRunID.String, EnterpriseID: entID, Status: workflow.RunSucceeded, Dream: &workflow.VerifiedDreamContext{DreamRunID: dreamRun.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	undispatched, err := q.GetDreamRun(ctx, dreamRun.ID)
+	if err != nil || undispatched.Status != "failed" || !strings.Contains(undispatched.Error, "redispatch failed") {
+		t.Fatalf("undispatched Dream=%+v err=%v", undispatched, err)
+	}
+	// Rejection terminalizes the next bound Dream instead of stranding waiting.
+	nextNow := now.Add(24 * time.Hour)
+	if n, err := scheduler.Tick(ctx, entID, nextNow); err != nil || n != 1 {
+		t.Fatalf("next tick n=%d err=%v", n, err)
+	}
+	rejected, err := q.GetLatestDreamRunForPolicy(ctx, policyID)
+	if err != nil || rejected.Status != "waiting_confirmation" {
+		t.Fatalf("rejected setup=%+v err=%v", rejected, err)
+	}
+	if status, err := wfRuntime.Resume(ctx, rejected.WorkflowRunID.String, entID, false, "reject"); err != nil || status != workflow.RunCancelled {
+		t.Fatalf("reject status=%s err=%v", status, err)
+	}
+	rejected, err = q.GetDreamRun(ctx, rejected.ID)
+	if err != nil || rejected.Status != "failed" {
+		t.Fatalf("rejected Dream stranded: %+v err=%v", rejected, err)
 	}
 	if !strings.Contains(string(raw), "## ") || strings.Contains(string(raw), "13800138000") {
 		t.Fatalf("sealed content wrong or unmasked: %s", raw)

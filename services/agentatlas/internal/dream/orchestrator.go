@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -62,6 +63,7 @@ type ExecutionResult struct {
 	WorkflowRunID string
 	Status        string
 	Output        DreamOutput
+	Input         WorkflowInput
 }
 
 type publishedRuntime interface {
@@ -83,24 +85,44 @@ func (o *Orchestrator) Run(ctx context.Context, execution DreamExecution) (Execu
 	if execution.Workflow.ID == "" || execution.Workflow.Version < 1 {
 		return ExecutionResult{}, fmt.Errorf("Dream execution requires a pinned published workflow")
 	}
-	if err := validateWorkflowInput(execution.Input); err != nil {
-		return ExecutionResult{}, err
-	}
-	input, err := workflowInputMap(execution)
-	if err != nil {
-		return ExecutionResult{}, err
-	}
-	evidence, parents := executionLineage(execution.Input.Inputs)
-	verified := workflow.VerifiedDreamContext{EnterpriseID: execution.EnterpriseID, DreamRunID: execution.DreamRunID, PolicyID: execution.PolicyID, PolicyVersion: execution.PolicyVersion, WorkflowID: execution.Workflow.ID, WorkflowVersion: execution.Workflow.Version, OrgUnitID: execution.Input.OrgUnitID, EvidencePointerIDs: evidence, ParentDreamRunIDs: parents}
+	verified := workflow.VerifiedDreamContext{EnterpriseID: execution.EnterpriseID, DreamRunID: execution.DreamRunID, PolicyID: execution.PolicyID, PolicyVersion: execution.PolicyVersion, WorkflowID: execution.Workflow.ID, WorkflowVersion: execution.Workflow.Version}
 	var result workflow.RunResult
+	var err error
 	if execution.ExistingWorkflowRunID != "" {
 		result, err = o.runtime.DreamResult(ctx, execution.ExistingWorkflowRunID, verified)
 	} else {
+		if err := validateWorkflowInput(execution.Input); err != nil {
+			return ExecutionResult{}, err
+		}
+		input, mapErr := workflowInputMap(execution)
+		if mapErr != nil {
+			return ExecutionResult{}, mapErr
+		}
+		evidence, parents := executionLineage(execution.Input.Inputs)
+		verified.OrgUnitID = execution.Input.OrgUnitID
+		verified.EvidencePointerIDs = evidence
+		verified.ParentDreamRunIDs = parents
 		result, err = o.runtime.RunDreamPublished(ctx, execution.EnterpriseID, execution.Workflow.ID, execution.Workflow.Version, input, verified)
 	}
 	out := ExecutionResult{WorkflowRunID: result.RunID, Status: result.Status}
 	if err != nil {
 		return out, fmt.Errorf("run Dream workflow %s@%d: %w", execution.Workflow.ID, execution.Workflow.Version, err)
+	}
+	if execution.ExistingWorkflowRunID != "" {
+		persisted, decodeErr := decodeWorkflowInput(result.Input)
+		if decodeErr != nil {
+			return out, decodeErr
+		}
+		if err := validateWorkflowInput(persisted); err != nil {
+			return out, err
+		}
+		evidence, parents := executionLineage(persisted.Inputs)
+		if result.Dream == nil || result.Dream.OrgUnitID != persisted.OrgUnitID || !slices.Equal(evidence, result.Dream.EvidencePointerIDs) || !slices.Equal(parents, result.Dream.ParentDreamRunIDs) {
+			return out, fmt.Errorf("persisted Dream input disagrees with runtime context")
+		}
+		out.Input = persisted
+	} else {
+		out.Input = execution.Input
 	}
 	if result.Status == workflow.RunWaitingConfirmation {
 		return out, nil
@@ -116,6 +138,20 @@ func (o *Orchestrator) Run(ctx context.Context, execution DreamExecution) (Execu
 		return out, err
 	}
 	out.Output = dreamOut
+	return out, nil
+}
+
+func decodeWorkflowInput(input map[string]any) (WorkflowInput, error) {
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return WorkflowInput{}, err
+	}
+	var out WorkflowInput
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&out); err != nil {
+		return WorkflowInput{}, fmt.Errorf("decode persisted Dream workflow input: %w", err)
+	}
 	return out, nil
 }
 

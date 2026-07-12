@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -376,6 +377,28 @@ func TestRunFailsLoudOnUnwiredExecutor(t *testing.T) {
 	}
 	if got := store.eventStatuses(runID, "parse"); len(got) != 2 || got[1] != NodeFailed {
 		t.Fatalf("parse events = %v", got)
+	}
+}
+
+func TestFailedDreamWorkflowNotifiesTerminalLifecycle(t *testing.T) {
+	store, svc, rt := setup(t)
+	ctx := context.Background()
+	def := Definition{WorkflowID: "wf_dream_fail", Kind: sdkworkflow.KindDream, Nodes: []sdkworkflow.Node{{ID: "aggregate", Type: sdkworkflow.NodeDreamAggregate}}, Edges: []sdkworkflow.Edge{}, RiskLevel: sdkworkflow.RiskLow}
+	id, err := svc.CreateDraft(ctx, "ent_1", "Dream fail", "admin", def)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Publish(ctx, "ent_1", id, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	var statuses []string
+	rt.SetDreamLifecycleHook(func(_ context.Context, result RunResult) error {
+		statuses = append(statuses, result.Status)
+		return nil
+	})
+	_, err = rt.RunDreamPublished(ctx, "ent_1", id, 1, map[string]any{}, VerifiedDreamContext{EnterpriseID: "ent_1", DreamRunID: "dr_1", PolicyID: "p_1", PolicyVersion: 1, WorkflowID: id, WorkflowVersion: 1})
+	if err == nil || !reflect.DeepEqual(statuses, []string{RunRunning, RunFailed}) {
+		t.Fatalf("statuses=%v err=%v runs=%d", statuses, err, len(store.runs))
 	}
 }
 

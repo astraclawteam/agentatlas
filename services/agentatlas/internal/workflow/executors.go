@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -353,6 +355,21 @@ func NewRegistryWithServices(e Executors) Registry {
 			if err != nil {
 				return nil, fmt.Errorf("node %s: %w", node.ID, err)
 			}
+			if input.OrgUnitID != run.Dream.OrgUnitID {
+				return nil, fmt.Errorf("node %s: Dream org input disagrees with verified context", node.ID)
+			}
+			var evidence, parents []string
+			for _, item := range input.Inputs {
+				if item.EvidencePointerID != "" {
+					evidence = append(evidence, item.EvidencePointerID)
+				}
+				if item.ParentRunID != "" {
+					parents = append(parents, item.ParentRunID)
+				}
+			}
+			if !slices.Equal(evidence, run.Dream.EvidencePointerIDs) || !slices.Equal(parents, run.Dream.ParentDreamRunIDs) {
+				return nil, fmt.Errorf("node %s: Dream lineage input disagrees with verified context", node.ID)
+			}
 			out, err := e.Dream(ctx, input)
 			if err != nil {
 				return nil, fmt.Errorf("node %s: %w", node.ID, err)
@@ -405,6 +422,15 @@ func NewRegistryWithServices(e Executors) Registry {
 }
 
 func validateDreamAggregateOutput(out map[string]any) error {
+	allowed := map[string]bool{"display": true, "retrieval": true, "sealed_detail": true, "source": true, "model_route": true, "model_version": true, "facts": true, "themes": true, "trends": true, "risks": true, "todos": true}
+	if len(out) != len(allowed) {
+		return fmt.Errorf("Dream output contains unknown or missing fields")
+	}
+	for key := range out {
+		if !allowed[key] {
+			return fmt.Errorf("Dream output contains unknown field %s", key)
+		}
+	}
 	for key, max := range map[string]int{"display": 4000, "retrieval": 4000, "sealed_detail": 100000, "source": 128, "model_route": 128, "model_version": 128} {
 		value, ok := out[key].(string)
 		if !ok || strings.TrimSpace(value) == "" || len([]rune(value)) > max {
@@ -420,6 +446,9 @@ func validateDreamAggregateOutput(out map[string]any) error {
 			item, ok := value.(map[string]any)
 			if !ok {
 				return fmt.Errorf("Dream output %s contains malformed signal", key)
+			}
+			if len(item) != 5 {
+				return fmt.Errorf("Dream output %s signal contains unknown or missing fields", key)
 			}
 			for field, max := range map[string]int{"id": 128, "title": 200, "detail": 2000, "evidence_pointer_id": 256} {
 				text, ok := item[field].(string)
@@ -498,6 +527,15 @@ func firstString(run *RunContext, key string) string {
 }
 
 func decodeDreamAggregateInput(input map[string]any) (DreamAggregateInput, error) {
+	allowed := map[string]bool{"org_unit_id": true, "window_start": true, "window_end": true, "inputs": true, "coverage": true, "missing": true, "risk_signal_rules": true}
+	if len(input) != len(allowed) {
+		return DreamAggregateInput{}, fmt.Errorf("typed Dream input contains unknown or missing fields")
+	}
+	for key := range input {
+		if !allowed[key] {
+			return DreamAggregateInput{}, fmt.Errorf("typed Dream input contains unknown field %s", key)
+		}
+	}
 	selected := map[string]any{}
 	for _, key := range []string{"org_unit_id", "window_start", "window_end", "inputs", "coverage", "missing", "risk_signal_rules"} {
 		selected[key] = input[key]
@@ -525,9 +563,42 @@ func decodeDreamAggregateInput(input map[string]any) (DreamAggregateInput, error
 		return DreamAggregateInput{}, fmt.Errorf("typed Dream input has invalid coverage")
 	}
 	for _, item := range decoded.Inputs {
-		if item.SourceType == "" || item.SourceID == "" || item.OrgUnitID == "" || item.SanitizedText == "" || len([]rune(item.SanitizedText)) > 4000 || len(item.Visibility) == 0 || len(item.Visibility) > 64 {
+		if !validDreamSource(item.SourceType) || item.SourceID == "" || len([]rune(item.SourceID)) > 256 || item.OrgUnitID == "" || len([]rune(item.OrgUnitID)) > 128 || item.SanitizedText == "" || len([]rune(item.SanitizedText)) > 4000 || len(item.EvidencePointerID) > 256 || len(item.ParentRunID) > 128 || len(item.Visibility) == 0 || len(item.Visibility) > 64 {
 			return DreamAggregateInput{}, fmt.Errorf("typed Dream input contains invalid or unbounded resolved input")
+		}
+		for _, v := range item.Visibility {
+			if strings.TrimSpace(v) == "" || len([]rune(v)) > 128 {
+				return DreamAggregateInput{}, fmt.Errorf("typed Dream input contains invalid visibility")
+			}
+		}
+	}
+	for _, item := range decoded.Missing {
+		if !validDreamSource(item.SourceType) || item.SourceID == "" || len([]rune(item.SourceID)) > 256 || !validDreamMissingReason(item.Reason) {
+			return DreamAggregateInput{}, fmt.Errorf("typed Dream input contains invalid missing record")
+		}
+	}
+	for _, rule := range decoded.RiskSignalRules {
+		if strings.TrimSpace(rule) == "" || len([]rune(rule)) > 256 {
+			return DreamAggregateInput{}, fmt.Errorf("typed Dream input contains invalid risk rule")
+		}
+		if _, err := regexp.Compile(rule); err != nil {
+			return DreamAggregateInput{}, fmt.Errorf("typed Dream risk rule: %w", err)
 		}
 	}
 	return decoded, nil
+}
+
+func validDreamSource(v string) bool {
+	switch v {
+	case "work_brief", "child_dream_summary", "project_record", "sop_update", "agent_answer", "external_evidence", "completed_task", "risk_event":
+		return true
+	}
+	return false
+}
+func validDreamMissingReason(v string) bool {
+	switch v {
+	case "not_found", "not_completed", "not_authorized", "failed", "masked":
+		return true
+	}
+	return false
 }

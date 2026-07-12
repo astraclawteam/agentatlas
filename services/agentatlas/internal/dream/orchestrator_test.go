@@ -26,6 +26,10 @@ type recordingDreamRuntime struct {
 func (r *recordingDreamRuntime) DreamResult(_ context.Context, runID string, verified workflow.VerifiedDreamContext) (workflow.RunResult, error) {
 	r.resumedRunID = runID
 	r.verified = verified
+	if r.result.Input == nil {
+		r.result.Input, _ = workflowInputMap(validDreamExecution())
+		r.result.Dream = &workflow.VerifiedDreamContext{EnterpriseID: "ent-1", DreamRunID: verified.DreamRunID, PolicyID: verified.PolicyID, PolicyVersion: verified.PolicyVersion, WorkflowID: verified.WorkflowID, WorkflowVersion: verified.WorkflowVersion, OrgUnitID: "department:rd"}
+	}
 	return r.result, r.err
 }
 
@@ -162,9 +166,26 @@ func TestDreamRunPolicySnapshotAgreementFailsClosed(t *testing.T) {
 	if err := validateRunPolicySnapshot(run, "ent-1", p); err != nil {
 		t.Fatal(err)
 	}
-	for name, mutate := range map[string]func(*db.DreamRun){"enterprise": func(r *db.DreamRun) { r.EnterpriseID = "ent-2" }, "legacy_version": func(r *db.DreamRun) { r.Version++ }, "org": func(r *db.DreamRun) { r.OrgUnitID = "department:other" }, "timezone": func(r *db.DreamRun) { r.Timezone = "UTC" }, "route": func(r *db.DreamRun) { r.ModelRoute = "forged" }, "visibility": func(r *db.DreamRun) {
-		r.VisibilitySnapshot = []byte(`{"visibility_level":"members","org_unit_ids":["other"],"masked_field_count":0}`)
-	}} {
+	mutations := map[string]func(*db.DreamRun){
+		"enterprise":     func(r *db.DreamRun) { r.EnterpriseID = "ent-2" },
+		"legacy_version": func(r *db.DreamRun) { r.Version++ },
+		"org":            func(r *db.DreamRun) { r.OrgUnitID = "department:other" },
+		"timezone":       func(r *db.DreamRun) { r.Timezone = "UTC" },
+		"route":          func(r *db.DreamRun) { r.ModelRoute = "forged" },
+		"visibility": func(r *db.DreamRun) {
+			r.VisibilitySnapshot = []byte(`{"visibility_level":"members","org_unit_ids":["other"],"masked_field_count":0}`)
+		},
+		"visibility_extra": func(r *db.DreamRun) {
+			r.VisibilitySnapshot = []byte(`{"visibility_level":"members","org_unit_ids":["department:rd-1"],"masked_field_count":0,"extra":true}`)
+		},
+		"input_null_counts": func(r *db.DreamRun) {
+			r.InputSnapshot = []byte(`{"source_counts":null,"sanitized_input_ids":[]}`)
+		},
+		"input_count_mismatch": func(r *db.DreamRun) {
+			r.InputSnapshot = []byte(`{"source_counts":[{"source_type":"work_brief","count":1}],"sanitized_input_ids":[]}`)
+		},
+	}
+	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {
 			copy := run
 			mutate(&copy)

@@ -100,11 +100,12 @@ func TestDreamExecutorConsumesOnlyTypedBoundedSanitizedInput(t *testing.T) {
 			"source": "deterministic", "model_route": "workflow/dream", "model_version": "v3",
 		}, nil
 	}})
-	run := &RunContext{EnterpriseID: "ent-1", Dream: &VerifiedDreamContext{DreamRunID: "dr-1", PolicyID: "policy-1", PolicyVersion: 1, WorkflowID: "wf-dream", WorkflowVersion: 3}, Input: map[string]any{
+	run := &RunContext{EnterpriseID: "ent-1", Dream: &VerifiedDreamContext{DreamRunID: "dr-1", PolicyID: "policy-1", PolicyVersion: 1, WorkflowID: "wf-dream", WorkflowVersion: 3, OrgUnitID: "department:rd"}, Input: map[string]any{
 		"org_unit_id": "department:rd", "window_start": "2026-07-11T00:00:00Z", "window_end": "2026-07-12T00:00:00Z",
-		"inputs":   []any{map[string]any{"source_type": "work_brief", "source_id": "brief-1", "org_unit_id": "department:rd", "sanitized_text": "safe", "visibility": []any{"managers"}}},
-		"coverage": map[string]any{"expected_children": float64(0), "completed_children": float64(0), "input_count": float64(1)},
-		"missing":  []any{},
+		"inputs":            []any{map[string]any{"source_type": "work_brief", "source_id": "brief-1", "org_unit_id": "department:rd", "sanitized_text": "safe", "visibility": []any{"managers"}}},
+		"coverage":          map[string]any{"expected_children": float64(0), "completed_children": float64(0), "input_count": float64(1)},
+		"missing":           []any{},
+		"risk_signal_rules": []any{},
 	}, Outputs: map[string]map[string]any{}}
 	out := execNode(t, r, sdkworkflow.Node{ID: "dream", Type: sdkworkflow.NodeDreamAggregate}, run)
 	if captured.OrgUnitID != "department:rd" || len(captured.Inputs) != 1 || captured.Inputs[0].SanitizedText != "safe" {
@@ -135,6 +136,19 @@ func TestDreamExecutorRejectsCallerControlledGenericWorkflowInput(t *testing.T) 
 
 func validExecutorDreamOutput() map[string]any {
 	return map[string]any{"display": "d", "retrieval": "r", "sealed_detail": "s", "facts": []any{}, "themes": []any{}, "trends": []any{}, "risks": []any{}, "todos": []any{}, "source": "deterministic", "model_route": "workflow/wf-dream", "model_version": "v3"}
+}
+
+func TestDreamOutputRejectsUnknownTopLevelAndSignalFields(t *testing.T) {
+	top := validExecutorDreamOutput()
+	top["unexpected"] = "x"
+	if validateDreamAggregateOutput(top) == nil {
+		t.Fatal("unknown top-level field accepted")
+	}
+	signal := validExecutorDreamOutput()
+	signal["facts"] = []any{map[string]any{"id": "f", "title": "t", "detail": "d", "severity": "info", "evidence_pointer_id": "ev", "unexpected": "x"}}
+	if validateDreamAggregateOutput(signal) == nil {
+		t.Fatal("unknown signal field accepted")
+	}
 }
 
 func TestTraceRecordPreservesDreamRunWorkflowPolicyAndEvidenceLineage(t *testing.T) {

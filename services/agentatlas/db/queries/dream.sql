@@ -50,6 +50,12 @@ WHERE enterprise_id = sqlc.arg(enterprise_id) AND id = sqlc.arg(run_id)
   AND (workflow_run_id IS NULL OR workflow_run_id = sqlc.arg(workflow_run_id))
 RETURNING *;
 
+-- name: PublishDreamWorkflowWait :one
+UPDATE dream_runs SET workflow_run_id=sqlc.arg(workflow_run_id), status='waiting_confirmation', error=''
+WHERE enterprise_id=sqlc.arg(enterprise_id) AND id=sqlc.arg(run_id)
+  AND status='running' AND (workflow_run_id IS NULL OR workflow_run_id=sqlc.arg(workflow_run_id))
+RETURNING *;
+
 -- name: GetDreamRunByWorkflowRun :one
 SELECT * FROM dream_runs WHERE enterprise_id = sqlc.arg(enterprise_id) AND workflow_run_id = sqlc.arg(workflow_run_id);
 
@@ -57,6 +63,18 @@ SELECT * FROM dream_runs WHERE enterprise_id = sqlc.arg(enterprise_id) AND workf
 UPDATE dream_runs SET status = 'pending', error = ''
 WHERE enterprise_id = sqlc.arg(enterprise_id) AND workflow_run_id = sqlc.arg(workflow_run_id)
   AND status = 'waiting_confirmation'
+RETURNING *;
+
+-- name: FailDreamRunAfterWorkflow :one
+UPDATE dream_runs SET status='failed', error=sqlc.arg(error)
+WHERE enterprise_id=sqlc.arg(enterprise_id) AND workflow_run_id=sqlc.arg(workflow_run_id)
+  AND status IN ('running','waiting_confirmation','pending')
+RETURNING *;
+
+-- name: ReserveDreamOutputHash :one
+UPDATE dream_runs SET output_hash=sqlc.arg(output_hash)
+WHERE enterprise_id=sqlc.arg(enterprise_id) AND id=sqlc.arg(run_id)
+  AND (output_hash IS NULL OR output_hash=sqlc.arg(output_hash))
 RETURNING *;
 
 -- name: ClaimDreamRun :execrows
