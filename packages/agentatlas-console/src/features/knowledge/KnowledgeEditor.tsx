@@ -7,6 +7,7 @@ import {
   emptyContent,
   getChange,
   newResourceID,
+  UnsafeContentError,
   updateChange,
   type ChangeDraft,
   type ChangeResourceType,
@@ -35,6 +36,7 @@ export function KnowledgeEditor({ kind = "knowledge_entry" }: { kind?: ChangeRes
   const [dirty, setDirty] = useState(false);
   const [loading, setLoading] = useState(Boolean(changeID));
   const [message, setMessage] = useState<string | null>(null);
+  const [blockedMessage, setBlockedMessage] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ConflictState | null>(null);
   const [saveCycle, setSaveCycle] = useState(0);
   const resourceID = useRef(newResourceID(kind));
@@ -58,8 +60,18 @@ export function KnowledgeEditor({ kind = "knowledge_entry" }: { kind?: ChangeRes
     setLoading(true);
     getChange(changeID).then((record) => {
       if (!active) return;
-      if (record.draft.org_unit_id !== orgUnitID || record.draft.resource_type !== kind || record.draft.permission_mode !== "direct_edit") {
-        setMessage("你不能在这个范围编辑这份内容。");
+      if (record.draft.org_unit_id !== orgUnitID || record.draft.permission_mode !== "direct_edit") {
+        setBlockedMessage("你不能在这个范围编辑这份内容。");
+        return;
+      }
+      if (record.draft.resource_type !== kind) {
+        if (record.draft.resource_type === "sop" || record.draft.resource_type === "knowledge_entry") {
+          const kindSegment = record.draft.resource_type === "sop" ? "/sop" : "";
+          active = false;
+          navigate(`/knowledge/${encodeURIComponent(orgUnitID)}/changes/${encodeURIComponent(changeID)}${kindSegment}/edit`, { replace: true });
+        } else {
+          setBlockedMessage("这份内容需要从对应的维护入口打开。");
+        }
         return;
       }
       setDraft(record.draft);
@@ -67,10 +79,14 @@ export function KnowledgeEditor({ kind = "knowledge_entry" }: { kind?: ChangeRes
       setSaveState("saved");
       setSavedAt(new Date(record.draft.updated_at));
       setDirty(false);
-    }).catch(() => active && setMessage("暂时无法读取这份草稿，请返回后重试。"))
+    }).catch((reason: unknown) => {
+      if (!active) return;
+      if (reason instanceof UnsafeContentError) setBlockedMessage(reason.message);
+      else setMessage("暂时无法读取这份草稿，请返回后重试。");
+    })
       .finally(() => active && setLoading(false));
     return () => { active = false; };
-  }, [changeID, kind, orgUnitID]);
+  }, [changeID, kind, navigate, orgUnitID]);
 
   const save = useCallback(async (revisionOverride?: number) => {
     if (!orgUnitID || !directEdit || conflict && revisionOverride === undefined) return;
@@ -171,6 +187,7 @@ export function KnowledgeEditor({ kind = "knowledge_entry" }: { kind?: ChangeRes
 
   if (!orgUnitID || !session.org_unit_ids.includes(orgUnitID) || !organization?.selectable || (!directEdit && !canSuggest)) return <Navigate to="/knowledge" replace />;
   if (loading) return <section className="knowledge-state" aria-busy="true">正在读取草稿…</section>;
+  if (blockedMessage) return <section className="knowledge-state" role="alert"><strong>{blockedMessage}</strong><span>这份内容没有被截断或修改，请联系高级维护人员处理。</span><Link className="knowledge-secondary-button" to={`/knowledge/${encodeURIComponent(orgUnitID)}`}>返回企业知识</Link></section>;
 
   return (
     <article className="knowledge-editor-page" aria-labelledby="knowledge-editor-title">

@@ -69,6 +69,20 @@ describe("ChangeReviewPage", () => {
     expect(screen.getAllByText("未填写").length).toBeGreaterThan(0);
   });
 
+  it("fails closed before rendering an oversized review payload", async () => {
+    const unsafe = { ...draft.proposed_content, references: Array.from({ length: 201 }, (_, index) => `资料-${index}`) };
+    const { fn } = makeFetch("low", {
+      "/api/changes/change-1": () => json({ draft: { ...draft, proposed_content: unsafe }, content: unsafe, base_content: null }),
+      "/api/changes/change-1/diff": () => json({ before: null, after: unsafe }),
+    });
+    vi.stubGlobal("fetch", fn);
+    render(<ConsoleShell initialPath="/knowledge/dept-rd/changes/change-1/review" />);
+
+    expect(await screen.findByText("内容过多或格式不安全")).toBeVisible();
+    expect(document.querySelectorAll(".knowledge-primary-button")).toHaveLength(0);
+    expect(screen.queryByText("资料-200")).not.toBeInTheDocument();
+  });
+
   it("shows every publishable section, reference, and SOP step field", async () => {
     const complete = {
       title: "完整 SOP",
@@ -88,13 +102,57 @@ describe("ChangeReviewPage", () => {
     }
   });
 
-  it("does not promise low-risk confirmation without publish permission", async () => {
+  it("shows every impacted organization by human name without leaking unknown identifiers", async () => {
+    const scopedSession: Session = {
+      ...session,
+      org_unit_ids: ["dept-rd", "dept-ops", "dept-unnamed"],
+      org_tree: [
+        { id: "dept-rd", name: "研发一部", selectable: true, children: [] },
+        { id: "dept-ops", name: "生产中心", selectable: true, children: [] },
+        { id: "dept-unnamed", name: "", selectable: true, children: [] },
+      ],
+    };
+    const content = {
+      ...draft.proposed_content,
+      impact: { ...draft.proposed_content.impact, organizations: ["dept-rd", "dept-ops", "dept-unnamed", "secret-org-id"] },
+    };
+    const base = makeFetch("low", {
+      "/api/changes/change-1": () => json({ draft: { ...draft, proposed_content: content }, content, base_content: null }),
+      "/api/changes/change-1/diff": () => json({ before: null, after: content }),
+    });
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => String(input) === "/api/session" ? Promise.resolve(json(scopedSession)) : base.fn(input, init)));
+    render(<ConsoleShell initialPath="/knowledge/dept-rd/changes/change-1/review" />);
+
+    expect(await screen.findByText("生产中心")).toBeVisible();
+    expect(screen.getByText("未命名组织")).toBeVisible();
+    expect(screen.getByText("其他已授权组织（1 个）")).toBeVisible();
+    expect(screen.queryByText("secret-org-id")).not.toBeInTheDocument();
+  });
+
+  it("hands off low-risk work when the editor lacks publish permission", async () => {
     const limited = { ...session, permissions: ["edit"] };
-    const base = makeFetch("low");
+    const route = { change_id: "change-1", resource_type: "knowledge_entry", resource_id: "knowledge-1", requester_user_id: "editor-user", risk_level: "low", mode: "upward_review", state: "pending", org_path: ["dept-rd", "company"] };
+    const base = makeFetch("low", { "/api/changes/change-1/submit": () => json(route) });
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => String(input) === "/api/session" ? Promise.resolve(json(limited)) : base.fn(input, init)));
     render(<ConsoleShell initialPath="/knowledge/dept-rd/changes/change-1/review" />);
-    expect(await screen.findByText("等待有发布权限的负责人处理")).toBeVisible();
+
+    fireEvent.click(await screen.findByRole("button", { name: "提交给上级负责人复核" }));
+    expect(await screen.findByText("已提交给上级负责人复核")).toBeVisible();
     expect(screen.queryByRole("button", { name: "确认并发布" })).not.toBeInTheDocument();
+    expect(document.querySelectorAll(".knowledge-primary-button")).toHaveLength(0);
+    expect(base.calls.filter((call) => call.endsWith("/submit"))).toHaveLength(1);
+    expect(base.calls.some((call) => call.endsWith("/decisions"))).toBe(false);
+    expect(base.calls.some((call) => call.endsWith("/publish"))).toBe(false);
+  });
+
+  it("does not offer high-risk submission after exact resource edit permission is lost", async () => {
+    const limited = { ...session, permissions: ["publish_low_risk"] };
+    const base = makeFetch("high");
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => String(input) === "/api/session" ? Promise.resolve(json(limited)) : base.fn(input, init)));
+    render(<ConsoleShell initialPath="/knowledge/dept-rd/changes/change-1/review" />);
+
+    expect(await screen.findByText("当前账号没有提交这项内容的权限")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "提交给上级负责人复核" })).not.toBeInTheDocument();
     expect(document.querySelectorAll(".knowledge-primary-button")).toHaveLength(0);
   });
 

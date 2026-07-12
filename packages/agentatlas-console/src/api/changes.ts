@@ -4,6 +4,25 @@ export type ChangeResourceType = "knowledge_entry" | "sop" | "workflow" | "dream
 export type ChangeState = "draft" | "submitted" | "approved" | "rejected" | "published" | "withdrawn";
 export type ReviewMode = "single_confirmation" | "upward_review" | "enterprise_knowledge_admin_queue";
 
+// Browser safety limits for known governed-content fields. Oversized content is
+// rejected whole: it is never truncated, rewritten, or sent back by autosave.
+export const GOVERNED_CONTENT_LIMITS = {
+  sections: 100,
+  steps: 200,
+  references: 200,
+  impactItems: 200,
+  titleLength: 500,
+  summaryLength: 10_000,
+  headingLength: 500,
+  bodyLength: 20_000,
+  referenceLength: 2_000,
+  people: 10_000_000,
+} as const;
+
+export class UnsafeContentError extends Error {
+  constructor() { super("内容过多或格式不安全"); this.name = "UnsafeContentError"; }
+}
+
 export interface KnowledgeSection { heading: string; body: string; [key: string]: unknown }
 export interface SOPStep { title: string; instruction: string; evidence?: string; completion?: string; [key: string]: unknown }
 export interface KnowledgeContent {
@@ -59,6 +78,7 @@ interface ChangeInput {
 }
 
 export function createChange(input: ChangeInput, suggestionOnly = false) {
+  assertContentSafe(input.proposed_content);
   return api<ChangeDraft>(suggestionOnly ? "/api/changes/suggestions" : "/api/changes", {
     method: "POST",
     body: JSON.stringify(input),
@@ -66,6 +86,7 @@ export function createChange(input: ChangeInput, suggestionOnly = false) {
 }
 
 export function updateChange(changeID: string, revision: number, proposedContent: KnowledgeContent) {
+  assertContentSafe(proposedContent);
   return api<ChangeDraft>(changePath(changeID), {
     method: "PUT",
     body: JSON.stringify({ revision, proposed_content: proposedContent }),
@@ -136,9 +157,12 @@ function normalizeRecord(value: unknown): ChangeRecord {
 
 export function normalizeContent(value: unknown): KnowledgeContent {
   if (typeof value === "string") {
-    try { return normalizeContent(JSON.parse(value) as unknown); } catch { return normalizedEmptyContent(); }
+    let parsed: unknown;
+    try { parsed = JSON.parse(value) as unknown; } catch { return normalizedEmptyContent(); }
+    return normalizeContent(parsed);
   }
   const raw = isRecord(value) ? value : {};
+  assertContentSafe(raw);
   const sections = Array.isArray(raw.sections) ? raw.sections.filter(isRecord).map((section) => ({
     ...section,
     heading: safeString(section.heading),
@@ -169,6 +193,40 @@ export function normalizeContent(value: unknown): KnowledgeContent {
     references: safeStringArray(raw.references),
     impact,
   };
+}
+
+export function assertContentSafe(value: unknown): void {
+  if (!isRecord(value)) return;
+  assertStringLimit(value.title, GOVERNED_CONTENT_LIMITS.titleLength);
+  assertStringLimit(value.summary, GOVERNED_CONTENT_LIMITS.summaryLength);
+  assertKnownArray(value.sections, GOVERNED_CONTENT_LIMITS.sections, (section) => {
+    if (!isRecord(section)) return;
+    assertStringLimit(section.heading, GOVERNED_CONTENT_LIMITS.headingLength);
+    assertStringLimit(section.body, GOVERNED_CONTENT_LIMITS.bodyLength);
+  });
+  assertKnownArray(value.steps, GOVERNED_CONTENT_LIMITS.steps, (step) => {
+    if (!isRecord(step)) return;
+    assertStringLimit(step.title, GOVERNED_CONTENT_LIMITS.headingLength);
+    assertStringLimit(step.instruction, GOVERNED_CONTENT_LIMITS.bodyLength);
+    assertStringLimit(step.evidence, GOVERNED_CONTENT_LIMITS.bodyLength);
+    assertStringLimit(step.completion, GOVERNED_CONTENT_LIMITS.bodyLength);
+  });
+  assertKnownArray(value.references, GOVERNED_CONTENT_LIMITS.references, (reference) => assertStringLimit(reference, GOVERNED_CONTENT_LIMITS.referenceLength));
+  if (!isRecord(value.impact)) return;
+  const people = value.impact.people;
+  if (typeof people === "number" && (!Number.isSafeInteger(people) || people < 0 || people > GOVERNED_CONTENT_LIMITS.people)) throw new UnsafeContentError();
+  assertKnownArray(value.impact.sops, GOVERNED_CONTENT_LIMITS.impactItems, (item) => assertStringLimit(item, GOVERNED_CONTENT_LIMITS.referenceLength));
+  assertKnownArray(value.impact.organizations, GOVERNED_CONTENT_LIMITS.impactItems, (item) => assertStringLimit(item, GOVERNED_CONTENT_LIMITS.referenceLength));
+}
+
+function assertKnownArray(value: unknown, maximum: number, inspect: (item: unknown) => void) {
+  if (!Array.isArray(value)) return;
+  if (value.length > maximum) throw new UnsafeContentError();
+  value.forEach(inspect);
+}
+
+function assertStringLimit(value: unknown, maximum: number) {
+  if (typeof value === "string" && value.length > maximum) throw new UnsafeContentError();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

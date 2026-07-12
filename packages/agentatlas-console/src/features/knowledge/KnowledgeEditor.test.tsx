@@ -103,6 +103,25 @@ describe("KnowledgeEditor", () => {
     expect(screen.getByRole("textbox", { name: "第 1 步名称" })).toHaveValue("检查工单");
   });
 
+  it("redirects an old generic SOP bookmark to the authoritative SOP editor", async () => {
+    const sopContent = { title: "异常处理", summary: "标准步骤", steps: [{ title: "检查工单", instruction: "打开工单" }], references: [] };
+    const sopDraft = { ...initialDraft, change_id: "change-sop-old", resource_type: "sop", proposed_content: sopContent };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/session") return json(editorSession);
+      if (url === "/api/changes/change-sop-old") return json({ draft: sopDraft, content: sopContent, base_content: null });
+      return json({ message: "not found" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ConsoleShell initialPath="/knowledge/dept-rd/changes/change-sop-old/edit" />);
+
+    expect(await screen.findByRole("heading", { name: "制作 SOP 流程" })).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "第 1 步名称" })).toHaveValue("检查工单");
+    expect(screen.queryByRole("textbox", { name: "第 1 部分内容" })).not.toBeInTheDocument();
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url) === "/api/changes/change-sop-old" && (init as RequestInit | undefined)?.method === "PUT")).toBe(false);
+  });
+
   it("edits every knowledge section and reference without dropping untouched content", async () => {
     const content = {
       title: "多段知识",
@@ -144,6 +163,25 @@ describe("KnowledgeEditor", () => {
     ]);
     expect(saved.references).toEqual(["设备手册新版", "值班记录"]);
     expect(saved.retained_top_level).toBe("keep-me");
+  });
+
+  it("blocks unsafe stored content without rendering fields or autosaving", async () => {
+    const unsafeContent = { ...initialDraft.proposed_content, sections: Array.from({ length: 101 }, (_, index) => ({ heading: `第 ${index + 1} 部分`, body: "正文" })) };
+    const unsafeDraft = { ...initialDraft, change_id: "change-unsafe", proposed_content: unsafeContent };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/session") return json(editorSession);
+      if (url === "/api/changes/change-unsafe") return json({ draft: unsafeDraft, content: unsafeContent, base_content: null });
+      return json({ message: "not found" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ConsoleShell initialPath="/knowledge/dept-rd/changes/change-unsafe/edit" />);
+
+    expect(await screen.findByText("内容过多或格式不安全")).toBeVisible();
+    expect(screen.queryByRole("textbox", { name: "知识名称" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "返回企业知识" })).toHaveAttribute("href", "/knowledge/dept-rd");
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url) === "/api/changes/change-unsafe" && (init as RequestInit | undefined)?.method === "PUT")).toBe(false);
   });
 
   it("waits 800ms, reports truthful autosave states, and warns only while unsaved", async () => {

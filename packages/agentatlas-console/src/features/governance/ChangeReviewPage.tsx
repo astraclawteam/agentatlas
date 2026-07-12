@@ -11,12 +11,13 @@ import {
   operationKey,
   publishChange,
   submitChange,
+  UnsafeContentError,
   type ChangeDiffValue,
   type ChangeRecord,
   type ReviewRoute,
   type RiskAssessment,
 } from "../../api/changes";
-import { useSession } from "../../app/session";
+import { useSession, type OrgScopeNode } from "../../app/session";
 import { findOrgScopeNode } from "../knowledge/OrgScopeNav";
 import { ChangeDiff } from "./ChangeDiff";
 
@@ -47,7 +48,7 @@ export function ChangeReviewPage() {
         setAssessment(nextAssessment);
         setRoute(nextRecord.route ?? null);
       })
-      .catch(() => active && setError("暂时无法读取这次修改，请返回后重试。"));
+      .catch((reason: unknown) => active && setError(reason instanceof UnsafeContentError ? reason.message : "暂时无法读取这次修改，请返回后重试。"));
     return () => { active = false; };
   }, [changeID, orgUnitID]);
 
@@ -132,7 +133,7 @@ export function ChangeReviewPage() {
       }
       setRoute(submittedRoute);
       setRecord((current) => current ? { ...current, draft: { ...current.draft, state: "submitted" }, route: submittedRoute } : current);
-      if (submittedRoute.mode !== "single_confirmation") {
+      if (submittedRoute.mode !== "single_confirmation" || !session.permissions.includes("publish_low_risk")) {
         setPhase("submitted");
         return;
       }
@@ -164,8 +165,11 @@ export function ChangeReviewPage() {
       return canReview ? { label: "确认通过", action: runPrimary } : null;
     }
     if (record.draft.requester_user_id !== session.enterprise_user_id || record.draft.permission_mode !== "direct_edit") return null;
+    if (!canEdit) return null;
     return assessment.risk_level === "low"
-      ? canEdit && session.permissions.includes("publish_low_risk") ? { label: "确认并发布", action: runPrimary } : null
+      ? session.permissions.includes("publish_low_risk")
+        ? { label: "确认并发布", action: runPrimary }
+        : { label: "提交给上级负责人复核", action: runPrimary }
       : { label: "提交给上级负责人复核", action: runPrimary };
   }, [assessment, phase, record, route, session.enterprise_user_id, session.permissions]);
 
@@ -174,6 +178,7 @@ export function ChangeReviewPage() {
   if (!record || !diff || !assessment) return <section className="knowledge-state" aria-busy="true">正在准备修改前后对比…</section>;
 
   const impact = record.content.impact ?? {};
+  const impactOrganizations = humanImpactOrganizations(impact.organizations, session.org_tree, organization.name);
   return (
     <article className="change-review-page" aria-labelledby="change-review-title">
       <header className="change-review-header">
@@ -191,7 +196,7 @@ export function ChangeReviewPage() {
 
       <div className="change-review-context">
         <section className="glass-rest"><h2>风险判断</h2><strong className={`risk-level risk-${assessment.risk_level}`}>{assessment.risk_level === "low" ? "低风险" : "高风险"}</strong><ul>{assessment.risk_reasons.map((reason) => <li key={reason}>{humanRiskReason(reason)}</li>)}</ul></section>
-        <section className="glass-rest"><h2>生效后的影响</h2><ul className="impact-list"><li>{organization.name || "未命名组织"}</li>{typeof impact.people === "number" ? <li><Users aria-hidden size={16} />{impact.people} 人</li> : <li>人数将在发布时复核</li>}{impact.agent_answers ? <li>员工 Agent 的相关回答会更新</li> : null}{(impact.sops ?? []).map((name) => <li key={name}>{name}</li>)}</ul></section>
+        <section className="glass-rest"><h2>生效后的影响</h2><ul className="impact-list">{impactOrganizations.map((name, index) => <li key={`${name}-${index}`}>{name}</li>)}{typeof impact.people === "number" ? <li><Users aria-hidden size={16} />{impact.people} 人</li> : <li>人数将在发布时复核</li>}{impact.agent_answers ? <li>员工 Agent 的相关回答会更新</li> : null}{(impact.sops ?? []).map((name) => <li key={name}>{name}</li>)}</ul></section>
         <section className="glass-rest"><h2>审批路径</h2><p>{reviewPathCopy(assessment, route, phase, organization.name)}</p></section>
       </div>
 
@@ -264,12 +269,30 @@ function canEditResource(resourceType: string, permissions: string[]) {
   return permissions.includes(resourceType === "workflow" ? "workflow_edit" : "edit");
 }
 
+function humanImpactOrganizations(organizationIDs: string[] | undefined, orgTree: OrgScopeNode[], fallbackName: string) {
+  const ids = [...new Set(organizationIDs ?? [])];
+  if (ids.length === 0) return [fallbackName || "未命名组织"];
+  const names: string[] = [];
+  let unknown = 0;
+  for (const id of ids) {
+    const node = findOrgScopeNode(orgTree, id);
+    if (!node) {
+      unknown += 1;
+    } else {
+      names.push(node.name || "未命名组织");
+    }
+  }
+  if (unknown) names.push(`其他已授权组织（${unknown} 个）`);
+  return names;
+}
+
 function waitingActionCopy(record: ChangeRecord, assessment: RiskAssessment, userID: string, permissions: string[]) {
   const requester = record.draft.requester_user_id === userID;
   if (record.draft.state === "approved") {
     if (!requester) return "等待原发起人完成发布";
     if (!canEditResource(record.draft.resource_type, permissions)) return "当前账号没有发布这项内容的权限";
   }
+  if (record.draft.state === "draft" && requester && !canEditResource(record.draft.resource_type, permissions)) return "当前账号没有提交这项内容的权限";
   if (record.draft.state === "draft" && requester && assessment.risk_level === "low" && !permissions.includes("publish_low_risk")) return "等待有发布权限的负责人处理";
   if (record.draft.state === "submitted" && requester) return "修改正在等待复核";
   return "当前没有需要你执行的操作";
