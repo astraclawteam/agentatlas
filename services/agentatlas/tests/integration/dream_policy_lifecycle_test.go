@@ -2,7 +2,6 @@ package integration
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -315,17 +314,10 @@ func TestDreamPolicyLifecycleMigrationDownRestoresV8(t *testing.T) {
 		t.Skip("set ATLAS_TEST_POSTGRES_DSN")
 	}
 	ctx := context.Background()
-	if err := storage.Migrate(ctx, dsn); err != nil {
-		t.Fatal(err)
-	}
-	sqldb, err := sql.Open("pgx", dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sqldb.Close()
+	ctx, sqldb := openDreamMigrationDB(t, dsn, 10)
 	defer func() {
-		if err := storage.Migrate(ctx, dsn); err != nil {
-			t.Errorf("restore v9: %v", err)
+		if err := goose.UpToContext(ctx, sqldb, "migrations", 10); err != nil {
+			t.Errorf("restore v10: %v", err)
 		}
 	}()
 	enterprise := newID("ent_down")
@@ -360,7 +352,7 @@ func TestDreamPolicyLifecycleMigrationDownRestoresV8(t *testing.T) {
 		t.Fatalf("status=%q err=%v", status, err)
 	}
 	var lifecycleColumns int
-	if err := sqldb.QueryRowContext(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_name='dream_policies' AND column_name IN ('review_state','pending_action','revision')`).Scan(&lifecycleColumns); err != nil || lifecycleColumns != 0 {
+	if err := sqldb.QueryRowContext(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='dream_policies' AND column_name IN ('review_state','pending_action','revision')`).Scan(&lifecycleColumns); err != nil || lifecycleColumns != 0 {
 		t.Fatalf("lifecycle columns=%d err=%v", lifecycleColumns, err)
 	}
 }

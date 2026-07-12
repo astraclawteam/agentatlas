@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -20,8 +21,10 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/agent"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/app"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/auditrefs"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/browsersession"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/config"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/governance"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/llmroutermodel"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
@@ -70,6 +73,33 @@ func run() error {
 	}
 	defer pool.Close()
 	queries := db.New(pool)
+	consoleSecret, err := browsersession.LoadConsoleClientSecret(cfg.AgentNexus.BrowserClientSecretFile)
+	if err != nil {
+		return fmt.Errorf("browser client secret: %w", err)
+	}
+	encryptionKey, err := browsersession.LoadEncryptionKey(cfg.AgentNexus.BrowserSessionEncryptionKeyFile)
+	if err != nil {
+		return fmt.Errorf("browser session key: %w", err)
+	}
+	protector, err := browsersession.NewProtector(encryptionKey)
+	if err != nil {
+		return err
+	}
+	browserStore, err := browsersession.NewPostgresStore(pool, protector, time.Now)
+	if err != nil {
+		return err
+	}
+	oidcClient := browsersession.NewOIDCClient(&http.Client{Timeout: 30 * time.Second}, cfg.AgentNexus.BaseURL, time.Now)
+	browserSessions, err := browsersession.New(browsersession.Config{Issuer: cfg.AgentNexus.BaseURL, ClientID: cfg.AgentNexus.BrowserClientID, ClientSecret: consoleSecret, RedirectURI: strings.TrimRight(cfg.AgentNexus.AtlasPublicURL, "/") + "/auth/callback"}, browserStore, oidcClient, time.Now)
+	if err != nil {
+		return err
+	}
+	changeStore, err := governance.NewPostgresStore(pool, time.Now)
+	if err != nil {
+		return err
+	}
+	changes := governance.NewService(changeStore, governance.NexusRouteResolver{Client: rawNexusClient, Now: time.Now}, governance.NexusAuditAppender{Client: rawNexusClient}, nil, time.Now)
+	changes.SetAuthorizer(governance.NexusAuthorizer{Client: rawNexusClient})
 
 	defaultModel := cfg.LLMRouter.DefaultModel
 	if defaultModel == "" {
@@ -123,6 +153,7 @@ func run() error {
 		Nexus: nexusClient, Agent: agentRunner, Workflows: workflowSvc,
 		Runtime: workflowRuntime, Dreams: dreamPolicies, Store: queries,
 		DreamRerun: dreamScheduler, Runner: taskRunner, Metrics: metrics,
+		BrowserSessions: browserSessions, Changes: changes,
 	})
 
 	addr := os.Getenv("ATLAS_AGENT_ADDR")

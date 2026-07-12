@@ -37,6 +37,9 @@ config:
   nexusServiceSecretName: agentatlas-agentnexus-service
   nexusServiceSecretKey: client-secret
   nexusApprovalFactsSecretKey: approval-facts-secret
+  nexusBrowserClientSecretKey: browser-client-secret
+  browserSessionEncryptionKey: browser-session-key
+  atlasPublicUrl: https://atlas.example
   doclingUrl: http://docling-sidecar:5001
   mineruUrl: http://mineru-sidecar:8000
   asrUrl: http://asr-sidecar:5003

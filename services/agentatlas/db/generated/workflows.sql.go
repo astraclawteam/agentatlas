@@ -488,6 +488,44 @@ func (q *Queries) ListWorkflowRunEvents(ctx context.Context, runID string) ([]Wo
 	return items, nil
 }
 
+const listWorkflowsByEnterprise = `-- name: ListWorkflowsByEnterprise :many
+SELECT id, enterprise_id, name, kind, created_by, draft, draft_updated_at, created_at FROM workflows WHERE enterprise_id = $1 ORDER BY draft_updated_at DESC, id LIMIT $2
+`
+
+type ListWorkflowsByEnterpriseParams struct {
+	EnterpriseID string `json:"enterprise_id"`
+	Limit        int32  `json:"limit"`
+}
+
+func (q *Queries) ListWorkflowsByEnterprise(ctx context.Context, arg ListWorkflowsByEnterpriseParams) ([]Workflow, error) {
+	rows, err := q.db.Query(ctx, listWorkflowsByEnterprise, arg.EnterpriseID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Workflow
+	for rows.Next() {
+		var i Workflow
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnterpriseID,
+			&i.Name,
+			&i.Kind,
+			&i.CreatedBy,
+			&i.Draft,
+			&i.DraftUpdatedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const publishWorkflowVersion = `-- name: PublishWorkflowVersion :one
 INSERT INTO workflow_versions (workflow_id, version, definition, risk_level, published_by)
 VALUES ($1, $2, $3, $4, $5)

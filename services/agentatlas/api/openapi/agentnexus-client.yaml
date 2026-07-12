@@ -118,7 +118,7 @@ paths:
     post:
       operationId: appendAuditEvidence
       summary: Record a trusted AgentAtlas service request in the audit chain.
-      security: [{agentAtlasServiceSecret: []}]
+      security: [{agentAtlasServiceSecret: []}, {browserAccessToken: []}]
       parameters:
         - {name: Idempotency-Key, in: header, required: false, schema: {type: string, minLength: 16, maxLength: 128}, description: Stable operation-derived key; retries with the same canonical payload return the same audit_ref_id.}
       requestBody:
@@ -159,6 +159,10 @@ components:
       type: http
       scheme: basic
       description: AgentAtlas service credentials using client_id=agentatlas and its confidential client secret.
+    browserAccessToken:
+      type: http
+      scheme: bearer
+      description: Opaque AgentAtlas BFF token bound to client, audience, enterprise, user, and browser session.
   schemas:
     ApprovalRoute:
       type: object
@@ -209,9 +213,9 @@ components:
     AuditEvidenceRequest:
       type: object
       additionalProperties: false
-      required: [ticket_id, enterprise_id, action, resource_type, resource_id]
+      required: [enterprise_id, action, resource_type, resource_id]
       properties:
-        ticket_id: {type: string, minLength: 1, maxLength: 4096}
+        ticket_id: {type: string, minLength: 0, maxLength: 4096, description: Required for service Basic authentication; omitted for browserAccessToken actors.}
         enterprise_id: {type: string, minLength: 1, maxLength: 128}
         action: {$ref: '#/components/schemas/AuditEvidenceAction'}
         resource_type: {type: string, minLength: 1, maxLength: 64}

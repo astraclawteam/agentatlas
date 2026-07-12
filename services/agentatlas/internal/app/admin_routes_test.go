@@ -25,6 +25,7 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/agent"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/artifacts"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/governance"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/retrieval"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/tasks"
@@ -709,6 +710,7 @@ func newAgentTestServerWithProvidedPolicyStore(t *testing.T, nexusClient nexus.C
 		Nexus: nexusClient, Agent: agentRunner, Workflows: wfSvc,
 		Dreams:   dream.NewPolicyService(policies),
 		Outlines: outlines, Runner: producer,
+		Changes: governance.NewService(governance.NewMemoryStore(time.Now), governance.StaticRouteResolver{ReviewerUserID: "manager", OrgPath: []string{"team", "company"}}, &governance.MemoryAuditAppender{}, governance.NewMemoryPublisher(), time.Now),
 	})
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
@@ -770,26 +772,19 @@ func TestWorkflowCreatePublishRoute(t *testing.T) {
 		t.Fatalf("create response: %v", created)
 	}
 
-	resp = postJSONReq(t, srv.URL+"/v1/workflows/"+wfID+"/publish", "tick_admin", map[string]any{})
-	if resp.StatusCode != http.StatusOK {
+	resp = postJSONReq(t, srv.URL+"/v1/workflows/"+wfID+"/publish", "tick_admin", map[string]any{"org_unit_id": "team"})
+	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("publish = %d", resp.StatusCode)
 	}
-	published := decodeBody(t, resp)
-	if published["version"].(float64) != 1 {
-		t.Fatalf("publish response: %v", published)
+	pending := decodeBody(t, resp)
+	if pending["review_route"] == nil {
+		t.Fatalf("governed publish response: %v", pending)
 	}
-	// audit chain received the publish event
-	var audited bool
+	// Submission must not publish or append the publish audit before approval.
 	for _, e := range mock.AuditLog {
 		if e.Action == nexus.AuditWorkflowVersionPublished {
-			if e.ResourceType != "workflow" || e.ResourceID != wfID {
-				t.Fatalf("workflow audit binding=%+v", e)
-			}
-			audited = true
+			t.Fatalf("workflow was audited/published before approval: %+v", e)
 		}
-	}
-	if !audited {
-		t.Fatal("publish must append audit evidence")
 	}
 }
 
@@ -803,10 +798,10 @@ func TestWorkflowPublishFailsClosedWhenAuditDown(t *testing.T) {
 	resp := postJSONReq(t, srv.URL+"/v1/workflows", "tick_admin", map[string]any{"name": "X", "definition": def})
 	wfID := decodeBody(t, resp)["workflow_id"].(string)
 
-	resp = postJSONReq(t, srv.URL+"/v1/workflows/"+wfID+"/publish", "tick_admin", map[string]any{})
+	resp = postJSONReq(t, srv.URL+"/v1/workflows/"+wfID+"/publish", "tick_admin", map[string]any{"org_unit_id": "team"})
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("publish with audit down = %d, want 500 (fail loud)", resp.StatusCode)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("review submission with audit down = %d, want 202 before publish audit", resp.StatusCode)
 	}
 }
 

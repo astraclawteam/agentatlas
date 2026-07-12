@@ -13,7 +13,8 @@ import (
 )
 
 const (
-	NexusTicketScopes nexusTicketContextKey = "NexusTicket.Scopes"
+	AtlasSessionScopes atlasSessionContextKey = "AtlasSession.Scopes"
+	NexusTicketScopes  nexusTicketContextKey  = "NexusTicket.Scopes"
 )
 
 // Defines values for AgentRunPendingConfirmationRiskLevel.
@@ -838,6 +839,60 @@ func (e StructuredSignalSeverity) Valid() bool {
 	}
 }
 
+// Defines values for SuggestionInputAction.
+const (
+	SuggestionInputActionCreate  SuggestionInputAction = "create"
+	SuggestionInputActionDelete  SuggestionInputAction = "delete"
+	SuggestionInputActionDisable SuggestionInputAction = "disable"
+	SuggestionInputActionPublish SuggestionInputAction = "publish"
+	SuggestionInputActionUpdate  SuggestionInputAction = "update"
+)
+
+// Valid indicates whether the value is a known member of the SuggestionInputAction enum.
+func (e SuggestionInputAction) Valid() bool {
+	switch e {
+	case SuggestionInputActionCreate:
+		return true
+	case SuggestionInputActionDelete:
+		return true
+	case SuggestionInputActionDisable:
+		return true
+	case SuggestionInputActionPublish:
+		return true
+	case SuggestionInputActionUpdate:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SuggestionInputResourceType.
+const (
+	DreamPolicy    SuggestionInputResourceType = "dream_policy"
+	KnowledgeEntry SuggestionInputResourceType = "knowledge_entry"
+	MethodOutline  SuggestionInputResourceType = "method_outline"
+	Sop            SuggestionInputResourceType = "sop"
+	Workflow       SuggestionInputResourceType = "workflow"
+)
+
+// Valid indicates whether the value is a known member of the SuggestionInputResourceType enum.
+func (e SuggestionInputResourceType) Valid() bool {
+	switch e {
+	case DreamPolicy:
+		return true
+	case KnowledgeEntry:
+		return true
+	case MethodOutline:
+		return true
+	case Sop:
+		return true
+	case Workflow:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for VisibilitySnapshotSummaryVisibilityLevel.
 const (
 	CompanySanitized VisibilitySnapshotSummaryVisibilityLevel = "company_sanitized"
@@ -963,16 +1018,16 @@ func (e DecideDreamPolicyJSONBodyDecision) Valid() bool {
 
 // Defines values for SubmitDreamPolicyReviewJSONBodyAction.
 const (
-	SubmitDreamPolicyReviewJSONBodyActionDisable SubmitDreamPolicyReviewJSONBodyAction = "disable"
-	SubmitDreamPolicyReviewJSONBodyActionPublish SubmitDreamPolicyReviewJSONBodyAction = "publish"
+	Disable SubmitDreamPolicyReviewJSONBodyAction = "disable"
+	Publish SubmitDreamPolicyReviewJSONBodyAction = "publish"
 )
 
 // Valid indicates whether the value is a known member of the SubmitDreamPolicyReviewJSONBodyAction enum.
 func (e SubmitDreamPolicyReviewJSONBodyAction) Valid() bool {
 	switch e {
-	case SubmitDreamPolicyReviewJSONBodyActionDisable:
+	case Disable:
 		return true
-	case SubmitDreamPolicyReviewJSONBodyActionPublish:
+	case Publish:
 		return true
 	default:
 		return false
@@ -1041,6 +1096,20 @@ type AgentRunPendingConfirmationRiskLevel string
 
 // AgentRunStatus defines model for AgentRun.Status.
 type AgentRunStatus string
+
+// BrowserSessionView defines model for BrowserSessionView.
+type BrowserSessionView struct {
+	AbsoluteExpiresAt   *time.Time `json:"absolute_expires_at,omitempty"`
+	AdvancedModeAllowed *bool      `json:"advanced_mode_allowed,omitempty"`
+	Authenticated       bool       `json:"authenticated"`
+	DisplayName         string     `json:"display_name"`
+	EnterpriseId        string     `json:"enterprise_id"`
+	EnterpriseUserId    string     `json:"enterprise_user_id"`
+	IdleExpiresAt       *time.Time `json:"idle_expires_at,omitempty"`
+	OrgUnitIds          []string   `json:"org_unit_ids"`
+	OrgVersion          int64      `json:"org_version"`
+	Permissions         []string   `json:"permissions"`
+}
 
 // ChangeDraft defines model for ChangeDraft.
 type ChangeDraft struct {
@@ -1268,6 +1337,14 @@ type MissingInputReason string
 // MissingInputSourceType defines model for MissingInput.SourceType.
 type MissingInputSourceType string
 
+// PublishedChangeVersion defines model for PublishedChangeVersion.
+type PublishedChangeVersion struct {
+	AuditRefId string `json:"audit_ref_id"`
+	ChangeId   string `json:"change_id"`
+	ResourceId string `json:"resource_id"`
+	Version    int    `json:"version"`
+}
+
 // ReviewRoute defines model for ReviewRoute.
 type ReviewRoute struct {
 	ChangeId        string                  `json:"change_id"`
@@ -1353,6 +1430,22 @@ type StructuredSignal struct {
 // StructuredSignalSeverity defines model for StructuredSignal.Severity.
 type StructuredSignalSeverity string
 
+// SuggestionInput defines model for SuggestionInput.
+type SuggestionInput struct {
+	Action          SuggestionInputAction       `json:"action"`
+	BaseVersion     *int                        `json:"base_version,omitempty"`
+	OrgUnitId       string                      `json:"org_unit_id"`
+	ProposedContent map[string]interface{}      `json:"proposed_content"`
+	ResourceId      string                      `json:"resource_id"`
+	ResourceType    SuggestionInputResourceType `json:"resource_type"`
+}
+
+// SuggestionInputAction defines model for SuggestionInput.Action.
+type SuggestionInputAction string
+
+// SuggestionInputResourceType defines model for SuggestionInput.ResourceType.
+type SuggestionInputResourceType string
+
 // VisibilitySnapshotSummary defines model for VisibilitySnapshotSummary.
 type VisibilitySnapshotSummary struct {
 	MaskedFieldCount int                                      `json:"masked_field_count"`
@@ -1375,8 +1468,33 @@ type NotFound = Error
 // Unauthorized defines model for Unauthorized.
 type Unauthorized = Error
 
+// atlasSessionContextKey is the context key for AtlasSession security scheme
+type atlasSessionContextKey string
+
 // nexusTicketContextKey is the context key for NexusTicket security scheme
 type nexusTicketContextKey string
+
+// ListGovernedChangesParams defines parameters for ListGovernedChanges.
+type ListGovernedChangesParams struct {
+	OrgUnitId string `form:"org_unit_id" json:"org_unit_id"`
+	Limit     *int   `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// PublishGovernedChangeParams defines parameters for PublishGovernedChange.
+type PublishGovernedChangeParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
+// CompleteAtlasBrowserLoginParams defines parameters for CompleteAtlasBrowserLogin.
+type CompleteAtlasBrowserLoginParams struct {
+	State string `form:"state" json:"state"`
+	Code  string `form:"code" json:"code"`
+}
+
+// BeginAtlasBrowserLoginParams defines parameters for BeginAtlasBrowserLogin.
+type BeginAtlasBrowserLoginParams struct {
+	ReturnTo *string `form:"return_to,omitempty" json:"return_to,omitempty"`
+}
 
 // CreateAgentRunJSONBody defines parameters for CreateAgentRun.
 type CreateAgentRunJSONBody struct {
@@ -1533,6 +1651,12 @@ type StartWorkflowRunJSONBody struct {
 
 // StartWorkflowRun202JSONResponseBodyStatus defines parameters for StartWorkflowRun.
 type StartWorkflowRun202JSONResponseBodyStatus string
+
+// CreateGovernedChangeDraftJSONRequestBody defines body for CreateGovernedChangeDraft for application/json ContentType.
+type CreateGovernedChangeDraftJSONRequestBody = SuggestionInput
+
+// SuggestGovernedChangeJSONRequestBody defines body for SuggestGovernedChange for application/json ContentType.
+type SuggestGovernedChangeJSONRequestBody = SuggestionInput
 
 // CreateAgentRunJSONRequestBody defines body for CreateAgentRun for application/json ContentType.
 type CreateAgentRunJSONRequestBody CreateAgentRunJSONBody

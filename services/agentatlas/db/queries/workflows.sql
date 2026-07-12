@@ -10,6 +10,9 @@ WHERE id = $1 AND enterprise_id = $2;
 -- name: GetWorkflow :one
 SELECT * FROM workflows WHERE id = $1;
 
+-- name: ListWorkflowsByEnterprise :many
+SELECT * FROM workflows WHERE enterprise_id = $1 ORDER BY draft_updated_at DESC, id LIMIT $2;
+
 -- name: PublishWorkflowVersion :one
 INSERT INTO workflow_versions (workflow_id, version, definition, risk_level, published_by)
 VALUES ($1, $2, $3, $4, $5)

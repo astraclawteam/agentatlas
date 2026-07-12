@@ -47,6 +47,7 @@ func (c *HTTPClient) ConfigureApprovalFactsSecret(path string) error {
 
 var _ nexus.Client = (*HTTPClient)(nil)
 var _ nexus.ApprovalClient = (*HTTPClient)(nil)
+var _ nexus.BrowserBFFClient = (*HTTPClient)(nil)
 
 func (c *HTTPClient) String() string {
 	if c == nil {
@@ -224,6 +225,75 @@ func (c *HTTPClient) ResolveApprovalRoute(ctx context.Context, input nexus.Appro
 		return out, fmt.Errorf("nexus approval violated no-auto-publish contract")
 	}
 	return out, nil
+}
+
+func (c *HTTPClient) AuthorizeBrowserOperation(ctx context.Context, accessToken string, input nexus.BrowserAuthorizationRequest) (nexus.BrowserAuthorizationDecision, error) {
+	var out nexus.BrowserAuthorizationDecision
+	err := c.bearerPost(ctx, "/v1/authorization/decisions", accessToken, "", input, &out, nil)
+	return out, err
+}
+func (c *HTTPClient) ResolveApprovalRouteWithBearer(ctx context.Context, accessToken string, input nexus.ApprovalResolveRequest) (nexus.ApprovalRoute, error) {
+	var out nexus.ApprovalRoute
+	if len(input.IdempotencyKey) < 16 || input.EnterpriseID == "" || input.ActorUserID == "" {
+		return out, fmt.Errorf("nexus browser approval: incomplete request")
+	}
+	attestation, err := approvalFactsAttestation(c.approvalFactsSecret, input)
+	if err != nil {
+		return out, err
+	}
+	headers := map[string]string{"X-Approval-Facts-Attestation": attestation}
+	if err := c.bearerPost(ctx, "/v1/approvals/resolve", accessToken, input.IdempotencyKey, input, &out, headers); err != nil {
+		return out, err
+	}
+	if out.AutoPublish {
+		return out, fmt.Errorf("nexus approval violated no-auto-publish contract")
+	}
+	return out, nil
+}
+func (c *HTTPClient) AppendAuditEvidenceWithBearer(ctx context.Context, accessToken string, input nexus.AppendAuditEvidenceRequest) (nexus.AppendAuditEvidenceResponse, error) {
+	var out nexus.AppendAuditEvidenceResponse
+	err := c.bearerPost(ctx, "/v1/audit/evidence", accessToken, input.IdempotencyKey, input, &out, nil)
+	return out, err
+}
+func (c *HTTPClient) bearerPost(ctx context.Context, path, accessToken, idempotency string, in, out any, headers map[string]string) error {
+	if len(accessToken) < 16 {
+		return fmt.Errorf("nexus %s: missing BFF credential", path)
+	}
+	body, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	if idempotency != "" {
+		req.Header.Set("Idempotency-Key", idempotency)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("nexus %s: %w", path, ErrDenied)
+	}
+	if resp.StatusCode == http.StatusConflict {
+		return fmt.Errorf("nexus %s: %w", path, ErrConflict)
+	}
+	if resp.StatusCode/100 != 2 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("nexus %s: status %d: %s", path, resp.StatusCode, snippet)
+	}
+	if out != nil {
+		return json.NewDecoder(resp.Body).Decode(out)
+	}
+	return nil
 }
 
 func approvalFactsAttestation(secret string, input nexus.ApprovalResolveRequest) (string, error) {

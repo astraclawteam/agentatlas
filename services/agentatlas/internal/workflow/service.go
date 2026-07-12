@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -27,6 +28,61 @@ type Store interface {
 	GetWorkflowRun(ctx context.Context, id string) (db.WorkflowRun, error)
 	InsertWorkflowRunEvent(ctx context.Context, arg db.InsertWorkflowRunEventParams) (db.WorkflowRunEvent, error)
 	ListWorkflowRunEvents(ctx context.Context, runID string) ([]db.WorkflowRunEvent, error)
+}
+
+type DraftView struct {
+	ID, EnterpriseID, Name, Kind string
+	Definition                   Definition
+	UpdatedAt                    time.Time
+	LatestVersion                int32
+}
+
+func (s *Service) GetDraft(ctx context.Context, enterpriseID, workflowID string) (DraftView, error) {
+	row, err := s.store.GetWorkflow(ctx, workflowID)
+	if err != nil {
+		return DraftView{}, err
+	}
+	if row.EnterpriseID != enterpriseID {
+		return DraftView{}, ErrWorkflowForbidden
+	}
+	var def Definition
+	if json.Unmarshal(row.Draft, &def) != nil {
+		return DraftView{}, fmt.Errorf("decode draft")
+	}
+	latestVersion := int32(0)
+	if latest, latestErr := s.store.GetLatestWorkflowVersion(ctx, workflowID); latestErr == nil {
+		latestVersion = latest.Version
+	} else if !errors.Is(latestErr, pgx.ErrNoRows) {
+		return DraftView{}, latestErr
+	}
+	return DraftView{ID: row.ID, EnterpriseID: row.EnterpriseID, Name: row.Name, Kind: row.Kind, Definition: def, UpdatedAt: row.DraftUpdatedAt.Time, LatestVersion: latestVersion}, nil
+}
+func (s *Service) ListDrafts(ctx context.Context, enterpriseID string, limit int32) ([]DraftView, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	lister, ok := s.store.(interface {
+		ListWorkflowsByEnterprise(context.Context, db.ListWorkflowsByEnterpriseParams) ([]db.Workflow, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("workflow listing unavailable")
+	}
+	rows, err := lister.ListWorkflowsByEnterprise(ctx, db.ListWorkflowsByEnterpriseParams{EnterpriseID: enterpriseID, Limit: limit + 1})
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > int(limit) {
+		return nil, fmt.Errorf("workflow bounded read exceeded %d", limit)
+	}
+	out := make([]DraftView, 0, len(rows))
+	for _, row := range rows {
+		view, viewErr := s.GetDraft(ctx, enterpriseID, row.ID)
+		if viewErr != nil {
+			return nil, viewErr
+		}
+		out = append(out, view)
+	}
+	return out, nil
 }
 
 type Service struct {

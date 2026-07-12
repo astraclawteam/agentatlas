@@ -89,6 +89,32 @@ type ArtifactProcessingStep struct {
 	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
 }
 
+type AtlasBrowserLoginAttempt struct {
+	StateHash              string             `json:"state_hash"`
+	Nonce                  string             `json:"nonce"`
+	PkceVerifierCiphertext []byte             `json:"pkce_verifier_ciphertext"`
+	ReturnTo               string             `json:"return_to"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt              pgtype.Timestamptz `json:"expires_at"`
+}
+
+type AtlasBrowserSession struct {
+	SessionHash                   string             `json:"session_hash"`
+	EnterpriseID                  string             `json:"enterprise_id"`
+	EnterpriseUserID              string             `json:"enterprise_user_id"`
+	DisplayName                   string             `json:"display_name"`
+	OrgVersion                    int64              `json:"org_version"`
+	OrgUnitIds                    []byte             `json:"org_unit_ids"`
+	Permissions                   []byte             `json:"permissions"`
+	AdvancedModeAllowed           bool               `json:"advanced_mode_allowed"`
+	UpstreamAccessTokenCiphertext []byte             `json:"upstream_access_token_ciphertext"`
+	CreatedAt                     pgtype.Timestamptz `json:"created_at"`
+	LastSeenAt                    pgtype.Timestamptz `json:"last_seen_at"`
+	IdleExpiresAt                 pgtype.Timestamptz `json:"idle_expires_at"`
+	AbsoluteExpiresAt             pgtype.Timestamptz `json:"absolute_expires_at"`
+	RevokedAt                     pgtype.Timestamptz `json:"revoked_at"`
+}
+
 type AtlasDocument struct {
 	ID           string             `json:"id"`
 	EnterpriseID string             `json:"enterprise_id"`
@@ -439,6 +465,19 @@ type PublishOperation struct {
 	Result         []byte             `json:"result"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
+	RequestHash    pgtype.Text        `json:"request_hash"`
+	AuditRefID     pgtype.Text        `json:"audit_ref_id"`
+}
+
+type PublishedResourcePointer struct {
+	EnterpriseID    string             `json:"enterprise_id"`
+	ResourceType    string             `json:"resource_type"`
+	ResourceID      string             `json:"resource_id"`
+	ChangeID        string             `json:"change_id"`
+	ChangeVersion   int32              `json:"change_version"`
+	ResourceVersion int32              `json:"resource_version"`
+	AuditRefID      string             `json:"audit_ref_id"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
 type RetrievalPlan struct {

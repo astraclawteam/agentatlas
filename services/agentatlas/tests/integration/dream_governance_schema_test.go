@@ -238,10 +238,11 @@ values('outbox-dream','outbox-policy',1,'outbox-ent','running',now()-interval '1
 	}); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("stale Dream owner crossed output fence: %v", err)
 	}
-	if _, err := queries.ReserveDreamOutputHashOwned(ctx, db.ReserveDreamOutputHashOwnedParams{
-		EnterpriseID: "outbox-ent", RunID: "outbox-dream", ExecutionOwner: pgtype.Text{String: "owner-a", Valid: true},
-		OutputHash: pgtype.Text{String: "sha256:stale", Valid: true},
-	}); !errors.Is(err, pgx.ErrNoRows) {
+	// This fixture intentionally runs at v6. Use a v6-shaped RETURNING list
+	// instead of the HEAD-generated RETURNING * scanner (which includes v9
+	// audit_ref_id) so the migration compatibility assertion stays honest.
+	var reservedID string
+	if err := conn.QueryRow(ctx, `UPDATE dream_runs SET output_hash=$1 WHERE enterprise_id=$2 AND id=$3 AND execution_owner=$4 AND execution_lease_expires_at>now() AND status='running' AND (output_hash IS NULL OR output_hash=$1) RETURNING id`, "sha256:stale", "outbox-ent", "outbox-dream", "owner-a").Scan(&reservedID); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("stale Dream owner reached object-write reservation: %v", err)
 	}
 	if _, err := conn.Exec(ctx, `update workflow_runs set status='pending',execution_owner=null,execution_lease_expires_at=null where id='outbox-run'`); err != nil {

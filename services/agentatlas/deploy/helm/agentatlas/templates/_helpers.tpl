@@ -34,6 +34,14 @@
   value: /var/run/secrets/agentnexus/client-secret
 - name: ATLAS_NEXUS_APPROVAL_FACTS_SECRET_FILE
   value: /var/run/secrets/agentnexus/approval-facts-secret
+- name: ATLAS_NEXUS_BROWSER_CLIENT_ID
+  value: {{ .Values.config.nexusClientId | quote }}
+- name: ATLAS_NEXUS_BROWSER_CLIENT_SECRET_FILE
+  value: /var/run/secrets/agentnexus/browser-client-secret
+- name: ATLAS_BROWSER_SESSION_ENCRYPTION_KEY_FILE
+  value: /var/run/secrets/agentnexus/browser-session-key
+- name: ATLAS_PUBLIC_URL
+  value: {{ .Values.config.atlasPublicUrl | quote }}
 - name: ATLAS_DOCLING_URL
   value: {{ .Values.config.doclingUrl | quote }}
 - name: ATLAS_MINERU_URL
@@ -60,5 +68,11 @@
         mode: 0400
       - key: {{ .Values.config.nexusApprovalFactsSecretKey | quote }}
         path: approval-facts-secret
+        mode: 0400
+      - key: {{ .Values.config.nexusBrowserClientSecretKey | quote }}
+        path: browser-client-secret
+        mode: 0400
+      - key: {{ .Values.config.browserSessionEncryptionKey | quote }}
+        path: browser-session-key
         mode: 0400
 {{- end -}}

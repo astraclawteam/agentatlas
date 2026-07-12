@@ -71,7 +71,7 @@ const (
 
 type AppendAuditEvidenceRequest struct {
 	IdempotencyKey string         `json:"-"`
-	TicketID       string         `json:"ticket_id"`
+	TicketID       string         `json:"ticket_id,omitempty"`
 	EnterpriseID   string         `json:"enterprise_id"`
 	Action         AuditAction    `json:"action"`
 	ResourceType   string         `json:"resource_type"`
@@ -148,6 +148,14 @@ type Client interface {
 // separate from Client so older evidence-only test doubles remain compatible.
 type ApprovalClient interface {
 	ResolveApprovalRoute(ctx context.Context, req ApprovalResolveRequest) (ApprovalRoute, error)
+}
+
+type BrowserAuthorizationRequest struct { OrgUnitID string `json:"org_unit_id"`; OrgVersion int64 `json:"org_version"`; ResourceType string `json:"resource_type"`; ResourceID string `json:"resource_id"`; Action string `json:"action"` }
+type BrowserAuthorizationDecision struct { Decision string `json:"decision"`; Permissions []string `json:"permissions"`; OrgVersion int64 `json:"org_version"`; OrgUnitIDs []string `json:"org_unit_ids"`; RiskLevel string `json:"risk_level"` }
+type BrowserBFFClient interface {
+	AuthorizeBrowserOperation(context.Context,string,BrowserAuthorizationRequest)(BrowserAuthorizationDecision,error)
+	ResolveApprovalRouteWithBearer(context.Context,string,ApprovalResolveRequest)(ApprovalRoute,error)
+	AppendAuditEvidenceWithBearer(context.Context,string,AppendAuditEvidenceRequest)(AppendAuditEvidenceResponse,error)
 }
 
 type ApprovalResolveRequest struct {

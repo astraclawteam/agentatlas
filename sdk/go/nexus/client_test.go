@@ -83,7 +83,10 @@ func TestAppendAuditEvidenceMatchesPublishedAgentNexusContract(t *testing.T) {
 	if err := json.Unmarshal(emptyRaw, &emptyBody); err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{"ticket_id", "enterprise_id", "action", "resource_type", "resource_id"} {
+	if _, exists := emptyBody["ticket_id"]; exists {
+		t.Fatalf("optional browser bearer ticket_id must be omitted when empty: %s", emptyRaw)
+	}
+	for _, required := range []string{"enterprise_id", "action", "resource_type", "resource_id"} {
 		if _, exists := emptyBody[required]; !exists {
 			t.Fatalf("required field %q has omitempty tag: %s", required, emptyRaw)
 		}

@@ -12,6 +12,9 @@ func TestAgentNexusServiceCredentialConfigDefaultsAndEnvironment(t *testing.T) {
 	if cfg.AgentNexus.ClientID != "agentatlas" || cfg.AgentNexus.SecretFile != "/run/secrets/agentatlas_agentnexus_service_secret" {
 		t.Fatalf("AgentNexus defaults=%+v", cfg.AgentNexus)
 	}
+	if cfg.AgentNexus.BrowserClientID != "agentatlas" || cfg.AgentNexus.BrowserClientSecretFile == "" || cfg.AgentNexus.BrowserSessionEncryptionKeyFile == "" || cfg.AgentNexus.AtlasPublicURL == "" {
+		t.Fatalf("browser BFF defaults=%+v", cfg.AgentNexus)
+	}
 	t.Setenv("ATLAS_NEXUS_CLIENT_ID", "agentatlas")
 	t.Setenv("ATLAS_NEXUS_SERVICE_SECRET_FILE", "/run/secrets/custom_agentnexus_secret")
 	cfg, err := Load("")
@@ -26,13 +29,13 @@ func TestAgentNexusServiceCredentialConfigDefaultsAndEnvironment(t *testing.T) {
 func TestDeploymentProfilesReferenceAgentNexusSecretFilesOnly(t *testing.T) {
 	root := filepath.Join("..", "..")
 	compose := readDeploymentFile(t, filepath.Join(root, "deploy", "compose", "compose.yaml"))
-	for _, required := range []string{"ATLAS_NEXUS_CLIENT_ID: agentatlas", "ATLAS_NEXUS_SERVICE_SECRET_FILE: /run/secrets/agentatlas_agentnexus_service_secret", "agentatlas_agentnexus_service_secret:", "ATLAS_NEXUS_SERVICE_SECRET_FILE_SOURCE"} {
+	for _, required := range []string{"ATLAS_NEXUS_CLIENT_ID: agentatlas", "ATLAS_NEXUS_SERVICE_SECRET_FILE: /run/secrets/agentatlas_agentnexus_service_secret", "agentatlas_agentnexus_service_secret:", "ATLAS_NEXUS_SERVICE_SECRET_FILE_SOURCE", "ATLAS_NEXUS_BROWSER_CLIENT_SECRET_FILE", "ATLAS_BROWSER_SESSION_ENCRYPTION_KEY_FILE", "ATLAS_PUBLIC_URL", "agentatlas_browser_client_secret:", "agentatlas_browser_session_key:"} {
 		if !strings.Contains(compose, required) {
 			t.Errorf("Compose missing %q", required)
 		}
 	}
 	values := readDeploymentFile(t, filepath.Join(root, "deploy", "helm", "agentatlas", "values.yaml"))
-	for _, required := range []string{"nexusClientId: agentatlas", "nexusServiceSecretName:", "nexusServiceSecretKey:"} {
+	for _, required := range []string{"nexusClientId: agentatlas", "nexusServiceSecretName:", "nexusServiceSecretKey:", "nexusBrowserClientSecretKey:", "browserSessionEncryptionKey:", "atlasPublicUrl:"} {
 		if !strings.Contains(values, required) {
 			t.Errorf("Helm values missing %q", required)
 		}

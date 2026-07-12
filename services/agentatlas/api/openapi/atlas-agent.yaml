@@ -11,6 +11,92 @@ info:
 security:
   - NexusTicket: []
 paths:
+  /auth/login:
+    get:
+      security: []
+      operationId: beginAtlasBrowserLogin
+      parameters: [{name: return_to, in: query, schema: {type: string, pattern: '^/[^\\]*$'}}]
+      responses: {'302': {description: Full-page redirect to AgentNexus OIDC authorization.}}
+  /auth/callback:
+    get:
+      security: []
+      operationId: completeAtlasBrowserLogin
+      parameters:
+        - {name: state, in: query, required: true, schema: {type: string}}
+        - {name: code, in: query, required: true, schema: {type: string}}
+      responses: {'302': {description: Opaque Atlas session created and original relative path restored.}}
+  /api/session:
+    get:
+      security: [{AtlasSession: []}]
+      operationId: getAtlasBrowserSession
+      responses: {'200': {description: Browser identity and sealed scope snapshot, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserSessionView'}}}}, '401': {$ref: '#/components/responses/Unauthorized'}}
+  /auth/logout:
+    post:
+      security: [{AtlasSession: []}]
+      operationId: logoutAtlasBrowserSession
+      responses: {'204': {description: Atlas and AgentNexus sessions revoked.}}
+  /api/changes/suggestions:
+    post:
+      security: [{AtlasSession: []}]
+      operationId: suggestGovernedChange
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SuggestionInput'}}}}
+      responses: {'201': {description: Suggestion draft, content: {application/json: {schema: {$ref: '#/components/schemas/ChangeDraft'}}}}, '403': {description: Suggestion denied.}}
+  /api/changes:
+    get:
+      security: [{AtlasSession: []}]
+      operationId: listGovernedChanges
+      parameters:
+        - {name: org_unit_id, in: query, required: true, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100}}
+      responses: {'200': {description: Bounded enterprise and organization scoped changes.}}
+    post:
+      security: [{AtlasSession: []}]
+      operationId: createGovernedChangeDraft
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SuggestionInput'}}}}
+      responses: {'201': {description: Direct-edit governed draft, content: {application/json: {schema: {$ref: '#/components/schemas/ChangeDraft'}}}}, '403': {description: Editor permission required.}}
+  /api/changes/{id}:
+    get:
+      security: [{AtlasSession: []}]
+      operationId: getGovernedChange
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: Governed change.}}
+    put:
+      security: [{AtlasSession: []}]
+      operationId: updateGovernedChange
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: Updated revision.}, '409': {description: Current revision and deterministic diff.}}
+  /api/changes/{id}/publish:
+    post:
+      security: [{AtlasSession: []}]
+      operationId: publishGovernedChange
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
+      responses: {'200': {description: Immutable published version, content: {application/json: {schema: {$ref: '#/components/schemas/PublishedChangeVersion'}}}}, '409': {description: Idempotency or revision conflict.}}
+  /api/changes/{id}/diff:
+    get:
+      security: [{AtlasSession: []}]
+      operationId: diffGovernedChange
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: Deterministic before/after diff.}}
+  /api/changes/{id}/assess:
+    post:
+      security: [{AtlasSession: []}]
+      operationId: assessGovernedChange
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: Deterministic risk assessment, content: {application/json: {schema: {$ref: '#/components/schemas/RiskAssessment'}}}}}
+  /api/changes/{id}/submit:
+    post:
+      security: [{AtlasSession: []}]
+      operationId: submitGovernedChange
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: Frozen review route, content: {application/json: {schema: {$ref: '#/components/schemas/ReviewRoute'}}}}}
+  /api/changes/{id}/decisions:
+    post:
+      security: [{AtlasSession: []}]
+      operationId: decideGovernedChange
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'204': {description: Review decision recorded.}, '403': {description: Self-review or unauthorized decision rejected.}}
   /v1/agent/runs:
     post:
       operationId: createAgentRun
@@ -86,6 +172,10 @@ paths:
               schema: { $ref: '#/components/schemas/AgentRun' }
         '404': { $ref: '#/components/responses/NotFound' }
   /v1/workflows:
+    get:
+      operationId: listWorkflowDrafts
+      summary: List bounded workflow drafts for the authenticated enterprise
+      responses: {'200': {description: Draft list.}}
     post:
       operationId: createWorkflowDraft
       summary: Create a workflow draft (validated against workflow.schema.json)
@@ -117,6 +207,20 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+  /v1/workflows/{id}:
+    get:
+      operationId: getWorkflowDraft
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: Workflow draft.}, '404': {$ref: '#/components/responses/NotFound'}}
+    put:
+      operationId: updateWorkflowDraft
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: Updated workflow draft.}, '422': {description: Invalid workflow.}}
+  /v1/workflows/{id}/diff:
+    get:
+      operationId: diffWorkflowDraft
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: Deterministic draft versus published definition diff.}}
   /v1/workflows/{id}/publish:
     post:
       operationId: publishWorkflow
@@ -439,6 +543,10 @@ components:
       type: apiKey
       in: header
       name: X-Nexus-Ticket
+    AtlasSession:
+      type: apiKey
+      in: cookie
+      name: atlas_session
   responses:
     Unauthorized:
       description: Missing or invalid ticket (fail closed)
@@ -451,6 +559,41 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
   schemas:
+    BrowserSessionView:
+      type: object
+      additionalProperties: false
+      required: [authenticated, enterprise_id, enterprise_user_id, display_name, org_version, org_unit_ids, permissions]
+      properties:
+        authenticated: {type: boolean}
+        enterprise_id: {type: string}
+        enterprise_user_id: {type: string}
+        display_name: {type: string}
+        org_version: {type: integer, format: int64}
+        org_unit_ids: {type: array, maxItems: 1000, items: {type: string}}
+        permissions: {type: array, maxItems: 100, items: {type: string}}
+        advanced_mode_allowed: {type: boolean}
+        idle_expires_at: {type: string, format: date-time}
+        absolute_expires_at: {type: string, format: date-time}
+    SuggestionInput:
+      type: object
+      additionalProperties: false
+      required: [org_unit_id, resource_type, resource_id, action, proposed_content]
+      properties:
+        org_unit_id: {type: string}
+        resource_type: {type: string, enum: [knowledge_entry, sop, workflow, dream_policy, method_outline]}
+        resource_id: {type: string}
+        action: {type: string, enum: [create, update, publish, disable, delete]}
+        base_version: {type: integer, minimum: 0}
+        proposed_content: {type: object, maxProperties: 100, additionalProperties: true}
+    PublishedChangeVersion:
+      type: object
+      additionalProperties: false
+      required: [change_id, resource_id, version, audit_ref_id]
+      properties:
+        change_id: {type: string}
+        resource_id: {type: string}
+        version: {type: integer, minimum: 1}
+        audit_ref_id: {type: string}
     DreamRunList:
       type: object
       additionalProperties: false

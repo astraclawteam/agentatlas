@@ -9,7 +9,9 @@ import (
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/agent"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/browsersession"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/governance"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/tasks"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/workflow"
@@ -19,17 +21,19 @@ import (
 // plane (api/openapi/atlas-agent.yaml): Knowledge Agent runs, workflow
 // draft/publish, dream policies, confirmations.
 type AgentRouterDeps struct {
-	Nexus      nexus.Client
-	Agent      *agent.Runner
-	Workflows  *workflow.Service
-	Runtime    *workflow.Runtime
-	Dreams     *dream.PolicyService
-	DreamRuns  dreamRunStore
-	DreamRerun dreamRerunner
-	Store      *db.Queries
-	Outlines   MethodOutlineStore // optional; defaults to Store
-	Runner     *tasks.Runner
-	Metrics    *observability.Metrics // optional; enables /metrics + latency histograms
+	Nexus           nexus.Client
+	Agent           *agent.Runner
+	Workflows       *workflow.Service
+	Runtime         *workflow.Runtime
+	Dreams          *dream.PolicyService
+	DreamRuns       dreamRunStore
+	DreamRerun      dreamRerunner
+	Store           *db.Queries
+	Outlines        MethodOutlineStore // optional; defaults to Store
+	Runner          *tasks.Runner
+	Metrics         *observability.Metrics  // optional; enables /metrics + latency histograms
+	BrowserSessions *browsersession.Service // optional; enables Console BFF routes
+	Changes         *governance.Service     // optional; enables governed maintenance routes
 }
 
 type dreamBackfiller interface {
@@ -95,10 +99,41 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 		outlineStore = deps.Store
 	}
 	mo := &methodOutlineHandler{deps: deps, store: outlineStore}
+	{
+		browser := &browserSessionHandler{sessions: deps.BrowserSessions}
+		r.Get("/auth/login", browser.login)
+		r.Get("/auth/callback", browser.callback)
+		r.Get("/api/session", browser.session)
+		r.With(browser.sessionGuard, sameOriginCSRF).Post("/auth/logout", browser.logout)
+		{
+			changes := &changeHandler{service: deps.Changes}
+			r.Route("/api/changes", func(r chi.Router) {
+				r.Use(browser.sessionGuard)
+				r.Use(changeAvailability(deps.Changes))
+				r.Get("/", changes.list)
+				r.Get("/{id}", changes.get)
+				r.Get("/{id}/diff", changes.diff)
+				r.Group(func(r chi.Router) {
+					r.Use(sameOriginCSRF)
+					r.Post("/", changes.create)
+					r.Post("/suggestions", changes.suggest)
+					r.Put("/{id}", changes.update)
+					r.Post("/{id}/assess", changes.assess)
+					r.Post("/{id}/submit", changes.submit)
+					r.Post("/{id}/decisions", changes.decide)
+					r.Post("/{id}/publish", changes.publish)
+				})
+			})
+		}
+	}
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(ticketGuard(deps.Nexus))
 		r.Post("/workflows", wf.create)
+		r.Get("/workflows", wf.list)
+		r.Get("/workflows/{id}", wf.get)
+		r.Put("/workflows/{id}", wf.update)
+		r.Get("/workflows/{id}/diff", wf.diff)
 		r.Post("/workflows/{id}/publish", wf.publish)
 		r.Post("/workflows/{id}/runs", wf.startRun)
 		r.Post("/dream-policies", dp.create)

@@ -202,7 +202,7 @@ ON CONFLICT (enterprise_id, idempotency_key) DO UPDATE
 SET idempotency_key = publish_operations.idempotency_key
 WHERE publish_operations.change_id = EXCLUDED.change_id
   AND publish_operations.change_revision = EXCLUDED.change_revision
-RETURNING id, enterprise_id, change_id, change_revision, idempotency_key, status, result, created_at, finished_at
+RETURNING id, enterprise_id, change_id, change_revision, idempotency_key, status, result, created_at, finished_at, request_hash, audit_ref_id
 `
 
 type GetOrCreatePublishOperationParams struct {
@@ -234,6 +234,8 @@ func (q *Queries) GetOrCreatePublishOperation(ctx context.Context, arg GetOrCrea
 		&i.Result,
 		&i.CreatedAt,
 		&i.FinishedAt,
+		&i.RequestHash,
+		&i.AuditRefID,
 	)
 	return i, err
 }
