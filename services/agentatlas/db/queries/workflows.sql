@@ -72,24 +72,48 @@ SET status = $2, output = COALESCE($3, output),
     finished_at = CASE WHEN $2 IN ('succeeded','failed','cancelled') THEN now() ELSE finished_at END
 WHERE id = $1;
 
--- name: TransitionDreamWorkflowRun :execrows
+-- name: TransitionWorkflowRunWithEvent :one
+WITH changed AS (
+    UPDATE workflow_runs AS run
+    SET status = sqlc.arg(status), output = sqlc.arg(run_output),
+        finished_at = CASE WHEN sqlc.arg(status) IN ('succeeded','failed','cancelled') THEN now() ELSE run.finished_at END
+    WHERE run.id = sqlc.arg(id)
+    RETURNING run.id
+), audit AS (
+    INSERT INTO workflow_run_events (run_id, node_id, status, detail)
+    SELECT changed.id, sqlc.arg(node_id), sqlc.arg(event_status), sqlc.arg(event_detail)
+    FROM changed
+    RETURNING run_id
+)
+SELECT count(*)::bigint FROM changed JOIN audit ON audit.run_id = changed.id;
+
+-- name: TransitionDreamWorkflowRun :one
 WITH changed AS (
     UPDATE workflow_runs AS run
     SET status = sqlc.arg(status), output = sqlc.arg(run_output),
         finished_at = CASE WHEN sqlc.arg(status) IN ('succeeded','failed','cancelled') THEN now() ELSE run.finished_at END
     WHERE run.id = sqlc.arg(id) AND run.enterprise_id = sqlc.arg(enterprise_id)
     RETURNING run.id, run.enterprise_id, run.status
+), audit AS (
+    INSERT INTO workflow_run_events (run_id, node_id, status, detail)
+    SELECT changed.id, sqlc.arg(node_id), sqlc.arg(event_status), sqlc.arg(event_detail)
+    FROM changed
+    RETURNING run_id
+), lifecycle AS (
+    INSERT INTO dream_workflow_lifecycle_outbox (
+        enterprise_id, dream_run_id, workflow_run_id, status, lifecycle_error
+    )
+    SELECT changed.enterprise_id, dream.id, changed.id, changed.status, sqlc.arg(lifecycle_error)
+    FROM changed
+    JOIN audit ON audit.run_id = changed.id
+    JOIN dream_runs AS dream
+      ON dream.enterprise_id = changed.enterprise_id AND dream.workflow_run_id = changed.id
+    WHERE changed.status IN ('waiting_confirmation','succeeded','failed','cancelled')
+    ON CONFLICT (workflow_run_id, status) DO UPDATE
+    SET lifecycle_error = EXCLUDED.lifecycle_error, updated_at = now()
+    RETURNING workflow_run_id
 )
-INSERT INTO dream_workflow_lifecycle_outbox (
-    enterprise_id, dream_run_id, workflow_run_id, status, lifecycle_error
-)
-SELECT changed.enterprise_id, dream.id, changed.id, changed.status, sqlc.arg(lifecycle_error)
-FROM changed
-JOIN dream_runs AS dream
-  ON dream.enterprise_id = changed.enterprise_id AND dream.workflow_run_id = changed.id
-WHERE changed.status IN ('waiting_confirmation','succeeded','failed','cancelled')
-ON CONFLICT (workflow_run_id, status) DO UPDATE
-SET lifecycle_error = EXCLUDED.lifecycle_error, updated_at = now();
+SELECT count(*)::bigint FROM changed JOIN audit ON audit.run_id = changed.id;
 
 -- name: GetWorkflowRun :one
 SELECT * FROM workflow_runs WHERE id = $1;

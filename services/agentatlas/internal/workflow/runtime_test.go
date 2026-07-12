@@ -16,15 +16,16 @@ import (
 
 // fakeStore mirrors the schema semantics needed by the runtime.
 type fakeStore struct {
-	workflows map[string]db.Workflow
-	versions  map[string]db.WorkflowVersion // key wf|version
-	nodes     []db.InsertWorkflowNodeParams
-	edges     []db.InsertWorkflowEdgeParams
-	runs      map[string]db.WorkflowRun
-	events    []db.WorkflowRunEvent
-	nextEvent int64
-	dreamRuns map[string]db.DreamRun
-	outbox    []db.DreamWorkflowLifecycleOutbox
+	workflows     map[string]db.Workflow
+	versions      map[string]db.WorkflowVersion // key wf|version
+	nodes         []db.InsertWorkflowNodeParams
+	edges         []db.InsertWorkflowEdgeParams
+	runs          map[string]db.WorkflowRun
+	events        []db.WorkflowRunEvent
+	nextEvent     int64
+	dreamRuns     map[string]db.DreamRun
+	outbox        []db.DreamWorkflowLifecycleOutbox
+	transitionErr error
 }
 
 func newFakeStore() *fakeStore {
@@ -188,12 +189,17 @@ func (f *fakeStore) CreateBoundDreamWorkflowRun(_ context.Context, arg db.Create
 }
 
 func (f *fakeStore) TransitionDreamWorkflowRun(_ context.Context, arg db.TransitionDreamWorkflowRunParams) (int64, error) {
+	if f.transitionErr != nil {
+		return 0, f.transitionErr
+	}
 	run, ok := f.runs[arg.ID]
 	if !ok || run.EnterpriseID != arg.EnterpriseID {
 		return 0, nil
 	}
 	run.Status, run.Output = arg.Status, arg.RunOutput
 	f.runs[arg.ID] = run
+	f.nextEvent++
+	f.events = append(f.events, db.WorkflowRunEvent{ID: f.nextEvent, RunID: arg.ID, NodeID: arg.NodeID, Status: arg.EventStatus, Detail: arg.EventDetail})
 	for _, event := range f.outbox {
 		if event.WorkflowRunID == arg.ID && event.Status == arg.Status {
 			return 1, nil
@@ -207,6 +213,82 @@ func (f *fakeStore) TransitionDreamWorkflowRun(_ context.Context, arg db.Transit
 		}
 	}
 	return 0, nil
+}
+
+func (f *fakeStore) TransitionWorkflowRunWithEvent(_ context.Context, arg db.TransitionWorkflowRunWithEventParams) (int64, error) {
+	if f.transitionErr != nil {
+		return 0, f.transitionErr
+	}
+	run, ok := f.runs[arg.ID]
+	if !ok {
+		return 0, nil
+	}
+	run.Status, run.Output = arg.Status, arg.RunOutput
+	f.runs[arg.ID] = run
+	f.nextEvent++
+	f.events = append(f.events, db.WorkflowRunEvent{ID: f.nextEvent, RunID: arg.ID, NodeID: arg.NodeID, Status: arg.EventStatus, Detail: arg.EventDetail})
+	return 1, nil
+}
+
+func TestDreamAuditAndStateTransitionAreAtomic(t *testing.T) {
+	t.Run("pause", func(t *testing.T) {
+		store, _, rt, dream := setupBoundDreamRuntime(t, "wf_atomic_pause", []sdkworkflow.Node{{ID: "confirm", Type: sdkworkflow.NodeHumanConfirm}})
+		store.transitionErr = errors.New("injected transition failure")
+		result, err := rt.RunDreamPublished(context.Background(), dream.EnterpriseID, dream.WorkflowID, dream.WorkflowVersion, map[string]any{}, dream)
+		if err == nil || len(store.eventStatuses(result.RunID, "confirm")) != 0 || store.runs[result.RunID].Status != RunRunning {
+			t.Fatalf("pause was not atomic: result=%+v events=%v row=%+v err=%v", result, store.eventStatuses(result.RunID, "confirm"), store.runs[result.RunID], err)
+		}
+	})
+	t.Run("rejection", func(t *testing.T) {
+		store, _, rt, dream := setupBoundDreamRuntime(t, "wf_atomic_reject", []sdkworkflow.Node{{ID: "confirm", Type: sdkworkflow.NodeHumanConfirm}})
+		result, err := rt.RunDreamPublished(context.Background(), dream.EnterpriseID, dream.WorkflowID, dream.WorkflowVersion, map[string]any{}, dream)
+		if err != nil || result.Status != RunWaitingConfirmation {
+			t.Fatalf("pause setup: %+v %v", result, err)
+		}
+		before := len(store.events)
+		store.transitionErr = errors.New("injected transition failure")
+		if _, err := rt.Resume(context.Background(), result.RunID, dream.EnterpriseID, false, "reject"); err == nil {
+			t.Fatal("rejection transition failure was discarded")
+		}
+		if len(store.events) != before || store.runs[result.RunID].Status != RunWaitingConfirmation {
+			t.Fatalf("rejection was not atomic: events=%v row=%+v", store.events, store.runs[result.RunID])
+		}
+	})
+	t.Run("node_failure", func(t *testing.T) {
+		store, _, rt, dream := setupBoundDreamRuntime(t, "wf_atomic_failure", []sdkworkflow.Node{{ID: "aggregate", Type: sdkworkflow.NodeDreamAggregate}})
+		store.transitionErr = errors.New("injected transition failure")
+		result, err := rt.RunDreamPublished(context.Background(), dream.EnterpriseID, dream.WorkflowID, dream.WorkflowVersion, map[string]any{}, dream)
+		if err == nil || !reflect.DeepEqual(store.eventStatuses(result.RunID, "aggregate"), []string{NodeRunning}) || store.runs[result.RunID].Status != RunRunning {
+			t.Fatalf("failure was not atomic: result=%+v events=%v row=%+v err=%v", result, store.eventStatuses(result.RunID, "aggregate"), store.runs[result.RunID], err)
+		}
+	})
+	t.Run("final_success", func(t *testing.T) {
+		store, _, rt, dream := setupBoundDreamRuntime(t, "wf_atomic_success", []sdkworkflow.Node{{ID: "input", Type: sdkworkflow.NodeInputManual}})
+		store.transitionErr = errors.New("injected transition failure")
+		result, err := rt.RunDreamPublished(context.Background(), dream.EnterpriseID, dream.WorkflowID, dream.WorkflowVersion, map[string]any{}, dream)
+		if err == nil || !reflect.DeepEqual(store.eventStatuses(result.RunID, "input"), []string{NodeRunning}) || store.runs[result.RunID].Status != RunRunning {
+			t.Fatalf("success was not atomic: result=%+v events=%v row=%+v err=%v", result, store.eventStatuses(result.RunID, "input"), store.runs[result.RunID], err)
+		}
+	})
+}
+
+func setupBoundDreamRuntime(t *testing.T, workflowID string, nodes []sdkworkflow.Node) (*fakeStore, *Service, *Runtime, VerifiedDreamContext) {
+	t.Helper()
+	store, svc, rt := setup(t)
+	def := Definition{WorkflowID: workflowID, Kind: sdkworkflow.KindDream, Nodes: nodes, Edges: []sdkworkflow.Edge{}, RiskLevel: sdkworkflow.RiskLow}
+	id, err := svc.CreateDraft(context.Background(), "ent_atomic", "Atomic Dream", "admin", def)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Publish(context.Background(), "ent_atomic", id, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	dream := VerifiedDreamContext{EnterpriseID: "ent_atomic", DreamRunID: "dr_" + workflowID, PolicyID: "policy_atomic", PolicyVersion: 1,
+		WorkflowID: id, WorkflowVersion: 1, OrgUnitID: "department:atomic"}
+	store.dreamRuns[dream.DreamRunID] = db.DreamRun{ID: dream.DreamRunID, EnterpriseID: dream.EnterpriseID, PolicyID: dream.PolicyID,
+		PolicyVersion: dream.PolicyVersion, OrgUnitID: dream.OrgUnitID, WorkflowID: pgtype.Text{String: id, Valid: true},
+		WorkflowVersion: pgtype.Int4{Int32: 1, Valid: true}, Status: "running"}
+	return store, svc, rt, dream
 }
 
 func (f *fakeStore) UpdateWorkflowRunStatus(_ context.Context, arg db.UpdateWorkflowRunStatusParams) (int64, error) {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
 	"github.com/jackc/pgx/v5"
@@ -33,7 +34,9 @@ type RunnerStore interface {
 	RecordDreamWorkflowLifecycleFailure(ctx context.Context, arg db.RecordDreamWorkflowLifecycleFailureParams) error
 	CompleteDreamWorkflowLifecycle(ctx context.Context, id int64) error
 	ReserveDreamOutputHash(ctx context.Context, arg db.ReserveDreamOutputHashParams) (db.DreamRun, error)
-	ClaimDreamRun(ctx context.Context, id string) (int64, error)
+	ClaimDreamRunLease(ctx context.Context, arg db.ClaimDreamRunLeaseParams) (int64, error)
+	RenewDreamRunLease(ctx context.Context, arg db.RenewDreamRunLeaseParams) (int64, error)
+	RecoverExpiredDreamRunAfterWorkflow(ctx context.Context, arg db.RecoverExpiredDreamRunAfterWorkflowParams) (db.DreamRun, error)
 	UpdateDreamRunStatus(ctx context.Context, arg db.UpdateDreamRunStatusParams) (int64, error)
 	InsertDreamInput(ctx context.Context, arg db.InsertDreamInputParams) error
 	ListDreamInputsForRun(ctx context.Context, runID string) ([]db.DreamInput, error)
@@ -54,14 +57,17 @@ type Objects interface {
 
 // Runner executes claimed dream runs.
 type Runner struct {
-	store        RunnerStore
-	objects      Objects
-	policy       *PolicyService
-	tasks        *tasks.Runner
-	resolver     InputResolver
-	orchestrator *Orchestrator
-	metrics      *observability.Metrics
+	store          RunnerStore
+	objects        Objects
+	policy         *PolicyService
+	tasks          *tasks.Runner
+	resolver       InputResolver
+	orchestrator   *Orchestrator
+	metrics        *observability.Metrics
+	executionOwner string
 }
+
+var errDreamExecutionLeaseActive = errors.New("Dream execution lease is active")
 
 // NewRunner wires Dream persistence to the published-workflow orchestrator.
 func NewRunner(store RunnerStore, objects Objects, policy *PolicyService, taskRunner *tasks.Runner, orchestrator *Orchestrator) *Runner {
@@ -69,7 +75,7 @@ func NewRunner(store RunnerStore, objects Objects, policy *PolicyService, taskRu
 	if inputStore, ok := any(store).(InputStore); ok {
 		resolver = NewInputResolver(inputStore)
 	}
-	return &Runner{store: store, objects: objects, policy: policy, tasks: taskRunner, resolver: resolver, orchestrator: orchestrator}
+	return &Runner{store: store, objects: objects, policy: policy, tasks: taskRunner, resolver: resolver, orchestrator: orchestrator, executionOwner: newID("dream-worker")}
 }
 
 // SetMetrics wires the optional Prometheus surface (DreamRuns by status).
@@ -78,10 +84,10 @@ func (r *Runner) SetMetrics(m *observability.Metrics) { r.metrics = m }
 func (r *Runner) RegisterJobHandler() error {
 	return r.tasks.Register(JobTypeDream, tasks.Handler{
 		Claim: func(ctx context.Context, runID string) (bool, error) {
-			rows, err := r.store.ClaimDreamRun(ctx, runID)
+			rows, err := r.store.ClaimDreamRunLease(ctx, db.ClaimDreamRunLeaseParams{ID: runID, ExecutionOwner: pgtype.Text{String: r.executionOwner, Valid: true}})
 			return rows > 0, err
 		},
-		Execute: r.execute,
+		Execute: r.executeWithLease,
 		Complete: func(ctx context.Context, runID string, execErr error) error {
 			if errors.Is(execErr, ErrDreamWorkflowPaused) {
 				return nil
@@ -99,6 +105,43 @@ func (r *Runner) RegisterJobHandler() error {
 			return err
 		},
 	})
+}
+
+func (r *Runner) executeWithLease(ctx context.Context, runID string) error {
+	leaseCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan struct{})
+	renewed := make(chan error, 1)
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				renewed <- nil
+				return
+			case <-leaseCtx.Done():
+				renewed <- leaseCtx.Err()
+				return
+			case <-ticker.C:
+				rows, err := r.store.RenewDreamRunLease(leaseCtx, db.RenewDreamRunLeaseParams{
+					ID: runID, ExecutionOwner: pgtype.Text{String: r.executionOwner, Valid: true},
+				})
+				if err != nil || rows != 1 {
+					if err == nil {
+						err = fmt.Errorf("Dream execution lease ownership lost")
+					}
+					cancel()
+					renewed <- err
+					return
+				}
+			}
+		}
+	}()
+	execErr := r.execute(leaseCtx, runID)
+	close(done)
+	renewErr := <-renewed
+	return errors.Join(execErr, renewErr)
 }
 
 func (r *Runner) execute(ctx context.Context, runID string) error {
@@ -398,6 +441,9 @@ func (r *Runner) ReconcileWorkflowLifecycle(ctx context.Context) error {
 	var failures []error
 	for _, event := range events {
 		if err := r.reconcileWorkflowLifecycleEvent(ctx, event); err != nil {
+			if errors.Is(err, errDreamExecutionLeaseActive) {
+				continue
+			}
 			recorded := r.store.RecordDreamWorkflowLifecycleFailure(ctx, db.RecordDreamWorkflowLifecycleFailureParams{
 				ID: event.ID, LastError: truncateRunes(err.Error(), 1000),
 			})
@@ -447,7 +493,16 @@ func (r *Runner) reconcileWorkflowLifecycleEvent(ctx context.Context, event db.D
 				return err
 			}
 		case "pending":
-		case "running", "succeeded", "failed":
+		case "running":
+			if run.ExecutionLeaseExpiresAt.Valid && run.ExecutionLeaseExpiresAt.Time.After(time.Now()) {
+				return errDreamExecutionLeaseActive
+			}
+			if _, err := r.store.RecoverExpiredDreamRunAfterWorkflow(ctx, db.RecoverExpiredDreamRunAfterWorkflowParams{
+				EnterpriseID: event.EnterpriseID, WorkflowRunID: wfID,
+			}); err != nil {
+				return err
+			}
+		case "succeeded", "failed":
 			return nil
 		default:
 			return fmt.Errorf("Dream %s has invalid lifecycle state %s", run.ID, run.Status)

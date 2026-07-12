@@ -29,6 +29,10 @@ type dreamWorkflowStore interface {
 	TransitionDreamWorkflowRun(context.Context, db.TransitionDreamWorkflowRunParams) (int64, error)
 }
 
+type atomicWorkflowStore interface {
+	TransitionWorkflowRunWithEvent(context.Context, db.TransitionWorkflowRunWithEventParams) (int64, error)
+}
+
 // ErrRunForbidden marks a run operation attempted by an actor outside the
 // run's enterprise — callers map it to 403/404, never execute.
 var ErrRunForbidden = errors.New("run belongs to a different enterprise")
@@ -235,21 +239,17 @@ func (r *Runtime) Resume(ctx context.Context, runID, enterpriseID string, approv
 	confirmNode := order[state.NextIndex]
 
 	if !approve {
-		if err := writeEvent(ctx, r.store, runID, confirmNode.ID, NodeFailed, map[string]any{"decision": "reject", "comment": comment}); err != nil {
-			return "", err
-		}
-		if err := r.setRunStatus(ctx, runID, RunCancelled, &state, "human confirmation rejected"); err != nil {
+		if err := r.setRunStatus(ctx, runID, RunCancelled, &state, "human confirmation rejected",
+			confirmNode.ID, NodeFailed, map[string]any{"decision": "reject", "comment": comment}); err != nil {
 			return "", err
 		}
 		return RunCancelled, nil
 	}
 
-	if err := writeEvent(ctx, r.store, runID, confirmNode.ID, NodeSucceeded, map[string]any{"decision": "approve", "comment": comment}); err != nil {
-		return "", err
-	}
 	state.Outputs[confirmNode.ID] = map[string]any{"approved": true}
 	state.NextIndex++
-	if err := r.setRunStatus(ctx, runID, RunPending, &state, ""); err != nil {
+	if err := r.setRunStatus(ctx, runID, RunPending, &state, "", confirmNode.ID, NodeSucceeded,
+		map[string]any{"decision": "approve", "comment": comment}); err != nil {
 		return "", err
 	}
 	return RunPending, nil
@@ -266,10 +266,7 @@ func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def D
 		node := order[state.NextIndex]
 
 		if node.Type == sdkworkflow.NodeHumanConfirm || node.RequiresConfirmation {
-			if err := writeEvent(ctx, r.store, runID, node.ID, NodeWaitingConfirmation, nil); err != nil {
-				return "", err
-			}
-			if err := r.setRunStatus(ctx, runID, RunWaitingConfirmation, &state, ""); err != nil {
+			if err := r.setRunStatus(ctx, runID, RunWaitingConfirmation, &state, "", node.ID, NodeWaitingConfirmation, nil); err != nil {
 				return "", err
 			}
 			return RunWaitingConfirmation, nil
@@ -284,8 +281,7 @@ func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def D
 		}
 		out, err := exec.Execute(ctx, node, runCtx)
 		if err != nil {
-			_ = writeEvent(ctx, r.store, runID, node.ID, NodeFailed, map[string]any{"error": err.Error()})
-			if serr := r.setRunStatus(ctx, runID, RunFailed, &state, err.Error()); serr != nil {
+			if serr := r.setRunStatus(ctx, runID, RunFailed, &state, err.Error(), node.ID, NodeFailed, map[string]any{"error": err.Error()}); serr != nil {
 				return "", errors.Join(err, serr)
 			}
 			return RunFailed, err
@@ -294,19 +290,22 @@ func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def D
 			out = map[string]any{}
 		}
 		state.Outputs[node.ID] = out
-		if err := writeEvent(ctx, r.store, runID, node.ID, NodeSucceeded, nil); err != nil {
+		state.NextIndex++
+		status := RunRunning
+		if state.NextIndex == len(order) {
+			status = RunSucceeded
+		}
+		if err := r.setRunStatus(ctx, runID, status, &state, "", node.ID, NodeSucceeded, nil); err != nil {
 			return "", err
 		}
-		state.NextIndex++
+		if status == RunSucceeded {
+			return RunSucceeded, nil
+		}
 	}
-
-	if err := r.setRunStatus(ctx, runID, RunSucceeded, &state, ""); err != nil {
-		return "", err
-	}
-	return RunSucceeded, nil
+	return "", fmt.Errorf("workflow %s has no executable nodes", def.WorkflowID)
 }
 
-func (r *Runtime) setRunStatus(ctx context.Context, runID, status string, state *runState, lifecycleError string) error {
+func (r *Runtime) setRunStatus(ctx context.Context, runID, status string, state *runState, lifecycleError, nodeID, eventStatus string, eventDetail map[string]any) error {
 	var raw []byte
 	if state != nil {
 		var err error
@@ -317,14 +316,38 @@ func (r *Runtime) setRunStatus(ctx context.Context, runID, status string, state 
 	}
 	var rows int64
 	var err error
-	if state != nil && state.Dream != nil && status != RunPending && status != RunRunning {
+	if state != nil && state.Dream != nil {
 		dreamStore, ok := r.store.(dreamWorkflowStore)
 		if !ok {
 			return fmt.Errorf("workflow store cannot atomically transition Dream runs")
 		}
+		rawDetail, detailErr := json.Marshal(eventDetail)
+		if detailErr != nil {
+			return fmt.Errorf("encode workflow event detail: %w", detailErr)
+		}
+		if eventDetail == nil {
+			rawDetail = []byte(`{}`)
+		}
 		rows, err = dreamStore.TransitionDreamWorkflowRun(ctx, db.TransitionDreamWorkflowRunParams{
 			LifecycleError: truncateWorkflowError(lifecycleError), Status: status, RunOutput: raw,
-			ID: runID, EnterpriseID: state.Dream.EnterpriseID,
+			ID: runID, EnterpriseID: state.Dream.EnterpriseID, NodeID: nodeID,
+			EventStatus: eventStatus, EventDetail: rawDetail,
+		})
+	} else if state != nil {
+		atomicStore, ok := r.store.(atomicWorkflowStore)
+		if !ok {
+			return fmt.Errorf("workflow store cannot atomically transition run events")
+		}
+		rawDetail, detailErr := json.Marshal(eventDetail)
+		if detailErr != nil {
+			return fmt.Errorf("encode workflow event detail: %w", detailErr)
+		}
+		if eventDetail == nil {
+			rawDetail = []byte(`{}`)
+		}
+		rows, err = atomicStore.TransitionWorkflowRunWithEvent(ctx, db.TransitionWorkflowRunWithEventParams{
+			Status: status, RunOutput: raw, ID: runID,
+			NodeID: nodeID, EventStatus: eventStatus, EventDetail: rawDetail,
 		})
 	} else {
 		rows, err = r.store.UpdateWorkflowRunStatus(ctx, db.UpdateWorkflowRunStatusParams{

@@ -138,6 +138,10 @@ func (stubWorkflowStore) UpdateWorkflowRunStatus(context.Context, db.UpdateWorkf
 	return 1, nil
 }
 
+func (stubWorkflowStore) TransitionWorkflowRunWithEvent(context.Context, db.TransitionWorkflowRunWithEventParams) (int64, error) {
+	return 1, nil
+}
+
 func (stubWorkflowStore) InsertWorkflowRunEvent(context.Context, db.InsertWorkflowRunEventParams) (db.WorkflowRunEvent, error) {
 	return db.WorkflowRunEvent{}, nil
 }
@@ -168,6 +172,14 @@ func TestWorkflowRunsMetricAndSpanFire(t *testing.T) {
 type stubDreamStore struct{ dream.RunnerStore }
 
 func (stubDreamStore) ClaimDreamRun(context.Context, string) (int64, error) { return 1, nil }
+
+func (stubDreamStore) ClaimDreamRunLease(context.Context, db.ClaimDreamRunLeaseParams) (int64, error) {
+	return 1, nil
+}
+
+func (stubDreamStore) RenewDreamRunLease(context.Context, db.RenewDreamRunLeaseParams) (int64, error) {
+	return 1, nil
+}
 
 func (stubDreamStore) GetDreamRun(context.Context, string) (db.DreamRun, error) {
 	return db.DreamRun{}, fmt.Errorf("boom: dream store down")

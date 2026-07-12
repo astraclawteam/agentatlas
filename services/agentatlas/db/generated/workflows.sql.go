@@ -441,46 +441,99 @@ func (q *Queries) PublishWorkflowVersion(ctx context.Context, arg PublishWorkflo
 	return i, err
 }
 
-const transitionDreamWorkflowRun = `-- name: TransitionDreamWorkflowRun :execrows
+const transitionDreamWorkflowRun = `-- name: TransitionDreamWorkflowRun :one
 WITH changed AS (
     UPDATE workflow_runs AS run
-    SET status = $2, output = $3,
-        finished_at = CASE WHEN $2 IN ('succeeded','failed','cancelled') THEN now() ELSE run.finished_at END
-    WHERE run.id = $4 AND run.enterprise_id = $5
+    SET status = $1, output = $2,
+        finished_at = CASE WHEN $1 IN ('succeeded','failed','cancelled') THEN now() ELSE run.finished_at END
+    WHERE run.id = $3 AND run.enterprise_id = $4
     RETURNING run.id, run.enterprise_id, run.status
+), audit AS (
+    INSERT INTO workflow_run_events (run_id, node_id, status, detail)
+    SELECT changed.id, $5, $6, $7
+    FROM changed
+    RETURNING run_id
+), lifecycle AS (
+    INSERT INTO dream_workflow_lifecycle_outbox (
+        enterprise_id, dream_run_id, workflow_run_id, status, lifecycle_error
+    )
+    SELECT changed.enterprise_id, dream.id, changed.id, changed.status, $8
+    FROM changed
+    JOIN audit ON audit.run_id = changed.id
+    JOIN dream_runs AS dream
+      ON dream.enterprise_id = changed.enterprise_id AND dream.workflow_run_id = changed.id
+    WHERE changed.status IN ('waiting_confirmation','succeeded','failed','cancelled')
+    ON CONFLICT (workflow_run_id, status) DO UPDATE
+    SET lifecycle_error = EXCLUDED.lifecycle_error, updated_at = now()
+    RETURNING workflow_run_id
 )
-INSERT INTO dream_workflow_lifecycle_outbox (
-    enterprise_id, dream_run_id, workflow_run_id, status, lifecycle_error
-)
-SELECT changed.enterprise_id, dream.id, changed.id, changed.status, $1
-FROM changed
-JOIN dream_runs AS dream
-  ON dream.enterprise_id = changed.enterprise_id AND dream.workflow_run_id = changed.id
-WHERE changed.status IN ('waiting_confirmation','succeeded','failed','cancelled')
-ON CONFLICT (workflow_run_id, status) DO UPDATE
-SET lifecycle_error = EXCLUDED.lifecycle_error, updated_at = now()
+SELECT count(*)::bigint FROM changed JOIN audit ON audit.run_id = changed.id
 `
 
 type TransitionDreamWorkflowRunParams struct {
-	LifecycleError string `json:"lifecycle_error"`
 	Status         string `json:"status"`
 	RunOutput      []byte `json:"run_output"`
 	ID             string `json:"id"`
 	EnterpriseID   string `json:"enterprise_id"`
+	NodeID         string `json:"node_id"`
+	EventStatus    string `json:"event_status"`
+	EventDetail    []byte `json:"event_detail"`
+	LifecycleError string `json:"lifecycle_error"`
 }
 
 func (q *Queries) TransitionDreamWorkflowRun(ctx context.Context, arg TransitionDreamWorkflowRunParams) (int64, error) {
-	result, err := q.db.Exec(ctx, transitionDreamWorkflowRun,
-		arg.LifecycleError,
+	row := q.db.QueryRow(ctx, transitionDreamWorkflowRun,
 		arg.Status,
 		arg.RunOutput,
 		arg.ID,
 		arg.EnterpriseID,
+		arg.NodeID,
+		arg.EventStatus,
+		arg.EventDetail,
+		arg.LifecycleError,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const transitionWorkflowRunWithEvent = `-- name: TransitionWorkflowRunWithEvent :one
+WITH changed AS (
+    UPDATE workflow_runs AS run
+    SET status = $1, output = $2,
+        finished_at = CASE WHEN $1 IN ('succeeded','failed','cancelled') THEN now() ELSE run.finished_at END
+    WHERE run.id = $3
+    RETURNING run.id
+), audit AS (
+    INSERT INTO workflow_run_events (run_id, node_id, status, detail)
+    SELECT changed.id, $4, $5, $6
+    FROM changed
+    RETURNING run_id
+)
+SELECT count(*)::bigint FROM changed JOIN audit ON audit.run_id = changed.id
+`
+
+type TransitionWorkflowRunWithEventParams struct {
+	Status      string `json:"status"`
+	RunOutput   []byte `json:"run_output"`
+	ID          string `json:"id"`
+	NodeID      string `json:"node_id"`
+	EventStatus string `json:"event_status"`
+	EventDetail []byte `json:"event_detail"`
+}
+
+func (q *Queries) TransitionWorkflowRunWithEvent(ctx context.Context, arg TransitionWorkflowRunWithEventParams) (int64, error) {
+	row := q.db.QueryRow(ctx, transitionWorkflowRunWithEvent,
+		arg.Status,
+		arg.RunOutput,
+		arg.ID,
+		arg.NodeID,
+		arg.EventStatus,
+		arg.EventDetail,
+	)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const updateWorkflowDraft = `-- name: UpdateWorkflowDraft :execrows

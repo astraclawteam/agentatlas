@@ -145,7 +145,7 @@ values('outbox-dream','outbox-policy',1,'outbox-ent','running',now()-interval '1
 	}
 	if _, err := queries.TransitionDreamWorkflowRun(ctx, db.TransitionDreamWorkflowRunParams{
 		ID: "outbox-run", EnterpriseID: "outbox-ent", Status: "failed", RunOutput: state,
-		LifecycleError: strings.Repeat("x", 1001),
+		LifecycleError: strings.Repeat("x", 1001), NodeID: "aggregate", EventStatus: "failed", EventDetail: []byte(`{}`),
 	}); err == nil {
 		t.Fatal("outbox constraint failure did not roll back workflow transition")
 	}
@@ -153,13 +153,44 @@ values('outbox-dream','outbox-policy',1,'outbox-ent','running',now()-interval '1
 	if err := conn.QueryRow(ctx, `select status from workflow_runs where id='outbox-run'`).Scan(&status); err != nil || status != "running" {
 		t.Fatalf("failed atomic transition leaked workflow status=%s err=%v", status, err)
 	}
+	for name, transition := range map[string]struct{ runStatus, eventStatus string }{
+		"pause":         {"waiting_confirmation", "waiting_confirmation"},
+		"rejection":     {"cancelled", "failed"},
+		"node_failure":  {"failed", "failed"},
+		"final_success": {"succeeded", "succeeded"},
+	} {
+		t.Run(name+"_audit_failure_rolls_back", func(t *testing.T) {
+			if _, err := queries.TransitionDreamWorkflowRun(ctx, db.TransitionDreamWorkflowRunParams{
+				ID: "outbox-run", EnterpriseID: "outbox-ent", Status: transition.runStatus, RunOutput: state,
+				NodeID: "boundary", EventStatus: transition.eventStatus, EventDetail: []byte(`{`),
+			}); err == nil {
+				t.Fatal("invalid audit detail did not abort transition")
+			}
+			var runStatus string
+			var events, outbox int
+			if err := conn.QueryRow(ctx, `select status from workflow_runs where id='outbox-run'`).Scan(&runStatus); err != nil {
+				t.Fatal(err)
+			}
+			if err := conn.QueryRow(ctx, `select count(*) from workflow_run_events where run_id='outbox-run'`).Scan(&events); err != nil {
+				t.Fatal(err)
+			}
+			if err := conn.QueryRow(ctx, `select count(*) from dream_workflow_lifecycle_outbox where workflow_run_id='outbox-run'`).Scan(&outbox); err != nil {
+				t.Fatal(err)
+			}
+			if runStatus != "running" || events != 0 || outbox != 0 {
+				t.Fatalf("partial boundary state: status=%s events=%d outbox=%d", runStatus, events, outbox)
+			}
+		})
+	}
 	if _, err := queries.TransitionDreamWorkflowRun(ctx, db.TransitionDreamWorkflowRunParams{
 		ID: "outbox-run", EnterpriseID: "outbox-ent", Status: "waiting_confirmation", RunOutput: state,
+		NodeID: "confirm", EventStatus: "waiting_confirmation", EventDetail: []byte(`{}`),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := queries.TransitionDreamWorkflowRun(ctx, db.TransitionDreamWorkflowRunParams{
 		ID: "outbox-run", EnterpriseID: "outbox-ent", Status: "waiting_confirmation", RunOutput: state,
+		NodeID: "confirm", EventStatus: "waiting_confirmation", EventDetail: []byte(`{}`),
 	}); err != nil {
 		t.Fatal(err)
 	}

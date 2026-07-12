@@ -51,7 +51,8 @@ WHERE enterprise_id = sqlc.arg(enterprise_id) AND id = sqlc.arg(run_id)
 RETURNING *;
 
 -- name: PublishDreamWorkflowWait :one
-UPDATE dream_runs SET workflow_run_id=sqlc.arg(workflow_run_id), status='waiting_confirmation', error=''
+UPDATE dream_runs SET workflow_run_id=sqlc.arg(workflow_run_id), status='waiting_confirmation', error='',
+    execution_owner=NULL, execution_lease_expires_at=NULL
 WHERE enterprise_id=sqlc.arg(enterprise_id) AND id=sqlc.arg(run_id)
   AND status IN ('running','waiting_confirmation') AND (workflow_run_id IS NULL OR workflow_run_id=sqlc.arg(workflow_run_id))
 RETURNING *;
@@ -60,13 +61,14 @@ RETURNING *;
 SELECT * FROM dream_runs WHERE enterprise_id = sqlc.arg(enterprise_id) AND workflow_run_id = sqlc.arg(workflow_run_id);
 
 -- name: RequeueDreamRunAfterWorkflow :one
-UPDATE dream_runs SET status = 'pending', error = ''
+UPDATE dream_runs SET status = 'pending', error = '', execution_owner=NULL, execution_lease_expires_at=NULL
 WHERE enterprise_id = sqlc.arg(enterprise_id) AND workflow_run_id = sqlc.arg(workflow_run_id)
   AND status IN ('waiting_confirmation','pending')
 RETURNING *;
 
 -- name: FailDreamRunAfterWorkflow :one
-UPDATE dream_runs SET status='failed', error=sqlc.arg(error), finished_at=COALESCE(finished_at, now())
+UPDATE dream_runs SET status='failed', error=sqlc.arg(error), finished_at=COALESCE(finished_at, now()),
+    execution_owner=NULL, execution_lease_expires_at=NULL
 WHERE enterprise_id=sqlc.arg(enterprise_id) AND workflow_run_id=sqlc.arg(workflow_run_id)
   AND status IN ('running','waiting_confirmation','pending','failed')
 RETURNING *;
@@ -96,13 +98,33 @@ RETURNING *;
 -- name: ClaimDreamRun :execrows
 UPDATE dream_runs SET status = 'running' WHERE id = $1 AND status = 'pending';
 
+-- name: ClaimDreamRunLease :execrows
+UPDATE dream_runs
+SET status='running', execution_owner=sqlc.arg(execution_owner),
+    execution_lease_expires_at=now()+interval '2 minutes'
+WHERE id=sqlc.arg(id) AND status='pending';
+
+-- name: RenewDreamRunLease :execrows
+UPDATE dream_runs
+SET execution_lease_expires_at=now()+interval '2 minutes'
+WHERE id=sqlc.arg(id) AND status='running' AND execution_owner=sqlc.arg(execution_owner);
+
+-- name: RecoverExpiredDreamRunAfterWorkflow :one
+UPDATE dream_runs
+SET status='pending', error='', execution_owner=NULL, execution_lease_expires_at=NULL
+WHERE enterprise_id=sqlc.arg(enterprise_id) AND workflow_run_id=sqlc.arg(workflow_run_id)
+  AND status='running' AND (execution_lease_expires_at IS NULL OR execution_lease_expires_at <= now())
+RETURNING *;
+
 -- name: GetLatestDreamRunForPolicy :one
 SELECT * FROM dream_runs WHERE policy_id = $1 ORDER BY window_end DESC LIMIT 1;
 
 -- name: UpdateDreamRunStatus :execrows
 UPDATE dream_runs
 SET status = $2, error = $3,
-    finished_at = CASE WHEN $2 IN ('succeeded','failed') THEN now() ELSE finished_at END
+    finished_at = CASE WHEN $2 IN ('succeeded','failed') THEN now() ELSE finished_at END,
+    execution_owner = CASE WHEN $2 IN ('succeeded','failed') THEN NULL ELSE execution_owner END,
+    execution_lease_expires_at = CASE WHEN $2 IN ('succeeded','failed') THEN NULL ELSE execution_lease_expires_at END
 WHERE id = $1;
 
 -- name: InsertDreamInput :exec

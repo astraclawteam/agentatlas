@@ -57,6 +57,119 @@ func (failingPublishBus) Subscribe(context.Context, string, func(context.Context
 	return func() {}, nil
 }
 
+func TestDreamDirectSuccessLeaseRecovery(t *testing.T) {
+	dsn := os.Getenv("ATLAS_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("set ATLAS_TEST_POSTGRES_DSN")
+	}
+	ctx := context.Background()
+	if err := storage.Migrate(ctx, dsn); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := storage.NewPool(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	q := db.New(pool)
+	entID, policyID, runID := newID("direct_ent"), newID("direct_policy"), newID("direct_dream")
+	if _, err := q.UpsertEnterprise(ctx, db.UpsertEnterpriseParams{ID: entID, Name: "Direct lease"}); err != nil {
+		t.Fatal(err)
+	}
+	wfSvc, err := workflow.NewService(q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wfID, err := wfSvc.CreateDraft(ctx, entID, "Direct Dream", "admin", workflow.Definition{
+		WorkflowID: newID("direct_wf"), Kind: sdkworkflow.KindDream,
+		Nodes: []sdkworkflow.Node{{ID: "aggregate", Type: sdkworkflow.NodeDreamAggregate}},
+		Edges: []sdkworkflow.Edge{}, RiskLevel: sdkworkflow.RiskLow,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wfSvc.Publish(ctx, entID, wfID, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `insert into dream_policies(id,enterprise_id,org_scope,status,draft) values($1,$2,'department:direct','published','{}')`, policyID, entID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `insert into dream_policy_versions(policy_id,version,definition) values($1,1,'{}')`, policyID); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now().UTC().Add(-time.Hour)
+	if _, err := q.CreateDreamRun(ctx, db.CreateDreamRunParams{
+		ID: runID, PolicyID: policyID, Version: 1, EnterpriseID: entID, Status: "pending",
+		WindowStart: pgtype.Timestamptz{Time: start, Valid: true}, WindowEnd: pgtype.Timestamptz{Time: start.Add(time.Hour), Valid: true},
+		OrgUnitID: "department:direct", PolicyVersion: 1, WorkflowID: wfID, WorkflowVersion: 1, Timezone: "UTC",
+		InputSnapshot: []byte(`{"source_counts":[],"sanitized_input_ids":[]}`), VisibilitySnapshot: []byte(`{"visibility_level":"members","org_unit_ids":["department:direct"],"masked_field_count":0}`),
+		ModelRoute: "workflow/" + wfID, ModelVersion: "v1", Attempt: 1, Coverage: []byte(`{"expected_children":0,"completed_children":0,"input_count":0}`), MissingInputs: []byte(`[]`), IdempotencyKey: runID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	owner := pgtype.Text{String: "direct-active-owner", Valid: true}
+	if rows, err := q.ClaimDreamRunLease(ctx, db.ClaimDreamRunLeaseParams{ID: runID, ExecutionOwner: owner}); err != nil || rows != 1 {
+		t.Fatalf("claim direct Dream: rows=%d err=%v", rows, err)
+	}
+	bus := &countingPublishBus{}
+	taskRunner := tasks.NewRunner(bus)
+	taskRunner.AllowEnqueue(dream.JobTypeDream)
+	synth := dream.NewSynthesizer(nil)
+	wfRuntime := workflow.NewRuntime(q, wfSvc, workflow.NewRegistryWithServices(workflow.Executors{Dream: synth.AggregateWorkflowInput}))
+	consumer := dream.NewRunner(q, nil, dream.NewPolicyService(q), taskRunner, dream.NewOrchestrator(wfRuntime))
+	wfRuntime.SetDreamLifecycleHook(consumer.WorkflowLifecycle)
+	result, err := dream.NewOrchestrator(wfRuntime).Run(ctx, dream.DreamExecution{
+		EnterpriseID: entID, DreamRunID: runID, PolicyID: policyID, PolicyVersion: 1,
+		Workflow: sdkdream.WorkflowRef{ID: wfID, Version: 1},
+		Input: dream.WorkflowInput{OrgUnitID: "department:direct", WindowStart: start, WindowEnd: start.Add(time.Hour),
+			Inputs: []dream.ResolvedInput{}, Missing: []dream.MissingInput{}, RiskSignalRules: []string{}},
+	})
+	if err != nil || result.Status != workflow.RunSucceeded {
+		t.Fatalf("direct workflow result=%+v err=%v", result, err)
+	}
+	var processed bool
+	if err := pool.QueryRow(ctx, `select processed_at is not null from dream_workflow_lifecycle_outbox where workflow_run_id=$1 and status='succeeded'`, result.WorkflowRunID).Scan(&processed); err != nil {
+		t.Fatal(err)
+	}
+	if processed || bus.publishes != 0 {
+		t.Fatalf("active direct success consumed replay: processed=%v publishes=%d", processed, bus.publishes)
+	}
+	if _, err := q.UpdateDreamRunStatus(ctx, db.UpdateDreamRunStatusParams{ID: runID, Status: "succeeded", Error: ""}); err != nil {
+		t.Fatal(err)
+	}
+	if err := consumer.ReconcileWorkflowLifecycle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `select processed_at is not null from dream_workflow_lifecycle_outbox where workflow_run_id=$1 and status='succeeded'`, result.WorkflowRunID).Scan(&processed); err != nil {
+		t.Fatal(err)
+	}
+	if !processed || bus.publishes != 0 {
+		t.Fatalf("normal direct completion raced: processed=%v publishes=%d", processed, bus.publishes)
+	}
+	if _, err := pool.Exec(ctx, `update dream_runs set status='running',execution_owner='crashed-owner',execution_lease_expires_at=now()-interval '1 second' where id=$1`, runID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `update dream_workflow_lifecycle_outbox set processed_at=null where workflow_run_id=$1 and status='succeeded'`, result.WorkflowRunID); err != nil {
+		t.Fatal(err)
+	}
+	restartBus := &countingPublishBus{}
+	restartTasks := tasks.NewRunner(restartBus)
+	restartTasks.AllowEnqueue(dream.JobTypeDream)
+	if err := dream.NewRunner(q, nil, dream.NewPolicyService(q), restartTasks, dream.NewOrchestrator(wfRuntime)).ReconcileWorkflowLifecycle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := q.GetDreamRun(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `select processed_at is not null from dream_workflow_lifecycle_outbox where workflow_run_id=$1 and status='succeeded'`, result.WorkflowRunID).Scan(&processed); err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != "pending" || !processed || restartBus.publishes != 1 {
+		t.Fatalf("direct restart recovery: run=%+v processed=%v publishes=%d", recovered, processed, restartBus.publishes)
+	}
+}
+
 func TestDreamJob(t *testing.T) {
 	dsn := os.Getenv("ATLAS_TEST_POSTGRES_DSN")
 	objEndpoint := os.Getenv("ATLAS_TEST_OBJECT_ENDPOINT")
@@ -395,6 +508,43 @@ func TestDreamJob(t *testing.T) {
 	}
 	if err := pool.QueryRow(ctx, `select processed_at is not null from dream_workflow_lifecycle_outbox where workflow_run_id=$1 and status='succeeded'`, dreamRun.WorkflowRunID).Scan(&processed); err != nil || !processed {
 		t.Fatalf("recovered event not completed: processed=%v err=%v", processed, err)
+	}
+	// A direct no-confirm workflow can succeed while its owning Dream Runner is
+	// still persisting output. Its active lease keeps the success event pending;
+	// after simulated process death/expiry, a fresh Runner recovers the Dream.
+	if _, err := pool.Exec(ctx, `update dream_runs set status='running',execution_owner='owner-active',execution_lease_expires_at=now()+interval '1 hour' where id=$1`, dreamRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `update dream_workflow_lifecycle_outbox set processed_at=null,attempts=0,last_error='' where workflow_run_id=$1 and status='succeeded'`, dreamRun.WorkflowRunID); err != nil {
+		t.Fatal(err)
+	}
+	activeBus := &countingPublishBus{}
+	activeTasks := tasks.NewRunner(activeBus)
+	activeTasks.AllowEnqueue(dream.JobTypeDream)
+	if err := dream.NewRunner(q, objects, policySvc, activeTasks, dream.NewOrchestrator(wfRuntime)).ReconcileWorkflowLifecycle(ctx); err != nil {
+		t.Fatalf("active lease reconciliation: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `select processed_at is not null from dream_workflow_lifecycle_outbox where workflow_run_id=$1 and status='succeeded'`, dreamRun.WorkflowRunID).Scan(&processed); err != nil {
+		t.Fatal(err)
+	}
+	if processed || activeBus.publishes != 0 {
+		t.Fatalf("active direct execution lost replay: processed=%v publishes=%d", processed, activeBus.publishes)
+	}
+	if _, err := pool.Exec(ctx, `update dream_runs set execution_lease_expires_at=now()-interval '1 second' where id=$1`, dreamRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	expiredBus := &countingPublishBus{}
+	expiredTasks := tasks.NewRunner(expiredBus)
+	expiredTasks.AllowEnqueue(dream.JobTypeDream)
+	if err := dream.NewRunner(q, objects, policySvc, expiredTasks, dream.NewOrchestrator(wfRuntime)).ReconcileWorkflowLifecycle(ctx); err != nil {
+		t.Fatalf("expired lease recovery: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `select processed_at is not null from dream_workflow_lifecycle_outbox where workflow_run_id=$1 and status='succeeded'`, dreamRun.WorkflowRunID).Scan(&processed); err != nil {
+		t.Fatal(err)
+	}
+	recoveredLeaseRun, err := q.GetDreamRun(ctx, dreamRun.ID)
+	if err != nil || !processed || expiredBus.publishes != 1 || recoveredLeaseRun.Status != "pending" {
+		t.Fatalf("expired direct execution not recovered: run=%+v processed=%v publishes=%d err=%v", recoveredLeaseRun, processed, expiredBus.publishes, err)
 	}
 	// Rejection terminalizes the next bound Dream instead of stranding waiting.
 	nextNow := now.Add(24 * time.Hour)
