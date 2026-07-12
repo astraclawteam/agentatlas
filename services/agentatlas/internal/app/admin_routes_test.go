@@ -129,12 +129,13 @@ func (f *fakeWorkflowStore) ListWorkflowRunEvents(context.Context, string) ([]db
 
 // fakePolicyStore backs dream.PolicyService in memory.
 type fakePolicyStore struct {
-	policies         map[string]db.DreamPolicy
-	versions         map[string]db.DreamPolicyVersion
-	operations       map[string]db.DreamPolicyOperation
-	transitions      map[string]db.DreamPolicyTransitionAudit
-	failRecordOnce   bool
-	failCompleteOnce bool
+	policies                   map[string]db.DreamPolicy
+	versions                   map[string]db.DreamPolicyVersion
+	operations                 map[string]db.DreamPolicyOperation
+	transitions                map[string]db.DreamPolicyTransitionAudit
+	failRecordOnce             bool
+	failCompleteOnce           bool
+	leaveTransitionPendingOnce bool
 }
 
 func newFakePolicyStore() *fakePolicyStore {
@@ -159,6 +160,40 @@ func (f *fakePolicyStore) CreateDreamPolicyLifecycle(_ context.Context, arg db.C
 }
 func (f *fakePolicyStore) recordTransition(enterprise, key, policy, transition string, revision int32) {
 	f.transitions[enterprise+"\x00"+key] = db.DreamPolicyTransitionAudit{EnterpriseID: enterprise, OperationKey: key, PolicyID: policy, Transition: transition, Revision: revision}
+	if f.leaveTransitionPendingOnce {
+		f.leaveTransitionPendingOnce = false
+		return
+	}
+	p := f.policies[policy]
+	status := p.Status
+	switch p.ReviewState {
+	case "pending":
+		status = "review_pending"
+	case "approved", "rejected":
+		status = p.ReviewState
+	}
+	version := int32(0)
+	for _, candidate := range f.versions {
+		if candidate.PolicyID == policy && candidate.Version > version {
+			version = candidate.Version
+		}
+	}
+	result := map[string]any{
+		"dream_policy_id": p.ID, "status": status, "revision": p.Revision, "version": version,
+		"requester_user_id": p.RequesterUserID, "permission_mode": p.PermissionMode,
+		"risk_reasons": json.RawMessage(p.RiskReasons), "org_path": json.RawMessage(p.ReviewOrgPath), "policy": json.RawMessage(p.Draft),
+	}
+	for name, value := range map[string]string{"risk_level": p.RiskLevel, "review_mode": p.ReviewMode, "reviewer_user_id": p.ReviewerUserID.String, "queue": p.ReviewQueue.String, "pending_action": p.PendingAction, "review_state": p.ReviewState} {
+		if value != "" {
+			result[name] = value
+		}
+	}
+	raw, _ := json.Marshal(result)
+	opKey := enterprise + "\x00" + key
+	op := f.operations[opKey]
+	op.Status = "completed"
+	op.Result = raw
+	f.operations[opKey] = op
 }
 func (f *fakePolicyStore) GetDreamPolicyTransitionAuditByOperation(_ context.Context, a db.GetDreamPolicyTransitionAuditByOperationParams) (db.DreamPolicyTransitionAudit, error) {
 	row, ok := f.transitions[a.EnterpriseID+"\x00"+a.OperationKey]

@@ -252,16 +252,7 @@ func (s *PolicyService) BeginOperation(ctx context.Context, enterpriseID, key, k
 	op := Operation{Row: row}
 	if row.Status == "pending" && row.AuditRefID.Valid {
 		if _, transitionErr := ls.GetDreamPolicyTransitionAuditByOperation(ctx, db.GetDreamPolicyTransitionAuditByOperationParams{EnterpriseID: enterpriseID, OperationKey: key}); transitionErr == nil {
-			view, viewErr := s.GetLifecycle(ctx, enterpriseID, policyID)
-			if viewErr != nil {
-				return Operation{}, fmt.Errorf("reconcile lifecycle operation: %w", viewErr)
-			}
-			if _, completeErr := s.CompleteOperation(ctx, enterpriseID, key, view); completeErr != nil {
-				return Operation{}, fmt.Errorf("reconcile lifecycle receipt: %w", completeErr)
-			}
-			op.Row, _ = ls.GetDreamPolicyOperation(ctx, db.GetDreamPolicyOperationParams{EnterpriseID: enterpriseID, OperationKey: key})
-			op.Replay = &view
-			return op, nil
+			return Operation{}, fmt.Errorf("operation recovery required: transition committed without immutable result")
 		} else if !errors.Is(transitionErr, pgx.ErrNoRows) {
 			return Operation{}, transitionErr
 		}
@@ -294,7 +285,7 @@ func (s *PolicyService) reconcileTransition(ctx context.Context, enterpriseID, p
 	if _, err := ls.GetDreamPolicyTransitionAuditByOperation(ctx, db.GetDreamPolicyTransitionAuditByOperationParams{EnterpriseID: enterpriseID, OperationKey: operationKey}); err != nil {
 		return LifecycleView{}, transitionErr
 	}
-	return s.GetLifecycle(ctx, enterpriseID, policyID)
+	return LifecycleView{}, fmt.Errorf("operation recovery required: transition committed without immutable result")
 }
 
 func (s *PolicyService) operationLifecycleResult(ctx context.Context, enterpriseID, policyID, operationKey string) (LifecycleView, error) {
@@ -307,9 +298,7 @@ func (s *PolicyService) operationLifecycleResult(ctx context.Context, enterprise
 		}
 		return view, nil
 	}
-	// In-memory fixture stores used by unit tests do not implement SQL CTE
-	// completion; production PostgreSQL always takes the completed branch.
-	return s.GetLifecycle(ctx, enterpriseID, policyID)
+	return LifecycleView{}, fmt.Errorf("operation recovery required: immutable result is not completed")
 }
 
 // LoadVersion returns exactly one immutable published policy version.

@@ -141,6 +141,41 @@ func TestDreamPolicyLifecycleReconcilesTransitionAfterCompletionFailure(t *testi
 	}
 }
 
+func TestDreamPolicyLifecycleStuckPendingTransitionNeverReconstructsLaterView(t *testing.T) {
+	mock := adminMock()
+	mock.Tickets["tick_editor"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "editor", Scopes: []string{"edit"}}
+	store := newFakePolicyStore()
+	srv, _, _ := newAgentTestServerWithProvidedPolicyStore(t, mock, store)
+	created := decodeBody(t, postJSONReq(t, srv.URL+"/v1/dream-policies", "tick_editor", canonicalDreamPolicyBody()))
+	id := created["dream_policy_id"].(string)
+	store.leaveTransitionPendingOnce = true
+	policyA := canonicalDreamPolicyBody()
+	policyA["schedule"] = "15 22 * * *"
+	const operationA = "legacy-stuck-operation-a"
+	firstA := doLifecycleJSON(t, http.MethodPut, srv.URL+"/v1/dream-policies/"+id, "tick_editor", operationA, map[string]any{"revision": 0, "policy": policyA})
+	if firstA.StatusCode != http.StatusConflict || store.policies[id].Revision != 1 {
+		t.Fatalf("A status=%d revision=%d body=%v", firstA.StatusCode, store.policies[id].Revision, decodeBody(t, firstA))
+	}
+	firstA.Body.Close()
+	policyB := canonicalDreamPolicyBody()
+	policyB["schedule"] = "30 22 * * *"
+	secondB := doLifecycleJSON(t, http.MethodPut, srv.URL+"/v1/dream-policies/"+id, "tick_editor", "operation-b-after-stuck-a", map[string]any{"revision": 1, "policy": policyB})
+	if secondB.StatusCode != http.StatusOK {
+		t.Fatalf("B status=%d body=%v", secondB.StatusCode, decodeBody(t, secondB))
+	}
+	secondB.Body.Close()
+	auditsBeforeRetry := len(mock.AuditLog)
+	retryA := doLifecycleJSON(t, http.MethodPut, srv.URL+"/v1/dream-policies/"+id, "tick_editor", operationA, map[string]any{"revision": 0, "policy": policyA})
+	if retryA.StatusCode != http.StatusConflict {
+		t.Fatalf("retry A status=%d body=%v", retryA.StatusCode, decodeBody(t, retryA))
+	}
+	retryA.Body.Close()
+	opA := store.operations["ent_1\x00"+operationA]
+	if opA.Status != "pending" || len(opA.Result) != 0 || store.policies[id].Revision != 2 || len(mock.AuditLog) != auditsBeforeRetry {
+		t.Fatalf("A receipt/status drift op=%+v revision=%d audits=%d/%d", opA, store.policies[id].Revision, len(mock.AuditLog), auditsBeforeRetry)
+	}
+}
+
 func TestDreamPolicyLifecycleAdminQueueRefreshesFromNexus(t *testing.T) {
 	mock := adminMock()
 	mock.Tickets["tick_editor"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "editor", Scopes: []string{"edit"}}

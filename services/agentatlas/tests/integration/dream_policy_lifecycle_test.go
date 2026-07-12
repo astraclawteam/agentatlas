@@ -248,6 +248,31 @@ func TestDreamPolicyLifecyclePostgresCASAndAtomicPublish(t *testing.T) {
 	if err != nil || replayedA.Replay == nil || replayedA.Replay.Revision != 1 || replayedA.Replay.Status != "draft" || replayedA.Replay.Policy.Schedule != "15 22 * * *" {
 		t.Fatalf("operation A retry=%+v err=%v", replayedA.Replay, err)
 	}
+	if _, err := pool.Exec(ctx, `UPDATE dream_policy_operations SET status='pending', result=NULL WHERE enterprise_id=$1 AND operation_key=$2`, enterprise, opA); err != nil {
+		t.Fatal(err)
+	}
+	var stuckAuditCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM dream_policy_transition_audits WHERE enterprise_id=$1 AND operation_key=$2`, enterprise, opA).Scan(&stuckAuditCount); err != nil || stuckAuditCount != 1 {
+		t.Fatalf("stuck operation A transition audits=%d err=%v", stuckAuditCount, err)
+	}
+	if _, err := dream.NewPolicyService(q).BeginOperation(ctx, enterprise, opA, "update", immutablePolicy, "editor", strings.Repeat("a", 64)); err == nil || !strings.Contains(err.Error(), "operation recovery required") {
+		t.Fatalf("stuck operation A retry err=%v", err)
+	}
+	stuckA, err := q.GetDreamPolicyOperation(ctx, db.GetDreamPolicyOperationParams{EnterpriseID: enterprise, OperationKey: opA})
+	if err != nil || stuckA.Status != "pending" || len(stuckA.Result) != 0 {
+		t.Fatalf("stuck operation A=%+v err=%v", stuckA, err)
+	}
+	var currentRevision int32
+	var currentSchedule string
+	if err := pool.QueryRow(ctx, `SELECT revision, draft->>'schedule' FROM dream_policies WHERE enterprise_id=$1 AND id=$2`, enterprise, immutablePolicy).Scan(&currentRevision, &currentSchedule); err != nil {
+		t.Fatal(err)
+	}
+	if currentRevision != 2 || currentSchedule != "30 22 * * *" {
+		t.Fatalf("stuck operation A retry mutated current policy revision=%d schedule=%q", currentRevision, currentSchedule)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM dream_policy_transition_audits WHERE enterprise_id=$1 AND operation_key=$2`, enterprise, opA).Scan(&transitionCount); err != nil || transitionCount != stuckAuditCount {
+		t.Fatalf("stuck operation A retry audit rows=%d want=%d err=%v", transitionCount, stuckAuditCount, err)
+	}
 
 	refreshPolicy := "policy-refresh-" + suffix
 	refreshCreateKey := "create-refresh-" + suffix
