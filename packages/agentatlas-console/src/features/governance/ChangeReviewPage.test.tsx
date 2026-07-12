@@ -125,7 +125,7 @@ describe("ChangeReviewPage", () => {
 
     expect(await screen.findByText("生产中心")).toBeVisible();
     expect(screen.getByText("未命名组织")).toBeVisible();
-    expect(screen.getByText("其他已授权组织（1 个）")).toBeVisible();
+    expect(screen.getByText("其他相关组织（1 个）")).toBeVisible();
     expect(screen.queryByText("secret-org-id")).not.toBeInTheDocument();
   });
 
@@ -136,10 +136,25 @@ describe("ChangeReviewPage", () => {
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => String(input) === "/api/session" ? Promise.resolve(json(limited)) : base.fn(input, init)));
     render(<ConsoleShell initialPath="/knowledge/dept-rd/changes/change-1/review" />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "提交给上级负责人复核" }));
+    fireEvent.click(await screen.findByRole("button", { name: "提交审核" }));
     expect(await screen.findByText("已提交给上级负责人复核")).toBeVisible();
     expect(screen.queryByRole("button", { name: "确认并发布" })).not.toBeInTheDocument();
     expect(document.querySelectorAll(".knowledge-primary-button")).toHaveLength(0);
+    expect(base.calls.filter((call) => call.endsWith("/submit"))).toHaveLength(1);
+    expect(base.calls.some((call) => call.endsWith("/decisions"))).toBe(false);
+    expect(base.calls.some((call) => call.endsWith("/publish"))).toBe(false);
+  });
+
+  it("reports an authoritative enterprise knowledge admin handoff truthfully", async () => {
+    const limited = { ...session, permissions: ["edit"] };
+    const route = { change_id: "change-1", resource_type: "knowledge_entry", resource_id: "knowledge-1", requester_user_id: "editor-user", risk_level: "low", mode: "enterprise_knowledge_admin_queue", state: "pending", org_path: ["dept-rd"], queue: "enterprise-secret-queue" };
+    const base = makeFetch("low", { "/api/changes/change-1/submit": () => json(route) });
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => String(input) === "/api/session" ? Promise.resolve(json(limited)) : base.fn(input, init)));
+    render(<ConsoleShell initialPath="/knowledge/dept-rd/changes/change-1/review" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "提交审核" }));
+    expect(await screen.findByText("已提交给企业知识管理员复核")).toBeVisible();
+    expect(screen.queryByText(/enterprise-secret-queue/)).not.toBeInTheDocument();
     expect(base.calls.filter((call) => call.endsWith("/submit"))).toHaveLength(1);
     expect(base.calls.some((call) => call.endsWith("/decisions"))).toBe(false);
     expect(base.calls.some((call) => call.endsWith("/publish"))).toBe(false);
@@ -152,7 +167,7 @@ describe("ChangeReviewPage", () => {
     render(<ConsoleShell initialPath="/knowledge/dept-rd/changes/change-1/review" />);
 
     expect(await screen.findByText("当前账号没有提交这项内容的权限")).toBeVisible();
-    expect(screen.queryByRole("button", { name: "提交给上级负责人复核" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "提交审核" })).not.toBeInTheDocument();
     expect(document.querySelectorAll(".knowledge-primary-button")).toHaveLength(0);
   });
 
@@ -170,7 +185,7 @@ describe("ChangeReviewPage", () => {
 
   it.each([
     ["low", "确认并发布"],
-    ["high", "提交给上级负责人复核"],
+    ["high", "提交审核"],
   ] as const)("shows exactly one primary action for %s risk", async (risk, label) => {
     const { fn } = makeFetch(risk);
     vi.stubGlobal("fetch", fn);
@@ -182,6 +197,7 @@ describe("ChangeReviewPage", () => {
     expect(screen.getByText("修改前")).toBeVisible();
     expect(screen.getByText("修改后")).toBeVisible();
     expect(screen.getByText(risk === "low" ? "内容范围有限" : "修改了审批规则")).toBeVisible();
+    if (risk === "high") expect(screen.getByText("审批路径：提交后由系统确定复核负责人")).toBeVisible();
     expect(screen.getByText("研发一部")).toBeVisible();
     expect(screen.getByText("43 人")).toBeVisible();
     expect(screen.getByText("员工 Agent 的相关回答会更新")).toBeVisible();
@@ -271,7 +287,7 @@ describe("ChangeReviewPage", () => {
     const { fn, calls } = makeFetch("high");
     vi.stubGlobal("fetch", fn);
     render(<ConsoleShell initialPath="/knowledge/dept-rd/changes/change-1/review" />);
-    fireEvent.click(await screen.findByRole("button", { name: "提交给上级负责人复核" }));
+    fireEvent.click(await screen.findByRole("button", { name: "提交审核" }));
 
     expect(await screen.findByText("已提交给上级负责人复核")).toBeVisible();
     expect(screen.getByText("审批路径：研发一部 → 上级组织")).toBeVisible();

@@ -169,8 +169,8 @@ export function ChangeReviewPage() {
     return assessment.risk_level === "low"
       ? session.permissions.includes("publish_low_risk")
         ? { label: "确认并发布", action: runPrimary }
-        : { label: "提交给上级负责人复核", action: runPrimary }
-      : { label: "提交给上级负责人复核", action: runPrimary };
+        : { label: "提交审核", action: runPrimary }
+      : { label: "提交审核", action: runPrimary };
   }, [assessment, phase, record, route, session.enterprise_user_id, session.permissions]);
 
   if (!orgUnitID || !changeID || !session.org_unit_ids.includes(orgUnitID) || !organization?.selectable) return <Navigate to="/knowledge" replace />;
@@ -179,6 +179,7 @@ export function ChangeReviewPage() {
 
   const impact = record.content.impact ?? {};
   const impactOrganizations = humanImpactOrganizations(impact.organizations, session.org_tree, organization.name);
+  const requiresSubmitReview = record.draft.state === "draft" && (assessment.risk_level === "high" || !session.permissions.includes("publish_low_risk"));
   return (
     <article className="change-review-page" aria-labelledby="change-review-title">
       <header className="change-review-header">
@@ -187,7 +188,7 @@ export function ChangeReviewPage() {
       </header>
       <p className="knowledge-next-step">下一步：确认内容、风险和审批路径，再使用页面底部的唯一操作。</p>
       {error ? <div className="knowledge-editor-message" role="alert"><AlertCircle aria-hidden size={18} />{error}</div> : null}
-      {phase === "submitted" ? <div className="knowledge-editor-message" role="status">已提交给上级负责人复核</div> : null}
+      {phase === "submitted" ? <div className="knowledge-editor-message" role="status">{submittedStatusCopy(route)}</div> : null}
       {phase === "decided" ? <div className="knowledge-editor-message" role="status">复核结果已记录，发起人可以继续发布。</div> : null}
       {phase === "published" ? <div className="knowledge-editor-message" role="status"><CheckCircle2 aria-hidden size={18} />修改已发布</div> : null}
       {!primary && phase === "ready" ? <div className="knowledge-editor-message" role="status">{waitingActionCopy(record, assessment, session.enterprise_user_id, session.permissions)}</div> : null}
@@ -197,7 +198,7 @@ export function ChangeReviewPage() {
       <div className="change-review-context">
         <section className="glass-rest"><h2>风险判断</h2><strong className={`risk-level risk-${assessment.risk_level}`}>{assessment.risk_level === "low" ? "低风险" : "高风险"}</strong><ul>{assessment.risk_reasons.map((reason) => <li key={reason}>{humanRiskReason(reason)}</li>)}</ul></section>
         <section className="glass-rest"><h2>生效后的影响</h2><ul className="impact-list">{impactOrganizations.map((name, index) => <li key={`${name}-${index}`}>{name}</li>)}{typeof impact.people === "number" ? <li><Users aria-hidden size={16} />{impact.people} 人</li> : <li>人数将在发布时复核</li>}{impact.agent_answers ? <li>员工 Agent 的相关回答会更新</li> : null}{(impact.sops ?? []).map((name) => <li key={name}>{name}</li>)}</ul></section>
-        <section className="glass-rest"><h2>审批路径</h2><p>{reviewPathCopy(assessment, route, phase, organization.name)}</p></section>
+        <section className="glass-rest"><h2>审批路径</h2><p>{reviewPathCopy(route, phase, organization.name, requiresSubmitReview)}</p></section>
       </div>
 
       {primary ? <footer className="change-review-footer"><button className="knowledge-primary-button" type="button" disabled={phase === "working"} onClick={() => void primary.action()}>{primary.label}<ArrowRight aria-hidden size={18} /></button></footer> : null}
@@ -252,10 +253,18 @@ function humanRiskReason(reason: string) {
   return labels[reason] ?? "涉及需要复核的业务内容";
 }
 
-function reviewPathCopy(assessment: RiskAssessment, route: Partial<ReviewRoute> | null, phase: ActionPhase, organizationName: string) {
+function reviewPathCopy(route: Partial<ReviewRoute> | null, phase: ActionPhase, organizationName: string, requiresSubmitReview: boolean) {
   if (route?.mode === "enterprise_knowledge_admin_queue") return "审批路径：当前组织 → 企业知识管理员";
-  if (assessment.risk_level === "high" || route?.mode === "upward_review" || phase === "submitted") return `审批路径：${organizationName || "当前组织"} → 上级组织`;
+  if (route?.mode === "upward_review") return `审批路径：${organizationName || "当前组织"} → 上级组织`;
+  if (requiresSubmitReview && !route) return "审批路径：提交后由系统确定复核负责人";
+  if (phase === "submitted") return "审批路径：等待系统确定复核负责人";
   return "审批路径：当前维护人员确认后发布";
+}
+
+function submittedStatusCopy(route: Partial<ReviewRoute> | null) {
+  if (route?.mode === "enterprise_knowledge_admin_queue") return "已提交给企业知识管理员复核";
+  if (route?.mode === "upward_review") return "已提交给上级负责人复核";
+  return "已提交，等待负责人复核";
 }
 
 function statusCopy(state: string, phase: ActionPhase) {
@@ -282,7 +291,7 @@ function humanImpactOrganizations(organizationIDs: string[] | undefined, orgTree
       names.push(node.name || "未命名组织");
     }
   }
-  if (unknown) names.push(`其他已授权组织（${unknown} 个）`);
+  if (unknown) names.push(`其他相关组织（${unknown} 个）`);
   return names;
 }
 
