@@ -600,6 +600,12 @@ func (f *failingAuditNexus) AppendAuditEvidence(context.Context, nexus.AppendAud
 	return nexus.AppendAuditEvidenceResponse{}, fmt.Errorf("audit chain down")
 }
 
+type conflictAuditNexus struct{ *nexusclient.Mock }
+
+func (f *conflictAuditNexus) AppendAuditEvidence(context.Context, nexus.AppendAuditEvidenceRequest) (nexus.AppendAuditEvidenceResponse, error) {
+	return nexus.AppendAuditEvidenceResponse{}, fmt.Errorf("canonical payload mismatch: %w", nexusclient.ErrConflict)
+}
+
 // --- tests -------------------------------------------------------------------
 
 func adminMock() *nexusclient.Mock {

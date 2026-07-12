@@ -274,8 +274,13 @@ WITH created AS (
   INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
   SELECT enterprise_id,id,0,'create',$7,audit_ref_id,requester_user_id FROM created
   RETURNING policy_id
+), receipt AS (
+  UPDATE dream_policy_operations op SET status='completed',result=dream_policy_lifecycle_result(created,0),updated_at=now()
+  FROM created JOIN audit ON audit.policy_id=created.id
+  WHERE op.enterprise_id=created.enterprise_id AND op.operation_key=$7 AND op.status='pending'
+  RETURNING op.operation_key
 )
-SELECT created.id, created.enterprise_id, created.org_scope, created.status, created.draft, created.created_at, created.updated_at, created.revision, created.requester_user_id, created.permission_mode, created.pending_action, created.review_state, created.risk_level, created.risk_reasons, created.review_mode, created.reviewer_user_id, created.review_org_path, created.review_queue, created.decision, created.audit_ref_id FROM created JOIN audit ON audit.policy_id=created.id
+SELECT created.id, created.enterprise_id, created.org_scope, created.status, created.draft, created.created_at, created.updated_at, created.revision, created.requester_user_id, created.permission_mode, created.pending_action, created.review_state, created.risk_level, created.risk_reasons, created.review_mode, created.reviewer_user_id, created.review_org_path, created.review_queue, created.decision, created.audit_ref_id FROM created JOIN audit ON audit.policy_id=created.id JOIN receipt ON true
 `
 
 type CreateDreamPolicyLifecycleParams struct {
@@ -348,6 +353,17 @@ func (q *Queries) CreateDreamPolicyLifecycle(ctx context.Context, arg CreateDrea
 }
 
 const createDreamRun = `-- name: CreateDreamRun :one
+WITH eligible AS (
+  SELECT true AS allowed
+  WHERE COALESCE(NULLIF($1::text, ''), 'scheduled') NOT IN ('manual_rerun','backfill')
+     OR EXISTS (
+       SELECT 1 FROM dream_policy_operations op
+       WHERE op.enterprise_id=$2 AND op.operation_key=$3
+         AND op.status='pending' AND op.audit_ref_id=$4
+         AND (($1::text='manual_rerun' AND op.operation_kind='rerun' AND op.policy_id=$5)
+           OR ($1::text='backfill' AND op.operation_kind='backfill' AND op.policy_id=$6))
+     )
+), inserted AS (
 INSERT INTO dream_runs (
     id, policy_id, version, enterprise_id, status, window_start, window_end,
     org_unit_id, policy_version, workflow_id, workflow_version, timezone,
@@ -355,26 +371,39 @@ INSERT INTO dream_runs (
     rerun_of_run_id, coverage, missing_inputs, idempotency_key, org_version,
     operation_kind, audit_ref_id
 )
-VALUES (
-    $1, $2, $3, $4,
-    $5, $6, $7,
-    $8, $9, $10::text,
-    $11::integer, $12,
-    $13, $14, $15,
-    $16, $17, $18,
-    $19, $20, $21,
-    COALESCE(NULLIF($22::bigint, 0), 1),
-    COALESCE(NULLIF($23::text, ''), 'scheduled'), $24
-)
+SELECT
+    $7, $6, $8, $2,
+    $9, $10, $11,
+    $12, $13, $14::text,
+    $15::integer, $16,
+    $17, $18, $19,
+    $20, $21, $5,
+    $22, $23, $3,
+    COALESCE(NULLIF($24::bigint, 0), 1),
+    COALESCE(NULLIF($1::text, ''), 'scheduled'), $4
+FROM eligible
 ON CONFLICT DO NOTHING
 RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind, audit_ref_id
+), receipt AS (
+  UPDATE dream_policy_operations op SET status='completed',result=jsonb_build_object('run_id',inserted.id),updated_at=now()
+  FROM inserted
+  WHERE inserted.operation_kind IN ('manual_rerun','backfill')
+    AND op.enterprise_id=inserted.enterprise_id AND op.operation_key=inserted.idempotency_key AND op.status='pending'
+  RETURNING op.operation_key
+)
+SELECT inserted.id, inserted.policy_id, inserted.version, inserted.enterprise_id, inserted.status, inserted.window_start, inserted.window_end, inserted.error, inserted.created_at, inserted.finished_at, inserted.org_unit_id, inserted.policy_version, inserted.workflow_id, inserted.workflow_version, inserted.timezone, inserted.input_snapshot, inserted.visibility_snapshot, inserted.model_route, inserted.model_version, inserted.attempt, inserted.rerun_of_run_id, inserted.coverage, inserted.missing_inputs, inserted.idempotency_key, inserted.workflow_run_id, inserted.output_hash, inserted.execution_owner, inserted.execution_lease_expires_at, inserted.org_version, inserted.operation_kind, inserted.audit_ref_id FROM inserted
+WHERE inserted.operation_kind NOT IN ('manual_rerun','backfill') OR EXISTS (SELECT 1 FROM receipt)
 `
 
 type CreateDreamRunParams struct {
-	ID                 string             `json:"id"`
-	PolicyID           string             `json:"policy_id"`
-	Version            int32              `json:"version"`
+	OperationKind      string             `json:"operation_kind"`
 	EnterpriseID       string             `json:"enterprise_id"`
+	IdempotencyKey     string             `json:"idempotency_key"`
+	AuditRefID         pgtype.Text        `json:"audit_ref_id"`
+	RerunOfRunID       pgtype.Text        `json:"rerun_of_run_id"`
+	PolicyID           string             `json:"policy_id"`
+	ID                 string             `json:"id"`
+	Version            int32              `json:"version"`
 	Status             string             `json:"status"`
 	WindowStart        pgtype.Timestamptz `json:"window_start"`
 	WindowEnd          pgtype.Timestamptz `json:"window_end"`
@@ -388,21 +417,55 @@ type CreateDreamRunParams struct {
 	ModelRoute         string             `json:"model_route"`
 	ModelVersion       string             `json:"model_version"`
 	Attempt            int32              `json:"attempt"`
-	RerunOfRunID       pgtype.Text        `json:"rerun_of_run_id"`
 	Coverage           []byte             `json:"coverage"`
 	MissingInputs      []byte             `json:"missing_inputs"`
-	IdempotencyKey     string             `json:"idempotency_key"`
 	OrgVersion         int64              `json:"org_version"`
-	OperationKind      string             `json:"operation_kind"`
-	AuditRefID         pgtype.Text        `json:"audit_ref_id"`
 }
 
-func (q *Queries) CreateDreamRun(ctx context.Context, arg CreateDreamRunParams) (DreamRun, error) {
+type CreateDreamRunRow struct {
+	ID                      string             `json:"id"`
+	PolicyID                string             `json:"policy_id"`
+	Version                 int32              `json:"version"`
+	EnterpriseID            string             `json:"enterprise_id"`
+	Status                  string             `json:"status"`
+	WindowStart             pgtype.Timestamptz `json:"window_start"`
+	WindowEnd               pgtype.Timestamptz `json:"window_end"`
+	Error                   string             `json:"error"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	FinishedAt              pgtype.Timestamptz `json:"finished_at"`
+	OrgUnitID               string             `json:"org_unit_id"`
+	PolicyVersion           int32              `json:"policy_version"`
+	WorkflowID              pgtype.Text        `json:"workflow_id"`
+	WorkflowVersion         pgtype.Int4        `json:"workflow_version"`
+	Timezone                string             `json:"timezone"`
+	InputSnapshot           []byte             `json:"input_snapshot"`
+	VisibilitySnapshot      []byte             `json:"visibility_snapshot"`
+	ModelRoute              string             `json:"model_route"`
+	ModelVersion            string             `json:"model_version"`
+	Attempt                 int32              `json:"attempt"`
+	RerunOfRunID            pgtype.Text        `json:"rerun_of_run_id"`
+	Coverage                []byte             `json:"coverage"`
+	MissingInputs           []byte             `json:"missing_inputs"`
+	IdempotencyKey          string             `json:"idempotency_key"`
+	WorkflowRunID           pgtype.Text        `json:"workflow_run_id"`
+	OutputHash              pgtype.Text        `json:"output_hash"`
+	ExecutionOwner          pgtype.Text        `json:"execution_owner"`
+	ExecutionLeaseExpiresAt pgtype.Timestamptz `json:"execution_lease_expires_at"`
+	OrgVersion              int64              `json:"org_version"`
+	OperationKind           string             `json:"operation_kind"`
+	AuditRefID              pgtype.Text        `json:"audit_ref_id"`
+}
+
+func (q *Queries) CreateDreamRun(ctx context.Context, arg CreateDreamRunParams) (CreateDreamRunRow, error) {
 	row := q.db.QueryRow(ctx, createDreamRun,
-		arg.ID,
-		arg.PolicyID,
-		arg.Version,
+		arg.OperationKind,
 		arg.EnterpriseID,
+		arg.IdempotencyKey,
+		arg.AuditRefID,
+		arg.RerunOfRunID,
+		arg.PolicyID,
+		arg.ID,
+		arg.Version,
 		arg.Status,
 		arg.WindowStart,
 		arg.WindowEnd,
@@ -416,15 +479,11 @@ func (q *Queries) CreateDreamRun(ctx context.Context, arg CreateDreamRunParams) 
 		arg.ModelRoute,
 		arg.ModelVersion,
 		arg.Attempt,
-		arg.RerunOfRunID,
 		arg.Coverage,
 		arg.MissingInputs,
-		arg.IdempotencyKey,
 		arg.OrgVersion,
-		arg.OperationKind,
-		arg.AuditRefID,
 	)
-	var i DreamRun
+	var i CreateDreamRunRow
 	err := row.Scan(
 		&i.ID,
 		&i.PolicyID,
@@ -564,8 +623,14 @@ WITH op AS (
   INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
   SELECT enterprise_id,id,revision,'decision:'||pending_action||':'||$6,$2,$5,$4 FROM changed
   RETURNING policy_id
+), receipt AS (
+  UPDATE dream_policy_operations op SET status='completed',
+    result=dream_policy_lifecycle_result(changed,COALESCE((SELECT max(version) FROM dream_policy_versions WHERE policy_id=changed.id),0)::integer),updated_at=now()
+  FROM changed JOIN audit ON audit.policy_id=changed.id
+  WHERE op.enterprise_id=changed.enterprise_id AND op.operation_key=$2 AND op.status='pending'
+  RETURNING op.operation_key
 )
-SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.pending_action, changed.review_state, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id
+SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.pending_action, changed.review_state, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id JOIN receipt ON true
 `
 
 type DecideDreamPolicyIfRevisionParams struct {
@@ -653,8 +718,14 @@ WITH op AS (
   INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
   SELECT enterprise_id,id,revision,'disable',$2,$5,$4 FROM changed
   RETURNING policy_id
+), receipt AS (
+  UPDATE dream_policy_operations op SET status='completed',
+    result=dream_policy_lifecycle_result(changed,COALESCE((SELECT max(version) FROM dream_policy_versions WHERE policy_id=changed.id),0)::integer),updated_at=now()
+  FROM changed JOIN audit ON audit.policy_id=changed.id
+  WHERE op.enterprise_id=changed.enterprise_id AND op.operation_key=$2 AND op.status='pending'
+  RETURNING op.operation_key
 )
-SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.pending_action, changed.review_state, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id
+SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.pending_action, changed.review_state, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id JOIN receipt ON true
 `
 
 type DisableDreamPolicyIfRevisionParams struct {
@@ -2153,8 +2224,13 @@ WITH op AS (
   INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
   SELECT enterprise_id,id,revision,'publish',$2,$5,$4 FROM changed
   RETURNING policy_id
+), receipt AS (
+  UPDATE dream_policy_operations op SET status='completed',result=dream_policy_lifecycle_result(changed,inserted.version),updated_at=now()
+  FROM changed JOIN inserted ON inserted.policy_id=changed.id JOIN audit ON audit.policy_id=changed.id
+  WHERE op.enterprise_id=changed.enterprise_id AND op.operation_key=$2 AND op.status='pending'
+  RETURNING op.operation_key
 )
-SELECT inserted.policy_id, inserted.version, inserted.definition, inserted.published_at FROM inserted JOIN audit ON audit.policy_id=inserted.policy_id
+SELECT inserted.policy_id, inserted.version, inserted.definition, inserted.published_at FROM inserted JOIN audit ON audit.policy_id=inserted.policy_id JOIN receipt ON true
 `
 
 type PublishDreamPolicyGovernedParams struct {
@@ -2424,8 +2500,14 @@ WITH op AS (
   INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
   SELECT enterprise_id,id,revision,'review-refresh:'||pending_action,$2,$5,$4 FROM changed
   RETURNING policy_id
+), receipt AS (
+  UPDATE dream_policy_operations op SET status='completed',
+    result=dream_policy_lifecycle_result(changed,COALESCE((SELECT max(version) FROM dream_policy_versions WHERE policy_id=changed.id),0)::integer),updated_at=now()
+  FROM changed JOIN audit ON audit.policy_id=changed.id
+  WHERE op.enterprise_id=changed.enterprise_id AND op.operation_key=$2 AND op.status='pending'
+  RETURNING op.operation_key
 )
-SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.pending_action, changed.review_state, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id
+SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.pending_action, changed.review_state, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id JOIN receipt ON true
 `
 
 type RefreshDreamPolicyReviewRouteParams struct {
@@ -2760,8 +2842,14 @@ WITH op AS (
   INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
   SELECT enterprise_id,id,revision,'review:'||pending_action,$2,$5,$4 FROM changed
   RETURNING policy_id
+), receipt AS (
+  UPDATE dream_policy_operations op SET status='completed',
+    result=dream_policy_lifecycle_result(changed,COALESCE((SELECT max(version) FROM dream_policy_versions WHERE policy_id=changed.id),0)::integer),updated_at=now()
+  FROM changed JOIN audit ON audit.policy_id=changed.id
+  WHERE op.enterprise_id=changed.enterprise_id AND op.operation_key=$2 AND op.status='pending'
+  RETURNING op.operation_key
 )
-SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.pending_action, changed.review_state, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id
+SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.pending_action, changed.review_state, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id JOIN receipt ON true
 `
 
 type SubmitDreamPolicyReviewIfRevisionParams struct {
@@ -2865,8 +2953,14 @@ WITH op AS (
   INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
   SELECT enterprise_id,id,revision,'update',$2,$5,$4 FROM changed
   RETURNING policy_id
+), receipt AS (
+  UPDATE dream_policy_operations op SET status='completed',
+    result=dream_policy_lifecycle_result(changed,COALESCE((SELECT max(version) FROM dream_policy_versions WHERE policy_id=changed.id),0)::integer),updated_at=now()
+  FROM changed JOIN audit ON audit.policy_id=changed.id
+  WHERE op.enterprise_id=changed.enterprise_id AND op.operation_key=$2 AND op.status='pending'
+  RETURNING op.operation_key
 )
-SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.pending_action, changed.review_state, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id
+SELECT changed.id, changed.enterprise_id, changed.org_scope, changed.status, changed.draft, changed.created_at, changed.updated_at, changed.revision, changed.requester_user_id, changed.permission_mode, changed.pending_action, changed.review_state, changed.risk_level, changed.risk_reasons, changed.review_mode, changed.reviewer_user_id, changed.review_org_path, changed.review_queue, changed.decision, changed.audit_ref_id FROM changed JOIN audit ON audit.policy_id=changed.id JOIN receipt ON true
 `
 
 type UpdateDreamPolicyDraftIfRevisionParams struct {

@@ -685,20 +685,20 @@ func (s *schedulerHierarchyStore) GetLatestDreamRunForPolicyVersion(ctx context.
 	})
 	return rows[0], nil
 }
-func (s *schedulerHierarchyStore) CreateDreamRun(_ context.Context, arg db.CreateDreamRunParams) (db.DreamRun, error) {
+func (s *schedulerHierarchyStore) CreateDreamRun(_ context.Context, arg db.CreateDreamRunParams) (db.CreateDreamRunRow, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.runs[arg.ID]; ok {
-		return db.DreamRun{}, &pgconn.PgError{Code: "23505"}
+		return db.CreateDreamRunRow{}, &pgconn.PgError{Code: "23505"}
 	}
 	for _, existing := range s.runs {
 		if existing.EnterpriseID == arg.EnterpriseID && existing.IdempotencyKey == arg.IdempotencyKey {
-			return db.DreamRun{}, &pgconn.PgError{Code: "23505"}
+			return db.CreateDreamRunRow{}, &pgconn.PgError{Code: "23505"}
 		}
 	}
 	row := db.DreamRun{ID: arg.ID, PolicyID: arg.PolicyID, Version: arg.Version, EnterpriseID: arg.EnterpriseID, Status: arg.Status, WindowStart: arg.WindowStart, WindowEnd: arg.WindowEnd, OrgUnitID: arg.OrgUnitID, PolicyVersion: arg.PolicyVersion, WorkflowID: pgtype.Text{String: arg.WorkflowID, Valid: true}, WorkflowVersion: pgtype.Int4{Int32: arg.WorkflowVersion, Valid: true}, Timezone: arg.Timezone, InputSnapshot: arg.InputSnapshot, VisibilitySnapshot: arg.VisibilitySnapshot, ModelRoute: arg.ModelRoute, ModelVersion: arg.ModelVersion, Attempt: arg.Attempt, RerunOfRunID: arg.RerunOfRunID, Coverage: arg.Coverage, MissingInputs: arg.MissingInputs, IdempotencyKey: arg.IdempotencyKey, OrgVersion: arg.OrgVersion, OperationKind: arg.OperationKind, AuditRefID: arg.AuditRefID}
 	s.runs[row.ID] = row
-	return row, nil
+	return db.CreateDreamRunRow{}, nil
 }
 func (s *schedulerHierarchyStore) setStatus(id, status string) {
 	s.mu.Lock()

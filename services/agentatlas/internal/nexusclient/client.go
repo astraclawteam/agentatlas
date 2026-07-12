@@ -112,6 +112,9 @@ func (c *HTTPClient) doPost(ctx context.Context, path string, in, out any) error
 	if resp.StatusCode == http.StatusForbidden {
 		return fmt.Errorf("nexus %s: %w", path, ErrDenied)
 	}
+	if resp.StatusCode == http.StatusConflict {
+		return fmt.Errorf("nexus %s: %w", path, ErrConflict)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("nexus %s: status %d: %s", path, resp.StatusCode, snippet)

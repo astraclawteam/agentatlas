@@ -46,8 +46,13 @@ WITH created AS (
   INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
   SELECT enterprise_id,id,0,'create',sqlc.arg(operation_key),audit_ref_id,requester_user_id FROM created
   RETURNING policy_id
+), receipt AS (
+  UPDATE dream_policy_operations op SET status='completed',result=dream_policy_lifecycle_result(created,0),updated_at=now()
+  FROM created JOIN audit ON audit.policy_id=created.id
+  WHERE op.enterprise_id=created.enterprise_id AND op.operation_key=sqlc.arg(operation_key) AND op.status='pending'
+  RETURNING op.operation_key
 )
-SELECT created.* FROM created JOIN audit ON audit.policy_id=created.id;
+SELECT created.* FROM created JOIN audit ON audit.policy_id=created.id JOIN receipt ON true;
 
 -- name: GetDreamPolicy :one
 SELECT * FROM dream_policies WHERE id = $1;
@@ -75,8 +80,14 @@ WITH op AS (
   INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
   SELECT enterprise_id,id,revision,'update',sqlc.arg(operation_key),sqlc.arg(audit_ref_id),sqlc.arg(actor_user_id) FROM changed
   RETURNING policy_id
+), receipt AS (
+  UPDATE dream_policy_operations op SET status='completed',
+    result=dream_policy_lifecycle_result(changed,COALESCE((SELECT max(version) FROM dream_policy_versions WHERE policy_id=changed.id),0)::integer),updated_at=now()
+  FROM changed JOIN audit ON audit.policy_id=changed.id
+  WHERE op.enterprise_id=changed.enterprise_id AND op.operation_key=sqlc.arg(operation_key) AND op.status='pending'
+  RETURNING op.operation_key
 )
-SELECT changed.* FROM changed JOIN audit ON audit.policy_id=changed.id;
+SELECT changed.* FROM changed JOIN audit ON audit.policy_id=changed.id JOIN receipt ON true;
 
 -- name: SubmitDreamPolicyReviewIfRevision :one
 WITH op AS (
@@ -99,8 +110,14 @@ WITH op AS (
   INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
   SELECT enterprise_id,id,revision,'review:'||pending_action,sqlc.arg(operation_key),sqlc.arg(audit_ref_id),sqlc.arg(actor_user_id) FROM changed
   RETURNING policy_id
+), receipt AS (
+  UPDATE dream_policy_operations op SET status='completed',
+    result=dream_policy_lifecycle_result(changed,COALESCE((SELECT max(version) FROM dream_policy_versions WHERE policy_id=changed.id),0)::integer),updated_at=now()
+  FROM changed JOIN audit ON audit.policy_id=changed.id
+  WHERE op.enterprise_id=changed.enterprise_id AND op.operation_key=sqlc.arg(operation_key) AND op.status='pending'
+  RETURNING op.operation_key
 )
-SELECT changed.* FROM changed JOIN audit ON audit.policy_id=changed.id;
+SELECT changed.* FROM changed JOIN audit ON audit.policy_id=changed.id JOIN receipt ON true;
 
 -- name: RefreshDreamPolicyReviewRoute :one
 WITH op AS (
@@ -120,8 +137,14 @@ WITH op AS (
   INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
   SELECT enterprise_id,id,revision,'review-refresh:'||pending_action,sqlc.arg(operation_key),sqlc.arg(audit_ref_id),sqlc.arg(actor_user_id) FROM changed
   RETURNING policy_id
+), receipt AS (
+  UPDATE dream_policy_operations op SET status='completed',
+    result=dream_policy_lifecycle_result(changed,COALESCE((SELECT max(version) FROM dream_policy_versions WHERE policy_id=changed.id),0)::integer),updated_at=now()
+  FROM changed JOIN audit ON audit.policy_id=changed.id
+  WHERE op.enterprise_id=changed.enterprise_id AND op.operation_key=sqlc.arg(operation_key) AND op.status='pending'
+  RETURNING op.operation_key
 )
-SELECT changed.* FROM changed JOIN audit ON audit.policy_id=changed.id;
+SELECT changed.* FROM changed JOIN audit ON audit.policy_id=changed.id JOIN receipt ON true;
 
 -- name: DecideDreamPolicyIfRevision :one
 WITH op AS (
@@ -142,8 +165,14 @@ WITH op AS (
   INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
   SELECT enterprise_id,id,revision,'decision:'||pending_action||':'||sqlc.arg(decision),sqlc.arg(operation_key),sqlc.arg(audit_ref_id),sqlc.arg(actor_user_id) FROM changed
   RETURNING policy_id
+), receipt AS (
+  UPDATE dream_policy_operations op SET status='completed',
+    result=dream_policy_lifecycle_result(changed,COALESCE((SELECT max(version) FROM dream_policy_versions WHERE policy_id=changed.id),0)::integer),updated_at=now()
+  FROM changed JOIN audit ON audit.policy_id=changed.id
+  WHERE op.enterprise_id=changed.enterprise_id AND op.operation_key=sqlc.arg(operation_key) AND op.status='pending'
+  RETURNING op.operation_key
 )
-SELECT changed.* FROM changed JOIN audit ON audit.policy_id=changed.id;
+SELECT changed.* FROM changed JOIN audit ON audit.policy_id=changed.id JOIN receipt ON true;
 
 -- name: PublishDreamPolicyGoverned :one
 WITH op AS (
@@ -165,8 +194,13 @@ WITH op AS (
   INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
   SELECT enterprise_id,id,revision,'publish',sqlc.arg(operation_key),sqlc.arg(audit_ref_id),sqlc.arg(actor_user_id) FROM changed
   RETURNING policy_id
+), receipt AS (
+  UPDATE dream_policy_operations op SET status='completed',result=dream_policy_lifecycle_result(changed,inserted.version),updated_at=now()
+  FROM changed JOIN inserted ON inserted.policy_id=changed.id JOIN audit ON audit.policy_id=changed.id
+  WHERE op.enterprise_id=changed.enterprise_id AND op.operation_key=sqlc.arg(operation_key) AND op.status='pending'
+  RETURNING op.operation_key
 )
-SELECT inserted.* FROM inserted JOIN audit ON audit.policy_id=inserted.policy_id;
+SELECT inserted.* FROM inserted JOIN audit ON audit.policy_id=inserted.policy_id JOIN receipt ON true;
 
 -- name: DisableDreamPolicyIfRevision :one
 WITH op AS (
@@ -184,8 +218,14 @@ WITH op AS (
   INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
   SELECT enterprise_id,id,revision,'disable',sqlc.arg(operation_key),sqlc.arg(audit_ref_id),sqlc.arg(actor_user_id) FROM changed
   RETURNING policy_id
+), receipt AS (
+  UPDATE dream_policy_operations op SET status='completed',
+    result=dream_policy_lifecycle_result(changed,COALESCE((SELECT max(version) FROM dream_policy_versions WHERE policy_id=changed.id),0)::integer),updated_at=now()
+  FROM changed JOIN audit ON audit.policy_id=changed.id
+  WHERE op.enterprise_id=changed.enterprise_id AND op.operation_key=sqlc.arg(operation_key) AND op.status='pending'
+  RETURNING op.operation_key
 )
-SELECT changed.* FROM changed JOIN audit ON audit.policy_id=changed.id;
+SELECT changed.* FROM changed JOIN audit ON audit.policy_id=changed.id JOIN receipt ON true;
 
 -- name: UpdateDreamPolicyStatus :execrows
 UPDATE dream_policies SET status = $2, updated_at = now() WHERE id = $1;
@@ -208,6 +248,17 @@ SELECT * FROM dream_policies WHERE enterprise_id = $1 AND status = 'published' O
 SELECT * FROM dream_policies WHERE enterprise_id=sqlc.arg(enterprise_id) AND status='published' ORDER BY id LIMIT sqlc.arg(result_limit);
 
 -- name: CreateDreamRun :one
+WITH eligible AS (
+  SELECT true AS allowed
+  WHERE COALESCE(NULLIF(sqlc.arg(operation_kind)::text, ''), 'scheduled') NOT IN ('manual_rerun','backfill')
+     OR EXISTS (
+       SELECT 1 FROM dream_policy_operations op
+       WHERE op.enterprise_id=sqlc.arg(enterprise_id) AND op.operation_key=sqlc.arg(idempotency_key)
+         AND op.status='pending' AND op.audit_ref_id=sqlc.narg(audit_ref_id)
+         AND ((sqlc.arg(operation_kind)::text='manual_rerun' AND op.operation_kind='rerun' AND op.policy_id=sqlc.narg(rerun_of_run_id))
+           OR (sqlc.arg(operation_kind)::text='backfill' AND op.operation_kind='backfill' AND op.policy_id=sqlc.arg(policy_id)))
+     )
+), inserted AS (
 INSERT INTO dream_runs (
     id, policy_id, version, enterprise_id, status, window_start, window_end,
     org_unit_id, policy_version, workflow_id, workflow_version, timezone,
@@ -215,7 +266,7 @@ INSERT INTO dream_runs (
     rerun_of_run_id, coverage, missing_inputs, idempotency_key, org_version,
     operation_kind, audit_ref_id
 )
-VALUES (
+SELECT
     sqlc.arg(id), sqlc.arg(policy_id), sqlc.arg(version), sqlc.arg(enterprise_id),
     sqlc.arg(status), sqlc.arg(window_start), sqlc.arg(window_end),
     sqlc.arg(org_unit_id), sqlc.arg(policy_version), sqlc.arg(workflow_id)::text,
@@ -225,9 +276,18 @@ VALUES (
     sqlc.arg(coverage), sqlc.arg(missing_inputs), sqlc.arg(idempotency_key),
     COALESCE(NULLIF(sqlc.arg(org_version)::bigint, 0), 1),
     COALESCE(NULLIF(sqlc.arg(operation_kind)::text, ''), 'scheduled'), sqlc.narg(audit_ref_id)
-)
+FROM eligible
 ON CONFLICT DO NOTHING
-RETURNING *;
+RETURNING *
+), receipt AS (
+  UPDATE dream_policy_operations op SET status='completed',result=jsonb_build_object('run_id',inserted.id),updated_at=now()
+  FROM inserted
+  WHERE inserted.operation_kind IN ('manual_rerun','backfill')
+    AND op.enterprise_id=inserted.enterprise_id AND op.operation_key=inserted.idempotency_key AND op.status='pending'
+  RETURNING op.operation_key
+)
+SELECT inserted.* FROM inserted
+WHERE inserted.operation_kind NOT IN ('manual_rerun','backfill') OR EXISTS (SELECT 1 FROM receipt);
 
 -- name: GetDreamRun :one
 SELECT * FROM dream_runs WHERE id = $1;

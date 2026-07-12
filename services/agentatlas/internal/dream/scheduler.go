@@ -24,7 +24,7 @@ const JobTypeDream = "dream_run"
 // SchedulerStore extends PolicyStore with run bookkeeping.
 type SchedulerStore interface {
 	PolicyStore
-	CreateDreamRun(ctx context.Context, arg db.CreateDreamRunParams) (db.DreamRun, error)
+	CreateDreamRun(ctx context.Context, arg db.CreateDreamRunParams) (db.CreateDreamRunRow, error)
 	GetDreamRun(ctx context.Context, id string) (db.DreamRun, error)
 	GetLatestDreamRunForPolicy(ctx context.Context, policyID string) (db.DreamRun, error)
 	GetLatestDreamRunForPolicyVersion(ctx context.Context, arg db.GetLatestDreamRunForPolicyVersionParams) (db.DreamRun, error)

@@ -297,6 +297,21 @@ func (s *PolicyService) reconcileTransition(ctx context.Context, enterpriseID, p
 	return s.GetLifecycle(ctx, enterpriseID, policyID)
 }
 
+func (s *PolicyService) operationLifecycleResult(ctx context.Context, enterpriseID, policyID, operationKey string) (LifecycleView, error) {
+	ls := s.store.(policyLifecycleStore)
+	op, err := ls.GetDreamPolicyOperation(ctx, db.GetDreamPolicyOperationParams{EnterpriseID: enterpriseID, OperationKey: operationKey})
+	if err == nil && op.Status == "completed" {
+		var view LifecycleView
+		if err := json.Unmarshal(op.Result, &view); err != nil {
+			return LifecycleView{}, err
+		}
+		return view, nil
+	}
+	// In-memory fixture stores used by unit tests do not implement SQL CTE
+	// completion; production PostgreSQL always takes the completed branch.
+	return s.GetLifecycle(ctx, enterpriseID, policyID)
+}
+
 // LoadVersion returns exactly one immutable published policy version.
 func (s *PolicyService) LoadVersion(ctx context.Context, policyID string, version int32) (Policy, error) {
 	store, ok := s.store.(interface {
@@ -383,7 +398,8 @@ func (s *PolicyService) CreateGovernedDraft(ctx context.Context, enterpriseID, p
 	if err != nil {
 		return s.reconcileTransition(ctx, enterpriseID, policyID, operationKey, fmt.Errorf("store governed policy draft: %w", err))
 	}
-	return lifecycleView(db.DreamPolicy{ID: row.ID, EnterpriseID: row.EnterpriseID, OrgScope: row.OrgScope, Status: row.Status, Draft: row.Draft, Revision: row.Revision, RequesterUserID: row.RequesterUserID, PermissionMode: row.PermissionMode, PendingAction: row.PendingAction, ReviewState: row.ReviewState, RiskLevel: row.RiskLevel, RiskReasons: row.RiskReasons, ReviewMode: row.ReviewMode, ReviewerUserID: row.ReviewerUserID, ReviewOrgPath: row.ReviewOrgPath, ReviewQueue: row.ReviewQueue, Decision: row.Decision, AuditRefID: row.AuditRefID}, 0)
+	_ = row
+	return s.operationLifecycleResult(ctx, enterpriseID, policyID, operationKey)
 }
 
 func (s *PolicyService) GetLifecycle(ctx context.Context, enterpriseID, policyID string) (LifecycleView, error) {
@@ -440,7 +456,7 @@ func (s *PolicyService) UpdateGovernedDraft(ctx context.Context, enterpriseID, p
 		return s.reconcileTransition(ctx, enterpriseID, policyID, operationKey, fmt.Errorf("update Dream policy revision: %w", err))
 	}
 	_ = row
-	return s.GetLifecycle(ctx, enterpriseID, policyID)
+	return s.operationLifecycleResult(ctx, enterpriseID, policyID, operationKey)
 }
 
 // Assess returns deterministic risk facts. Creation has no published baseline
@@ -533,7 +549,7 @@ func (s *PolicyService) SubmitReview(ctx context.Context, enterpriseID, policyID
 			return s.reconcileTransition(ctx, enterpriseID, policyID, operationKey, fmt.Errorf("submit Dream policy review: %w", err))
 		}
 	}
-	return s.GetLifecycle(ctx, enterpriseID, policyID)
+	return s.operationLifecycleResult(ctx, enterpriseID, policyID, operationKey)
 }
 
 func (s *PolicyService) Decide(ctx context.Context, enterpriseID, policyID, actor, auditRef, operationKey, decision string, revision int32) (LifecycleView, error) {
@@ -549,7 +565,7 @@ func (s *PolicyService) Decide(ctx context.Context, enterpriseID, policyID, acto
 		return s.reconcileTransition(ctx, enterpriseID, policyID, operationKey, fmt.Errorf("decide Dream policy: %w", err))
 	}
 	_ = row
-	return s.GetLifecycle(ctx, enterpriseID, policyID)
+	return s.operationLifecycleResult(ctx, enterpriseID, policyID, operationKey)
 }
 
 func (s *PolicyService) PublishGoverned(ctx context.Context, enterpriseID, policyID, actor, auditRef, operationKey string, revision int32) (LifecycleView, error) {
@@ -583,12 +599,8 @@ func (s *PolicyService) PublishGoverned(ctx context.Context, enterpriseID, polic
 	if err != nil {
 		return s.reconcileTransition(ctx, enterpriseID, policyID, operationKey, fmt.Errorf("publish governed Dream policy: %w", err))
 	}
-	view, err = s.GetLifecycle(ctx, enterpriseID, policyID)
-	if err != nil {
-		return LifecycleView{}, err
-	}
-	view.Version = published.Version
-	return view, nil
+	_ = published
+	return s.operationLifecycleResult(ctx, enterpriseID, policyID, operationKey)
 }
 
 func (s *PolicyService) Disable(ctx context.Context, enterpriseID, policyID, actor, auditRef, operationKey string, revision int32) (LifecycleView, error) {
@@ -601,7 +613,7 @@ func (s *PolicyService) Disable(ctx context.Context, enterpriseID, policyID, act
 		return s.reconcileTransition(ctx, enterpriseID, policyID, operationKey, fmt.Errorf("disable Dream policy: %w", err))
 	}
 	_ = row
-	return s.GetLifecycle(ctx, enterpriseID, policyID)
+	return s.operationLifecycleResult(ctx, enterpriseID, policyID, operationKey)
 }
 
 func text(v string) pgtype.Text { return pgtype.Text{String: v, Valid: v != ""} }

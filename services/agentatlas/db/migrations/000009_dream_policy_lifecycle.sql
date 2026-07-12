@@ -18,6 +18,29 @@ ALTER TABLE dream_policies
 
 ALTER TABLE dream_runs ADD COLUMN audit_ref_id text;
 
+-- +goose StatementBegin
+CREATE FUNCTION dream_policy_lifecycle_result(policy dream_policies, published_version integer)
+RETURNS jsonb LANGUAGE sql STABLE AS $$
+SELECT jsonb_strip_nulls(jsonb_build_object(
+    'dream_policy_id', policy.id,
+    'status', CASE policy.review_state WHEN 'pending' THEN 'review_pending' WHEN 'approved' THEN 'approved' WHEN 'rejected' THEN 'rejected' ELSE policy.status END,
+    'revision', policy.revision,
+    'version', published_version,
+    'requester_user_id', policy.requester_user_id,
+    'permission_mode', policy.permission_mode,
+    'risk_level', NULLIF(policy.risk_level, ''),
+    'risk_reasons', policy.risk_reasons,
+    'review_mode', NULLIF(policy.review_mode, ''),
+    'reviewer_user_id', policy.reviewer_user_id,
+    'org_path', policy.review_org_path,
+    'queue', policy.review_queue,
+    'pending_action', NULLIF(policy.pending_action, ''),
+    'review_state', NULLIF(policy.review_state, ''),
+    'policy', policy.draft
+));
+$$;
+-- +goose StatementEnd
+
 CREATE TABLE dream_policy_operations (
     enterprise_id text NOT NULL REFERENCES enterprises(id),
     operation_key text NOT NULL CHECK (char_length(operation_key) BETWEEN 16 AND 128),
@@ -61,6 +84,7 @@ ALTER TABLE dream_runs DROP CONSTRAINT dream_explicit_runs_require_audit;
 DROP TABLE dream_policy_transition_audits;
 DROP TABLE dream_policy_operations;
 ALTER TABLE dream_runs DROP COLUMN audit_ref_id;
+DROP FUNCTION dream_policy_lifecycle_result(dream_policies, integer);
 -- Defensive mapping permits rollback from prerelease v9 databases that used
 -- lifecycle state in the status column.
 ALTER TABLE dream_policies DROP CONSTRAINT IF EXISTS dream_policies_status_check;

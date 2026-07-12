@@ -1,4 +1,4 @@
-# Frozen from AgentNexus gateway-runtime.yaml at commit 0b8dd10.
+# Frozen from the AgentNexus audit idempotency contract.
 openapi: 3.0.3
 paths:
   /v1/audit/evidence:
@@ -6,6 +6,8 @@ paths:
       operationId: appendAuditEvidence
       summary: Record a trusted AgentAtlas service request in the audit chain.
       security: [{agentAtlasServiceSecret: []}]
+      parameters:
+        - {name: Idempotency-Key, in: header, required: false, schema: {type: string, minLength: 16, maxLength: 128}, description: Stable operation-derived key; retries with the same canonical payload return the same audit_ref_id.}
       requestBody:
         required: true
         content:
@@ -19,6 +21,7 @@ paths:
               schema: {$ref: '#/components/schemas/AuditEvidenceResponse'}
         '400': {description: Invalid action, resource binding, or bounded details.}
         '401': {description: Invalid service credentials or Case Ticket.}
+        '409': {description: Idempotency-Key was already used with a different canonical audit payload.}
         '503': {description: Ticket or audit persistence unavailable.}
 components:
   securitySchemes:

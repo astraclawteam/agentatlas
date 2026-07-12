@@ -76,6 +76,25 @@ func TestDreamPolicyLifecycleAuditFailurePreventsUpdate(t *testing.T) {
 	}
 }
 
+func TestDreamPolicyLifecycleMapsNexusAuditConflictTo409(t *testing.T) {
+	base := adminMock()
+	base.Tickets["tick_editor"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "editor", Scopes: []string{"edit"}}
+	store := newFakePolicyStore()
+	raw, _ := json.Marshal(canonicalDreamPolicyBody())
+	store.policies["policy-conflict"] = db.DreamPolicy{ID: "policy-conflict", EnterpriseID: "ent_1", OrgScope: "pg_mes", Status: "draft", Draft: raw, RequesterUserID: "editor", PermissionMode: "direct_edit", RiskReasons: []byte(`[]`), ReviewOrgPath: []byte(`[]`)}
+	router := NewAgentRouter(AgentRouterDeps{Nexus: &conflictAuditNexus{Mock: base}, Dreams: dream.NewPolicyService(store)})
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+	resp := doLifecycleJSON(t, http.MethodPut, srv.URL+"/v1/dream-policies/policy-conflict", "tick_editor", "audit-conflict-op-0001", map[string]any{"revision": 0, "policy": canonicalDreamPolicyBody()})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status=%d body=%v", resp.StatusCode, decodeBody(t, resp))
+	}
+	resp.Body.Close()
+	if store.policies["policy-conflict"].Revision != 0 {
+		t.Fatal("audit conflict mutated policy")
+	}
+}
+
 func TestDreamPolicyLifecycleRecoversAfterRemoteAuditReceiptPersistenceFailure(t *testing.T) {
 	mock := adminMock()
 	mock.Tickets["tick_editor"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "editor", Scopes: []string{"edit"}}
@@ -154,7 +173,7 @@ func TestDreamPolicyLifecycleAdminQueueRefreshesFromNexus(t *testing.T) {
 	decision.Body.Close()
 }
 
-func TestDreamPolicyLifecycleDifferentEditorUsesStoredRequesterForReviewAndRefresh(t *testing.T) {
+func TestDreamPolicyLifecycleDifferentEditorCannotSubmitOrRefreshReview(t *testing.T) {
 	mock := adminMock()
 	mock.Tickets["tick_creator"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "creator", Scopes: []string{"edit"}}
 	mock.Tickets["tick_editor2"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "editor-2", Scopes: []string{"edit"}}
@@ -162,19 +181,29 @@ func TestDreamPolicyLifecycleDifferentEditorUsesStoredRequesterForReviewAndRefre
 	srv, _, _ := newAgentTestServerWithPolicyStore(t, mock)
 	created := decodeBody(t, postJSONReq(t, srv.URL+"/v1/dream-policies", "tick_creator", canonicalDreamPolicyBody()))
 	id := created["dream_policy_id"].(string)
-	queued := doLifecycleJSON(t, http.MethodPost, srv.URL+"/v1/dream-policies/"+id+"/review", "tick_editor2", "different-editor-review", map[string]any{"revision": 0, "action": "publish"})
+	resolveBefore, auditBefore := len(mock.ApprovalRequests), len(mock.AuditLog)
+	denied := doLifecycleJSON(t, http.MethodPost, srv.URL+"/v1/dream-policies/"+id+"/review", "tick_editor2", "different-editor-review", map[string]any{"revision": 0, "action": "publish"})
+	if denied.StatusCode != http.StatusForbidden {
+		t.Fatalf("different editor submit=%d body=%v", denied.StatusCode, decodeBody(t, denied))
+	}
+	denied.Body.Close()
+	if len(mock.ApprovalRequests) != resolveBefore || len(mock.AuditLog) != auditBefore {
+		t.Fatal("denied editor reached AgentNexus or emitted audit")
+	}
+	queued := doLifecycleJSON(t, http.MethodPost, srv.URL+"/v1/dream-policies/"+id+"/review", "tick_creator", "creator-queue-review", map[string]any{"revision": 0, "action": "publish"})
 	if queued.StatusCode != http.StatusOK {
-		t.Fatalf("different editor queue=%d body=%v", queued.StatusCode, decodeBody(t, queued))
+		t.Fatalf("creator queue=%d body=%v", queued.StatusCode, decodeBody(t, queued))
 	}
 	queued.Body.Close()
 	mock.ApprovalRoute = nexus.ApprovalRoute{Mode: string(governance.ReviewUpward), RiskLevel: "high", RiskReasons: []string{"workflow_binding"}, RequesterUserID: "creator", ReviewerUserID: "manager", OrgPath: []string{"pg_mes", "dept"}}
+	resolveBefore, auditBefore = len(mock.ApprovalRequests), len(mock.AuditLog)
 	refreshed := doLifecycleJSON(t, http.MethodPost, srv.URL+"/v1/dream-policies/"+id+"/review", "tick_editor2", "different-editor-refresh", map[string]any{"revision": 0, "action": "publish"})
-	if refreshed.StatusCode != http.StatusOK {
+	if refreshed.StatusCode != http.StatusForbidden {
 		t.Fatalf("different editor refresh=%d body=%v", refreshed.StatusCode, decodeBody(t, refreshed))
 	}
-	body := decodeBody(t, refreshed)
-	if body["requester_user_id"] != "creator" || body["reviewer_user_id"] != "manager" {
-		t.Fatalf("refreshed route=%v", body)
+	refreshed.Body.Close()
+	if len(mock.ApprovalRequests) != resolveBefore || len(mock.AuditLog) != auditBefore {
+		t.Fatal("denied refresh reached AgentNexus or emitted audit")
 	}
 }
 

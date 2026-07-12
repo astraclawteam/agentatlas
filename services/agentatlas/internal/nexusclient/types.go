@@ -9,3 +9,6 @@ import "errors"
 // Callers must fail closed: no fallback reads, no partial answers built on
 // denied evidence.
 var ErrDenied = errors.New("agentnexus: denied")
+
+// ErrConflict is a permanent idempotency-key/canonical-payload conflict.
+var ErrConflict = errors.New("agentnexus: idempotency conflict")

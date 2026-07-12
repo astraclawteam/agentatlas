@@ -271,6 +271,10 @@ func (h *dreamPolicyHandler) review(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "revision_conflict", "stale Dream policy revision")
 		return
 	}
+	if actor.Ticket.ActorUserID != view.RequesterUserID {
+		writeError(w, http.StatusForbidden, "requester_required", "only the stored Dream policy requester may submit or refresh review")
+		return
+	}
 	refresh := view.ReviewState == "pending" && view.ReviewMode == governance.ReviewAdminQueue && view.PendingAction == req.Action
 	if !refresh && ((req.Action == "publish" && view.Status != "draft") || (req.Action == "disable" && view.Status != "published")) {
 		writeError(w, 409, "invalid_state", "action is not valid for current policy state")
@@ -593,6 +597,10 @@ func (h *dreamPolicyHandler) audit(w http.ResponseWriter, r *http.Request, actio
 func (h *dreamPolicyHandler) auditWithKey(w http.ResponseWriter, r *http.Request, action nexus.AuditAction, id, idempotencyKey string, details map[string]any) (string, bool) {
 	actor, _ := actorFrom(r.Context())
 	resp, err := h.deps.Nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{IdempotencyKey: idempotencyKey, TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, Action: action, ResourceType: "dream_policy", ResourceID: id, Details: details})
+	if errors.Is(err, nexusclient.ErrConflict) {
+		writeError(w, http.StatusConflict, "idempotency_conflict", err.Error())
+		return "", false
+	}
 	if err != nil || strings.TrimSpace(resp.AuditRefID) == "" {
 		if err == nil {
 			err = fmt.Errorf("AgentNexus returned no durable audit reference")

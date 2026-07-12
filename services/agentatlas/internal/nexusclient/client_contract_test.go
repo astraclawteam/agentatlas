@@ -161,7 +161,7 @@ func TestHTTPClientContract(t *testing.T) {
 
 	audit, err := c.AppendAuditEvidence(ctx, nexus.AppendAuditEvidenceRequest{
 		IdempotencyKey: "audit-contract-key-0001",
-		TicketID: "tick_ok", EnterpriseID: "ent_1", Action: nexus.AuditEvidenceRead,
+		TicketID:       "tick_ok", EnterpriseID: "ent_1", Action: nexus.AuditEvidenceRead,
 		ResourceType: "answer_trace", ResourceID: "trace-1",
 	})
 	if err != nil || audit.AuditRefID != "audit_1" {
@@ -229,6 +229,24 @@ func TestHTTPClientNeverForwardsServiceCredentialOnRedirect(t *testing.T) {
 	}
 	if leaked {
 		t.Fatal("service credential leaked across audit redirect")
+	}
+}
+
+func TestHTTPClientMapsAuditPayloadMismatchToConflict(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/audit/evidence" || r.Header.Get("Idempotency-Key") != "audit-conflict-key-0001" {
+			t.Fatalf("request path=%s key=%q", r.URL.Path, r.Header.Get("Idempotency-Key"))
+		}
+		http.Error(w, `{"error":"idempotency_conflict"}`, http.StatusConflict)
+	}))
+	defer server.Close()
+	client, err := New(server.URL, time.Second, "agentatlas", writeServiceSecret(t, "AgentAtlas-Nexus-Service-Q7mV2xK9pR4tY8dF3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.AppendAuditEvidence(context.Background(), nexus.AppendAuditEvidenceRequest{IdempotencyKey: "audit-conflict-key-0001", TicketID: "ticket", EnterpriseID: "ent", Action: nexus.AuditDreamPolicyCreated, ResourceType: "dream_policy", ResourceID: "policy"})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("error=%v", err)
 	}
 }
 

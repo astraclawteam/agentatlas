@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -79,7 +80,8 @@ func TestDreamSchedulerHierarchyPostgresConcurrentTicks(t *testing.T) {
 	bus := &schedulerIntegrationBus{}
 	runner := tasks.NewRunner(bus)
 	runner.AllowEnqueue(dream.JobTypeDream)
-	scheduler := dream.NewScheduler(q, dream.NewPolicyService(q), runner, dream.WithSchedulerClock(func() time.Time { return time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC) }))
+	policyService := dream.NewPolicyService(q)
+	scheduler := dream.NewScheduler(q, policyService, runner, dream.WithSchedulerClock(func() time.Time { return time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC) }))
 	now := time.Date(2026, 7, 10, 14, 0, 0, 0, time.UTC)
 	runConcurrentTicks(t, func() (int, error) { return scheduler.Tick(ctx, ent, now) })
 	childRuns, err := q.ListDreamRunsByOrg(ctx, db.ListDreamRunsByOrgParams{EnterpriseID: ent, OrgUnitID: "project_group:child-" + suffix, ResultLimit: 10})
@@ -108,6 +110,12 @@ func TestDreamSchedulerHierarchyPostgresConcurrentTicks(t *testing.T) {
 
 	backfillStart := time.Date(2026, 7, 7, 14, 0, 0, 0, time.UTC)
 	request := dream.BackfillRequest{EnterpriseID: ent, PolicyID: childPolicy, WindowStart: backfillStart, WindowEnd: backfillStart.Add(24 * time.Hour), IdempotencyKey: "shared-explicit-key-" + suffix, AuditRefID: "audit-shared-explicit-" + suffix}
+	if _, err := policyService.BeginReceipt(ctx, ent, request.IdempotencyKey, "backfill", childPolicy, "integration", strings.Repeat("a", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := policyService.RecordOperationAudit(ctx, ent, request.IdempotencyKey, request.AuditRefID); err != nil {
+		t.Fatal(err)
+	}
 	backfillID, err := scheduler.Backfill(ctx, request)
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +142,14 @@ func TestDreamSchedulerHierarchyPostgresConcurrentTicks(t *testing.T) {
 	if _, err := scheduler.Backfill(ctx, dream.BackfillRequest{EnterpriseID: ent, PolicyID: childPolicy, WindowStart: childRuns[0].WindowStart.Time, WindowEnd: childRuns[0].WindowEnd.Time, RerunOfRunID: backfillID, IdempotencyKey: "bad-lineage-" + suffix, AuditRefID: "audit-bad-lineage-" + suffix}); err == nil {
 		t.Fatal("unrelated failed lineage accepted")
 	}
-	validLineage, err := scheduler.Backfill(ctx, dream.BackfillRequest{EnterpriseID: ent, PolicyID: childPolicy, WindowStart: childRuns[0].WindowStart.Time, WindowEnd: childRuns[0].WindowEnd.Time, RerunOfRunID: childRuns[0].ID, IdempotencyKey: "valid-lineage-" + suffix, AuditRefID: "audit-valid-lineage-" + suffix})
+	validRequest := dream.BackfillRequest{EnterpriseID: ent, PolicyID: childPolicy, WindowStart: childRuns[0].WindowStart.Time, WindowEnd: childRuns[0].WindowEnd.Time, RerunOfRunID: childRuns[0].ID, IdempotencyKey: "valid-lineage-" + suffix, AuditRefID: "audit-valid-lineage-" + suffix}
+	if _, err := policyService.BeginReceipt(ctx, ent, validRequest.IdempotencyKey, "backfill", childPolicy, "integration", strings.Repeat("b", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := policyService.RecordOperationAudit(ctx, ent, validRequest.IdempotencyKey, validRequest.AuditRefID); err != nil {
+		t.Fatal(err)
+	}
+	validLineage, err := scheduler.Backfill(ctx, validRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,6 +193,13 @@ func TestDreamSchedulerHierarchyPostgresConcurrentTicks(t *testing.T) {
 	cross := request
 	cross.EnterpriseID = ent2
 	cross.PolicyID = policy2
+	cross.AuditRefID = "audit-cross-explicit-" + suffix
+	if _, err := policyService.BeginReceipt(ctx, ent2, cross.IdempotencyKey, "backfill", policy2, "integration", strings.Repeat("c", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := policyService.RecordOperationAudit(ctx, ent2, cross.IdempotencyKey, cross.AuditRefID); err != nil {
+		t.Fatal(err)
+	}
 	if crossID, err := scheduler.Backfill(ctx, cross); err != nil || crossID == backfillID {
 		t.Fatalf("cross-enterprise idempotency=%s err=%v", crossID, err)
 	}

@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -18,6 +19,7 @@ import (
 
 	dbfs "github.com/astraclawteam/agentatlas/services/agentatlas/db"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/storage"
 )
 
@@ -204,6 +206,47 @@ func TestDreamPolicyLifecyclePostgresCASAndAtomicPublish(t *testing.T) {
 	var transitionCount int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM dream_policy_transition_audits WHERE enterprise_id=$1 AND operation_key=$2`, enterprise, boundKey).Scan(&transitionCount); err != nil || transitionCount != 1 {
 		t.Fatalf("same operation transition audits=%d err=%v", transitionCount, err)
+	}
+
+	immutablePolicy := "policy-immutable-result-" + suffix
+	immutableCreateKey := "create-immutable-result-" + suffix
+	reserveLifecycleOperation(t, ctx, q, enterprise, immutableCreateKey, "create", immutablePolicy, "audit-create-immutable-"+suffix)
+	if _, err := q.CreateDreamPolicyLifecycle(ctx, db.CreateDreamPolicyLifecycleParams{ID: immutablePolicy, EnterpriseID: enterprise, OrgScope: "department:d1", Draft: definition, RequesterUserID: "editor", PermissionMode: "direct_edit", OperationKey: immutableCreateKey}); err != nil {
+		t.Fatal(err)
+	}
+	var definitionA map[string]any
+	if err := json.Unmarshal(definition, &definitionA); err != nil {
+		t.Fatal(err)
+	}
+	definitionA["schedule"] = "15 22 * * *"
+	rawA, _ := json.Marshal(definitionA)
+	opA, auditA := "update-immutable-a-"+suffix, "audit-immutable-a-"+suffix
+	reserveLifecycleOperation(t, ctx, q, enterprise, opA, "update", immutablePolicy, auditA)
+	if _, err := q.UpdateDreamPolicyDraftIfRevision(ctx, db.UpdateDreamPolicyDraftIfRevisionParams{OrgScope: "department:d1", Draft: rawA, AuditRefID: pgtype.Text{String: auditA, Valid: true}, TargetEnterpriseID: enterprise, TargetID: immutablePolicy, ExpectedRevision: 0, ActorUserID: "editor", OperationKey: opA}); err != nil {
+		t.Fatal(err)
+	}
+	definitionA["schedule"] = "30 22 * * *"
+	rawB, _ := json.Marshal(definitionA)
+	opB, auditB := "update-immutable-b-"+suffix, "audit-immutable-b-"+suffix
+	reserveLifecycleOperation(t, ctx, q, enterprise, opB, "update", immutablePolicy, auditB)
+	if _, err := q.UpdateDreamPolicyDraftIfRevision(ctx, db.UpdateDreamPolicyDraftIfRevisionParams{OrgScope: "department:d1", Draft: rawB, AuditRefID: pgtype.Text{String: auditB, Valid: true}, TargetEnterpriseID: enterprise, TargetID: immutablePolicy, ExpectedRevision: 1, ActorUserID: "editor", OperationKey: opB}); err != nil {
+		t.Fatal(err)
+	}
+	storedA, err := q.GetDreamPolicyOperation(ctx, db.GetDreamPolicyOperationParams{EnterpriseID: enterprise, OperationKey: opA})
+	if err != nil || storedA.Status != "completed" {
+		t.Fatalf("operation A=%+v err=%v", storedA, err)
+	}
+	var resultA map[string]any
+	if err := json.Unmarshal(storedA.Result, &resultA); err != nil {
+		t.Fatal(err)
+	}
+	policyA := resultA["policy"].(map[string]any)
+	if resultA["revision"] != float64(1) || resultA["status"] != "draft" || policyA["schedule"] != "15 22 * * *" {
+		t.Fatalf("operation A replay drifted after B: %v", resultA)
+	}
+	replayedA, err := dream.NewPolicyService(q).BeginOperation(ctx, enterprise, opA, "update", immutablePolicy, "editor", strings.Repeat("a", 64))
+	if err != nil || replayedA.Replay == nil || replayedA.Replay.Revision != 1 || replayedA.Replay.Status != "draft" || replayedA.Replay.Policy.Schedule != "15 22 * * *" {
+		t.Fatalf("operation A retry=%+v err=%v", replayedA.Replay, err)
 	}
 
 	refreshPolicy := "policy-refresh-" + suffix

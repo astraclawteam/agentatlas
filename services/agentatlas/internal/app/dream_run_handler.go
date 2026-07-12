@@ -195,6 +195,10 @@ func (h *dreamRunHandler) rerunRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	audit, err := h.nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{IdempotencyKey: auditIdempotencyKey(actor.Ticket.EnterpriseID, key), TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, Action: nexus.AuditDreamJobRun, ResourceType: "dream_run", ResourceID: view.RunID, Details: map[string]any{"org_unit_id": view.OrgUnitID, "idempotency_key": key, "phase": "manual_rerun_attempt"}})
+	if errors.Is(err, nexusclient.ErrConflict) {
+		writeError(w, http.StatusConflict, "idempotency_conflict", err.Error())
+		return
+	}
 	if err != nil || strings.TrimSpace(audit.AuditRefID) == "" {
 		if err == nil {
 			err = fmt.Errorf("AgentNexus returned no durable audit reference")
