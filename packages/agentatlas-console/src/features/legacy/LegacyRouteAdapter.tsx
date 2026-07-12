@@ -23,13 +23,21 @@ interface LegacyItem {
 }
 
 export function LegacyRouteAdapter({ surface }: { surface: LegacySurface }) {
-  const { session } = useSession();
+  const { session, advancedMode } = useSession();
   const [items, setItems] = useState<LegacyItem[]>([]);
   const [status, setStatus] = useState("正在读取已授权内容…");
   const [files, setFiles] = useState<File[]>([]);
+  const [available, setAvailable] = useState(true);
 
   useEffect(() => {
-    if (!session.advanced_mode_allowed) return;
+    setItems([]);
+    setFiles([]);
+    setAvailable(true);
+    if (!session.advanced_mode_allowed || !advancedMode) {
+      setStatus("");
+      return;
+    }
+    setStatus("正在读取已授权内容…");
     let active = true;
     api<{ items: LegacyItem[] }>(`/api/legacy/${surface}`)
       .then((result) => {
@@ -39,6 +47,7 @@ export function LegacyRouteAdapter({ surface }: { surface: LegacySurface }) {
       })
       .catch((error: unknown) => {
         if (!active) return;
+        if (error instanceof ApiError && error.status === 503) setAvailable(false);
         setStatus(
           error instanceof ApiError && error.status === 503
             ? "这项旧版能力尚未接入安全会话，当前已停止操作。"
@@ -48,9 +57,18 @@ export function LegacyRouteAdapter({ surface }: { surface: LegacySurface }) {
     return () => {
       active = false;
     };
-  }, [session.advanced_mode_allowed, surface]);
+  }, [advancedMode, session.advanced_mode_allowed, surface]);
 
   if (!session.advanced_mode_allowed) return <Navigate to="/knowledge" replace />;
+  if (!advancedMode) {
+    return (
+      <section className="console-route-intro">
+        <p className="console-route-kicker">高级维护 · 过渡入口</p>
+        <h1 className="title-display">{titles[surface]}</h1>
+        <p role="status">请先开启高级维护模式</p>
+      </section>
+    );
+  }
 
   const upload = async () => {
     if (files.length === 0) return;
@@ -65,6 +83,7 @@ export function LegacyRouteAdapter({ surface }: { surface: LegacySurface }) {
       setFiles([]);
       setStatus("附件已交给 Atlas 助手处理。");
     } catch (error) {
+      if (error instanceof ApiError && error.status === 503) setAvailable(false);
       setStatus(
         error instanceof ApiError && error.status === 503
           ? "附件安全上传尚未接通，文件没有发送。"
@@ -88,10 +107,11 @@ export function LegacyRouteAdapter({ surface }: { surface: LegacySurface }) {
               aria-label="选择要安全上传的附件"
               type="file"
               multiple
+              disabled={!available}
               onChange={(event) => setFiles(Array.from(event.currentTarget.files ?? []))}
             />
           </label>
-          <Button disabled={files.length === 0} onClick={() => void upload()}>
+          <Button disabled={!available || files.length === 0} onClick={() => void upload()}>
             <Paperclip aria-hidden size={18} />
             安全上传附件
           </Button>

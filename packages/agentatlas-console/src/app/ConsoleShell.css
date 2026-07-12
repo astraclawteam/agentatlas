@@ -141,6 +141,14 @@
   padding-left: 16px;
 }
 
+.console-advanced-links {
+  display: grid;
+  gap: 4px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--color-border);
+}
+
 .console-org-link {
   width: 100%;
   min-height: 40px;

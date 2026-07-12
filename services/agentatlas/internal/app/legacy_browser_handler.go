@@ -39,11 +39,11 @@ type legacyItem struct {
 
 func (h *legacyBrowserHandler) read(surface string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		session, ok := h.authorize(w, r, surface, surface+".read")
+		session, allowedOrganizations, ok := h.authorize(w, r, surface, surface+".read")
 		if !ok {
 			return
 		}
-		items, err := h.items(r.Context(), session, surface)
+		items, err := h.items(r.Context(), session, surface, allowedOrganizations)
 		if err != nil {
 			writeError(w, http.StatusServiceUnavailable, "capability_unavailable", "legacy capability has no safe browser-session adapter")
 			return
@@ -53,44 +53,58 @@ func (h *legacyBrowserHandler) read(surface string) http.HandlerFunc {
 }
 
 func (h *legacyBrowserHandler) uploadAttachments(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.authorize(w, r, "assistant", "assistant.upload"); !ok {
+	if _, _, ok := h.authorize(w, r, "assistant", "assistant.upload"); !ok {
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "capability_unavailable", "assistant attachment upload has no safe browser-session adapter")
 }
 
-func (h *legacyBrowserHandler) authorize(w http.ResponseWriter, r *http.Request, resource, action string) (browsersession.Session, bool) {
+func (h *legacyBrowserHandler) authorize(w http.ResponseWriter, r *http.Request, resource, action string) (browsersession.Session, map[string]bool, bool) {
 	session, ok := browserActorFrom(r.Context())
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "no active browser session")
-		return browsersession.Session{}, false
+		return browsersession.Session{}, nil, false
 	}
 	if !session.AdvancedModeAllowed {
 		writeError(w, http.StatusForbidden, "advanced_mode_denied", "advanced maintenance is not authorized")
-		return browsersession.Session{}, false
+		return browsersession.Session{}, nil, false
 	}
 	if h.authorizer == nil || session.UpstreamAccessToken == "" || session.OrgVersion < 1 || len(session.OrgUnitIDs) == 0 || len(session.OrgUnitIDs) > 1000 {
 		writeError(w, http.StatusServiceUnavailable, "authorization_unavailable", "browser authorization is unavailable")
-		return browsersession.Session{}, false
+		return browsersession.Session{}, nil, false
 	}
+	allowed := make(map[string]bool, len(session.OrgUnitIDs))
 	for _, org := range session.OrgUnitIDs {
-		if strings.TrimSpace(org) == "" {
+		org = strings.TrimSpace(org)
+		if org == "" {
 			continue
 		}
 		decision, err := h.authorizer.AuthorizeBrowserOperation(r.Context(), session.UpstreamAccessToken, nexus.BrowserAuthorizationRequest{
 			OrgUnitID: org, OrgVersion: session.OrgVersion, ResourceType: "legacy_console", ResourceID: resource, Action: action,
 		})
-		if err == nil && decision.Decision == "allow" && decision.OrgVersion == session.OrgVersion && len(decision.OrgUnitIDs) > 0 {
-			return session, true
+		if err == nil && decision.Decision == "allow" && decision.OrgVersion == session.OrgVersion && containsExactOrganization(decision.OrgUnitIDs, org) {
+			allowed[org] = true
 		}
 	}
+	if len(allowed) > 0 {
+		return session, allowed, true
+	}
 	writeError(w, http.StatusForbidden, "forbidden", "AgentNexus denied this legacy capability")
-	return browsersession.Session{}, false
+	return browsersession.Session{}, nil, false
+}
+
+func containsExactOrganization(organizations []string, expected string) bool {
+	for _, org := range organizations {
+		if org == expected {
+			return true
+		}
+	}
+	return false
 }
 
 var errLegacyUnavailable = errors.New("legacy capability unavailable")
 
-func (h *legacyBrowserHandler) items(ctx context.Context, session browsersession.Session, surface string) ([]legacyItem, error) {
+func (h *legacyBrowserHandler) items(ctx context.Context, session browsersession.Session, surface string, allowedOrganizations map[string]bool) ([]legacyItem, error) {
 	switch surface {
 	case "knowledge":
 		if h.orgs == nil {
@@ -100,7 +114,7 @@ func (h *legacyBrowserHandler) items(ctx context.Context, session browsersession
 		if err != nil || len(spaces) > 1000 {
 			return nil, errLegacyUnavailable
 		}
-		allowedScopes := authorizedLegacyScopes(session.OrgUnitIDs, spaces, session.OrgVersion)
+		allowedScopes := authorizedLegacyScopes(allowedOrganizationIDs(allowedOrganizations), spaces, session.OrgVersion)
 		items := make([]legacyItem, 0)
 		for _, space := range spaces {
 			if allowedScopes[space.OrgScope] {
@@ -120,7 +134,7 @@ func (h *legacyBrowserHandler) items(ctx context.Context, session browsersession
 		if spaceErr != nil || len(spaces) > 1000 {
 			return nil, errLegacyUnavailable
 		}
-		allowedScopes := authorizedLegacyScopes(session.OrgUnitIDs, spaces, session.OrgVersion)
+		allowedScopes := authorizedLegacyScopes(allowedOrganizationIDs(allowedOrganizations), spaces, session.OrgVersion)
 		policies, err := h.dreams.ListPublishedBounded(ctx, session.EnterpriseID, 101)
 		if err != nil {
 			return nil, errLegacyUnavailable
@@ -133,18 +147,9 @@ func (h *legacyBrowserHandler) items(ctx context.Context, session browsersession
 		}
 		return boundedLegacyItems(items)
 	case "workflows":
-		if h.workflows == nil {
-			return nil, errLegacyUnavailable
-		}
-		drafts, err := h.workflows.ListDrafts(ctx, session.EnterpriseID, 100)
-		if err != nil {
-			return nil, errLegacyUnavailable
-		}
-		items := make([]legacyItem, 0, len(drafts))
-		for _, draft := range drafts {
-			items = append(items, legacyItem{ID: draft.ID, Label: draft.Name, Detail: "流程草稿"})
-		}
-		return boundedLegacyItems(items)
+		// Legacy workflow drafts have no sealed organization binding. A child
+		// organization grant must never unlock enterprise-wide workflow data.
+		return nil, errLegacyUnavailable
 	case "evidence":
 		if h.traces == nil || h.orgs == nil {
 			return nil, errLegacyUnavailable
@@ -154,7 +159,7 @@ func (h *legacyBrowserHandler) items(ctx context.Context, session browsersession
 			return nil, errLegacyUnavailable
 		}
 		allowedSpaces := map[string]bool{}
-		allowedScopes := authorizedLegacyScopes(session.OrgUnitIDs, spaces, session.OrgVersion)
+		allowedScopes := authorizedLegacyScopes(allowedOrganizationIDs(allowedOrganizations), spaces, session.OrgVersion)
 		for _, space := range spaces {
 			if allowedScopes[space.OrgScope] {
 				allowedSpaces[space.ID] = true
@@ -181,6 +186,16 @@ func (h *legacyBrowserHandler) items(ctx context.Context, session browsersession
 	default:
 		return nil, errLegacyUnavailable
 	}
+}
+
+func allowedOrganizationIDs(allowed map[string]bool) []string {
+	ids := make([]string, 0, len(allowed))
+	for id, ok := range allowed {
+		if ok {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func boundedLegacyItems(items []legacyItem) ([]legacyItem, error) {

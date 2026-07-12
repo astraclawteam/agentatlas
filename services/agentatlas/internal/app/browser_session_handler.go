@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/browsersession"
@@ -184,7 +185,8 @@ func (h *browserSessionHandler) organizationPresentation(ctx context.Context, se
 		space := spaceByScope[scope]
 		name := strings.TrimSpace(space.Name)
 		selectableID, selectable := authorizedScope[scope]
-		if name == "" {
+		binding := bindingByScope[scope]
+		if name == "" || organizationNameIsIdentifier(name, space, binding, selectableID) {
 			name, selectable = "未命名组织", false
 		}
 		id := scope
@@ -240,6 +242,32 @@ func (h *browserSessionHandler) organizationPresentation(ctx context.Context, se
 	}
 	sortTree(roots)
 	return enterpriseName, roots
+}
+
+func organizationNameIsIdentifier(name string, space db.KnowledgeSpace, binding db.OrgScopeBinding, sealedID string) bool {
+	normalizedName := normalizeOrganizationIdentifier(name)
+	if normalizedName == "" {
+		return false
+	}
+	for _, candidate := range []string{space.ID, space.OrgScope, binding.ScopeID, sealedID} {
+		if normalizedCandidate := normalizeOrganizationIdentifier(candidate); normalizedCandidate != "" && normalizedName == normalizedCandidate {
+			return true
+		}
+	}
+	if _, suffix, ok := strings.Cut(space.OrgScope, ":"); ok && normalizedName == normalizeOrganizationIdentifier(suffix) {
+		return true
+	}
+	return false
+}
+
+func normalizeOrganizationIdentifier(value string) string {
+	var normalized strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(value)) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			normalized.WriteRune(r)
+		}
+	}
+	return normalized.String()
 }
 func (h *browserSessionHandler) logout(w http.ResponseWriter, r *http.Request) {
 	if h.sessions == nil {

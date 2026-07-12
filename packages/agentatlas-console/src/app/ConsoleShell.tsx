@@ -103,7 +103,11 @@ function AuthenticatedShell() {
         data-testid="console-content-layout"
         data-assistant-open={assistantOpen ? "true" : "false"}
       >
-        <OrgScopeNavigation orgTree={session.org_tree} orgUnitIds={session.org_unit_ids} />
+        <OrgScopeNavigation
+          orgTree={session.org_tree}
+          orgUnitIds={session.org_unit_ids}
+          advancedMode={advancedMode}
+        />
         <main className="console-main">
           <ConsoleRoutes />
         </main>
@@ -131,9 +135,11 @@ function AuthenticatedShell() {
 function OrgScopeNavigation({
   orgTree,
   orgUnitIds,
+  advancedMode,
 }: {
   orgTree: OrgScopeNode[];
   orgUnitIds: string[];
+  advancedMode: boolean;
 }) {
   const allowed = new Set(orgUnitIds);
   const nodes = orgTree.length
@@ -144,6 +150,28 @@ function OrgScopeNavigation({
     <nav className="console-org-nav" aria-label="知识范围">
       <p className="console-org-heading">知识范围</p>
       <OrgScopeList nodes={nodes} />
+      {advancedMode ? (
+        <div className="console-advanced-links" aria-label="高级维护入口">
+          <p className="console-org-heading">高级维护入口</p>
+          {(
+            [
+              ["knowledge", "旧版知识维护"],
+              ["dream", "旧版梦境维护"],
+              ["workflows", "旧版流程维护"],
+              ["evidence", "旧版回答依据"],
+              ["assistant", "旧版 Atlas 助手"],
+            ] as const
+          ).map(([surface, label]) => (
+            <NavLink
+              key={surface}
+              className="console-org-link"
+              to={`/advanced/legacy/${surface}`}
+            >
+              {label}
+            </NavLink>
+          ))}
+        </div>
+      ) : null}
     </nav>
   );
 }

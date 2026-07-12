@@ -169,7 +169,6 @@ describe("ConsoleShell", () => {
   it.each([
     ["knowledge", "旧版知识维护"],
     ["dream", "旧版梦境维护"],
-    ["workflows", "旧版流程维护"],
     ["evidence", "旧版回答依据"],
   ])("keeps the authorized advanced %s capability reachable", async (surface, heading) => {
     vi.mocked(fetch).mockImplementation(async (input) => {
@@ -186,36 +185,56 @@ describe("ConsoleShell", () => {
 
     render(<ConsoleShell initialPath={`/advanced/legacy/${surface}`} />);
 
+    expect(await screen.findByText("请先开启高级维护模式")).toBeVisible();
+    expect(fetch).not.toHaveBeenCalledWith(`/api/legacy/${surface}`, expect.anything());
+    fireEvent.click(screen.getByRole("checkbox", { name: "高级维护模式" }));
     expect(await screen.findByRole("heading", { name: heading })).toBeVisible();
     expect(await screen.findByText("可用内容")).toBeVisible();
+    expect(screen.getByRole("link", { name: "旧版知识维护" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "旧版梦境维护" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "旧版流程维护" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "旧版回答依据" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "旧版 Atlas 助手" })).toBeVisible();
     expect(screen.queryByText(/票据|token|X-Nexus-Ticket/i)).not.toBeInTheDocument();
   });
 
-  it("sends staged assistant attachments through the credentialed legacy BFF adapter", async () => {
-    vi.mocked(fetch).mockImplementation(async (input, init) => {
+  it("reports the unbound legacy workflow adapter as unavailable", async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/session") return sessionResponse();
+      if (url === "/api/legacy/workflows") {
+        return new Response(JSON.stringify({ message: "unavailable" }), {
+          status: 503,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(null, { status: 404 });
+    });
+
+    render(<ConsoleShell initialPath="/advanced/legacy/workflows" />);
+    expect(await screen.findByText("请先开启高级维护模式")).toBeVisible();
+    fireEvent.click(screen.getByRole("checkbox", { name: "高级维护模式" }));
+    expect(await screen.findByText("这项旧版能力尚未接入安全会话，当前已停止操作。")).toBeVisible();
+  });
+
+  it("disables assistant attachment actions after the BFF reports capability unavailable", async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);
       if (url === "/api/session") return sessionResponse();
       if (url === "/api/legacy/assistant") {
-        return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      if (url === "/api/legacy/assistant/attachments" && init?.method === "POST") {
-        return new Response(JSON.stringify({ accepted: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+        return new Response(JSON.stringify({ message: "unavailable" }), { status: 503, headers: { "Content-Type": "application/json" } });
       }
       return new Response(null, { status: 404 });
     });
 
     render(<ConsoleShell initialPath="/advanced/legacy/assistant" />);
-    const file = new File(["safe"], "制度.txt", { type: "text/plain" });
+    expect(await screen.findByText("请先开启高级维护模式")).toBeVisible();
+    fireEvent.click(screen.getByRole("checkbox", { name: "高级维护模式" }));
+    expect(await screen.findByText("这项旧版能力尚未接入安全会话，当前已停止操作。")).toBeVisible();
     const input = await screen.findByLabelText("选择要安全上传的附件");
-    fireEvent.change(input, { target: { files: [file] } });
-    fireEvent.click(screen.getByRole("button", { name: "安全上传附件" }));
-
-    await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith(
-        "/api/legacy/assistant/attachments",
-        expect.objectContaining({ method: "POST", credentials: "include", body: expect.any(FormData) }),
-      ),
-    );
+    expect(input).toBeDisabled();
+    expect(screen.getByRole("button", { name: "安全上传附件" })).toBeDisabled();
+    expect(fetch).not.toHaveBeenCalledWith("/api/legacy/assistant/attachments", expect.anything());
   });
 });
 

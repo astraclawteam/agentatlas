@@ -14,6 +14,7 @@ import (
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/browsersession"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/governance"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/workflow"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -117,17 +118,104 @@ func TestAdvancedLegacyRoutesAreSessionGuardedAuthorizedAndFailClosed(t *testing
 	}
 }
 
+func TestLegacyKnowledgeAuthorizesAndFiltersEveryExactOrganization(t *testing.T) {
+	orgs := &fakeBrowserOrgStore{spaces: []db.KnowledgeSpace{
+		{ID: "space-a", EnterpriseID: "ent-1", Name: "组织 A", OrgScope: "department:dept-a", OrgVersion: 7},
+		{ID: "space-b", EnterpriseID: "ent-1", Name: "组织 B", OrgScope: "department:dept-b", OrgVersion: 7},
+	}}
+	authorizer := &fakeBrowserAuthorizer{decisions: map[string]nexus.BrowserAuthorizationDecision{
+		"dept-a": {Decision: "allow", OrgVersion: 7, OrgUnitIDs: []string{"dept-a"}},
+		"dept-b": {Decision: "deny", OrgVersion: 7, OrgUnitIDs: []string{"dept-b"}},
+	}}
+	router, cookie := legacyRouterForProfile(t, browsersession.Identity{
+		EnterpriseID: "ent-1", UserID: "user-1", OrgVersion: 7,
+		OrgUnitIDs: []string{"dept-a", "dept-b"}, AdvancedModeAllowed: true,
+	}, orgs, authorizer)
+
+	req := httptest.NewRequest(http.MethodGet, "https://atlas.example/api/legacy/knowledge", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "组织 A") || strings.Contains(rr.Body.String(), "组织 B") {
+		t.Fatalf("exact organization filter status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if authorizer.calls != 2 {
+		t.Fatalf("expected one authorization per sealed organization, got %d", authorizer.calls)
+	}
+}
+
+func TestLegacyAuthorizationRejectsMismatchedDecisionOrganization(t *testing.T) {
+	authorizer := &fakeBrowserAuthorizer{decisions: map[string]nexus.BrowserAuthorizationDecision{
+		"dept-a": {Decision: "allow", OrgVersion: 7, OrgUnitIDs: []string{"dept-other"}},
+	}}
+	router, cookie := legacyRouterForProfile(t, browsersession.Identity{
+		EnterpriseID: "ent-1", UserID: "user-1", OrgVersion: 7,
+		OrgUnitIDs: []string{"dept-a"}, AdvancedModeAllowed: true,
+	}, &fakeBrowserOrgStore{}, authorizer)
+	req := httptest.NewRequest(http.MethodGet, "https://atlas.example/api/legacy/knowledge", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("mismatched decision organization accepted: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestLegacyWorkflowFailsClosedWithoutAuthoritativeOrganizationBinding(t *testing.T) {
+	lister := &fakeLegacyWorkflowLister{drafts: []workflow.DraftView{{ID: "wf-company", Name: "全企业流程"}}}
+	h := &legacyBrowserHandler{workflows: lister}
+	items, err := h.items(context.Background(), browsersession.Session{Identity: browsersession.Identity{
+		EnterpriseID: "ent-1", OrgVersion: 7, OrgUnitIDs: []string{"dept-child"},
+	}}, "workflows", map[string]bool{"dept-child": true})
+	if !errors.Is(err, errLegacyUnavailable) || len(items) != 0 || lister.calls != 0 {
+		t.Fatalf("unbound workflow did not fail closed before listing: items=%v err=%v calls=%d", items, err, lister.calls)
+	}
+}
+
+type fakeLegacyWorkflowLister struct {
+	calls  int
+	drafts []workflow.DraftView
+}
+
+func (f *fakeLegacyWorkflowLister) ListDrafts(context.Context, string, int32) ([]workflow.DraftView, error) {
+	f.calls++
+	return f.drafts, nil
+}
+
+func TestOrganizationPresentationRejectsIdentifierEquivalentNames(t *testing.T) {
+	for _, name := range []string{"dept-rd", "department:dept-rd", "space-rd", "DEPARTMENT_DEPT_RD"} {
+		t.Run(name, func(t *testing.T) {
+			store := &fakeBrowserOrgStore{
+				enterprise: db.Enterprise{ID: "ent-1", Name: "企业"},
+				spaces:     []db.KnowledgeSpace{{ID: "space-rd", EnterpriseID: "ent-1", Kind: "department", Name: name, OrgScope: "department:dept-rd", OrgVersion: 7}},
+				bindings:   []db.OrgScopeBinding{{EnterpriseID: "ent-1", SpaceID: "space-rd", ScopeKind: "department", ScopeID: "dept-rd"}},
+			}
+			h := &browserSessionHandler{orgs: store}
+			_, tree := h.organizationPresentation(context.Background(), browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", OrgVersion: 7, OrgUnitIDs: []string{"dept-rd"}}})
+			if len(tree) != 1 || tree[0].Name != "未命名组织" || tree[0].Selectable {
+				t.Fatalf("identifier-equivalent name leaked: %+v", tree)
+			}
+		})
+	}
+}
+
 func legacyTestRouter(t *testing.T, advanced bool) (*chi.Mux, *http.Cookie, *fakeBrowserAuthorizer) {
+	t.Helper()
+	authorizer := &fakeBrowserAuthorizer{}
+	router, cookie := legacyRouterForProfile(t, browsersession.Identity{EnterpriseID: "ent-1", UserID: "user-1", DisplayName: "User One", OrgVersion: 7, OrgUnitIDs: []string{"dept-rd"}, Permissions: []string{"knowledge:read"}, AdvancedModeAllowed: advanced}, nil, authorizer)
+	return router, cookie, authorizer
+}
+
+func legacyRouterForProfile(t *testing.T, profile browsersession.Identity, orgs browserSessionOrgStore, authorizer *fakeBrowserAuthorizer) (*chi.Mux, *http.Cookie) {
 	t.Helper()
 	now := time.Date(2026, 7, 12, 10, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
-	oidc := &fakeAtlasOIDC{profile: browsersession.Identity{EnterpriseID: "ent-1", UserID: "user-1", DisplayName: "User One", OrgVersion: 7, OrgUnitIDs: []string{"dept-rd"}, Permissions: []string{"knowledge:read"}, AdvancedModeAllowed: advanced}}
+	oidc := &fakeAtlasOIDC{profile: profile}
 	sessions, err := browsersession.New(browsersession.Config{Issuer: "https://nexus.example", ClientID: "agentatlas", ClientSecret: "secret", RedirectURI: "https://atlas.example/auth/callback"}, browsersession.NewMemoryStore(clock), oidc, clock)
 	if err != nil {
 		t.Fatal(err)
 	}
-	authorizer := &fakeBrowserAuthorizer{}
-	router := NewAgentRouter(AgentRouterDeps{Nexus: adminMock(), BrowserSessions: sessions, BrowserAuthorizer: authorizer})
+	router := NewAgentRouter(AgentRouterDeps{Nexus: adminMock(), BrowserSessions: sessions, BrowserAuthorizer: authorizer, BrowserOrgStore: orgs})
 	login := httptest.NewRequest(http.MethodGet, "https://atlas.example/auth/login?return_to=%2Fknowledge", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, login)
@@ -137,17 +225,24 @@ func legacyTestRouter(t *testing.T, advanced bool) (*chi.Mux, *http.Cookie, *fak
 	if rr.Code != http.StatusFound || len(rr.Result().Cookies()) == 0 {
 		t.Fatalf("callback=%d %s", rr.Code, rr.Body.String())
 	}
-	return router, rr.Result().Cookies()[0], authorizer
+	return router, rr.Result().Cookies()[0]
 }
 
 type fakeBrowserAuthorizer struct {
-	calls int
-	last  nexus.BrowserAuthorizationRequest
+	calls     int
+	last      nexus.BrowserAuthorizationRequest
+	decisions map[string]nexus.BrowserAuthorizationDecision
 }
 
 func (f *fakeBrowserAuthorizer) AuthorizeBrowserOperation(_ context.Context, _ string, req nexus.BrowserAuthorizationRequest) (nexus.BrowserAuthorizationDecision, error) {
 	f.calls++
 	f.last = req
+	if f.decisions != nil {
+		if decision, ok := f.decisions[req.OrgUnitID]; ok {
+			return decision, nil
+		}
+		return nexus.BrowserAuthorizationDecision{Decision: "deny", OrgVersion: req.OrgVersion, OrgUnitIDs: []string{req.OrgUnitID}}, nil
+	}
 	return nexus.BrowserAuthorizationDecision{Decision: "allow", OrgVersion: req.OrgVersion, OrgUnitIDs: []string{req.OrgUnitID}}, nil
 }
 func (*fakeBrowserAuthorizer) ResolveApprovalRouteWithBearer(context.Context, string, nexus.ApprovalResolveRequest) (nexus.ApprovalRoute, error) {
