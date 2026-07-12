@@ -19,15 +19,17 @@ import (
 // plane (api/openapi/atlas-agent.yaml): Knowledge Agent runs, workflow
 // draft/publish, dream policies, confirmations.
 type AgentRouterDeps struct {
-	Nexus     nexus.Client
-	Agent     *agent.Runner
-	Workflows *workflow.Service
-	Runtime   *workflow.Runtime
-	Dreams    *dream.PolicyService
-	Store     *db.Queries
-	Outlines  MethodOutlineStore // optional; defaults to Store
-	Runner    *tasks.Runner
-	Metrics   *observability.Metrics // optional; enables /metrics + latency histograms
+	Nexus      nexus.Client
+	Agent      *agent.Runner
+	Workflows  *workflow.Service
+	Runtime    *workflow.Runtime
+	Dreams     *dream.PolicyService
+	DreamRuns  dreamRunStore
+	DreamRerun dreamRerunner
+	Store      *db.Queries
+	Outlines   MethodOutlineStore // optional; defaults to Store
+	Runner     *tasks.Runner
+	Metrics    *observability.Metrics // optional; enables /metrics + latency histograms
 }
 
 // actorContext carries the verified ticket identity through the request.
@@ -77,6 +79,11 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 
 	wf := &workflowHandler{deps: deps}
 	dp := &dreamPolicyHandler{deps: deps}
+	dreamRuns := deps.DreamRuns
+	if dreamRuns == nil && deps.Store != nil {
+		dreamRuns = deps.Store
+	}
+	dr := &dreamRunHandler{store: dreamRuns, nexus: deps.Nexus, rerun: deps.DreamRerun}
 	ar := newAgentRunHandler(deps)
 	outlineStore := deps.Outlines
 	if outlineStore == nil && deps.Store != nil {
@@ -91,6 +98,12 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 		r.Post("/workflows/{id}/runs", wf.startRun)
 		r.Post("/dream-policies", dp.create)
 		r.Get("/dream-policies", dp.list)
+		r.Get("/dream/overview", dr.overview)
+		r.Get("/dream/runs", dr.list)
+		r.Get("/dream/runs/{id}", dr.detail)
+		r.Post("/dream/runs/{id}/annotations", dr.annotate)
+		r.Post("/dream/runs/{id}/reruns", dr.rerunRun)
+		r.Post("/dream/runs/{id}/evidence-access", dr.evidenceAccess)
 		r.Post("/method-outlines", mo.create)
 		r.Get("/method-outlines", mo.list)
 		r.Post("/agent/runs", ar.start)

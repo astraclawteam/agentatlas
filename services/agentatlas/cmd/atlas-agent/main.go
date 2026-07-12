@@ -100,7 +100,8 @@ func run() error {
 		return fmt.Errorf("nats (production-standard dependency): %w", err)
 	}
 	taskRunner := tasks.NewRunner(bus)
-	taskRunner.AllowEnqueue(workflow.JobTypeRun, retrieval.JobTypeIndex)
+	taskRunner.AllowEnqueue(workflow.JobTypeRun, retrieval.JobTypeIndex, dream.JobTypeDream)
+	dreamScheduler := dream.NewScheduler(queries, dreamPolicies, taskRunner)
 
 	metrics := observability.NewMetrics()
 	workflowRuntime.SetMetrics(metrics) // confirm-resume terminal statuses count here
@@ -116,7 +117,7 @@ func run() error {
 	router := app.NewAgentRouter(app.AgentRouterDeps{
 		Nexus: nexusClient, Agent: agentRunner, Workflows: workflowSvc,
 		Runtime: workflowRuntime, Dreams: dreamPolicies, Store: queries,
-		Runner: taskRunner, Metrics: metrics,
+		DreamRerun: dreamScheduler, Runner: taskRunner, Metrics: metrics,
 	})
 
 	addr := os.Getenv("ATLAS_AGENT_ADDR")

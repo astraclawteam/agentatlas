@@ -182,6 +182,96 @@ paths:
                         org_scope: { type: string }
                         status: { type: string }
                         policy: { $ref: '#/components/schemas/DreamPolicyDefinition' }
+  /v1/dream/overview:
+    get:
+      operationId: getDreamOverview
+      summary: List immutable Dream run cards for one authorized organization unit
+      parameters:
+        - { name: org_unit_id, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+      responses:
+        '200':
+          description: Bounded Dream overview
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DreamRunList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /v1/dream/runs:
+    get:
+      operationId: listDreamRuns
+      summary: List immutable Dream runs for one authorized organization unit and optional window end date
+      parameters:
+        - { name: org_unit_id, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+        - { name: window, in: query, required: false, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: Bounded Dream run list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DreamRunList' }
+  /v1/dream/runs/{id}:
+    get:
+      operationId: getDreamRun
+      summary: Get one immutable enterprise-bound Dream run
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+      responses:
+        '200':
+          description: Dream run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DreamRunView' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/dream/runs/{id}/annotations:
+    post:
+      operationId: annotateDreamRun
+      summary: Append a governed annotation without changing the immutable Dream output
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [action]
+              properties:
+                action: { type: string, enum: [confirm, reject, mark_incorrect, comment] }
+                comment: { type: string, maxLength: 4000 }
+      responses:
+        '201': { description: Annotation appended }
+        '403': { description: Annotation permission denied }
+  /v1/dream/runs/{id}/reruns:
+    post:
+      operationId: rerunDreamRun
+      summary: Create an immutable manual rerun pinned to the original window and versions
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 1, maxLength: 256 } }
+      responses:
+        '202': { description: Rerun scheduled }
+        '409': { description: Canonical idempotency conflict }
+  /v1/dream/runs/{id}/evidence-access:
+    post:
+      operationId: accessDreamEvidence
+      summary: Read sanitized sealed detail through a resource-bound AgentNexus Step Grant and mandatory audit
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }
+      responses:
+        '200':
+          description: Audited, grant-bound sanitized detail
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [grant_id, audit_ref_id, content_type, sanitized_detail, content_hash]
+                properties:
+                  grant_id: { type: string }
+                  audit_ref_id: { type: string }
+                  content_type: { type: string }
+                  sanitized_detail: { type: string, maxLength: 100000 }
+                  content_hash: { type: string }
+        '403': { description: Missing dream:evidence:read or AgentNexus denied the bound read }
   /v1/method-outlines:
     post:
       operationId: createMethodOutline
@@ -277,6 +367,15 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
   schemas:
+    DreamRunList:
+      type: object
+      additionalProperties: false
+      required: [runs]
+      properties:
+        runs:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/DreamRunView' }
     Error:
       type: object
       required: [code, message]

@@ -683,7 +683,7 @@ SELECT runs.id, runs.policy_id, runs.version, runs.enterprise_id, runs.status, r
        COALESCE(summary.trends, '[]'::jsonb) AS trends,
        COALESCE(summary.risk_signals, '[]'::jsonb) AS risks,
        COALESCE(summary.todos, '[]'::jsonb) AS todos,
-       summary.evidence_pointer_id
+       sealed.evidence_pointer_id
 FROM dream_runs AS runs
 LEFT JOIN LATERAL (
     SELECT dream_summaries.id, dream_summaries.run_id, dream_summaries.enterprise_id, dream_summaries.space_id, dream_summaries.layer, dream_summaries.summary_text, dream_summaries.sealed_object_key, dream_summaries.evidence_pointer_id, dream_summaries.risk_signals, dream_summaries.created_at, dream_summaries.facts, dream_summaries.themes, dream_summaries.trends, dream_summaries.todos
@@ -691,9 +691,20 @@ LEFT JOIN LATERAL (
     WHERE dream_summaries.run_id = runs.id
       AND dream_summaries.enterprise_id = runs.enterprise_id
       AND dream_summaries.layer = 'display'
+      AND runs.status = 'succeeded'
     ORDER BY dream_summaries.created_at DESC, dream_summaries.id DESC
     LIMIT 1
 ) AS summary ON true
+LEFT JOIN LATERAL (
+    SELECT dream_summaries.evidence_pointer_id
+    FROM dream_summaries
+    WHERE dream_summaries.run_id = runs.id
+      AND dream_summaries.enterprise_id = runs.enterprise_id
+      AND dream_summaries.layer = 'sealed_pointer'
+      AND runs.status = 'succeeded'
+    ORDER BY dream_summaries.created_at DESC, dream_summaries.id DESC
+    LIMIT 1
+) AS sealed ON true
 WHERE runs.enterprise_id = $1
   AND runs.id = $2
 `

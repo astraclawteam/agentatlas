@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
@@ -47,6 +48,7 @@ type RunnerStore interface {
 	ListDreamInputsForRun(ctx context.Context, runID string) ([]db.DreamInput, error)
 	CreateDreamSummary(ctx context.Context, arg db.CreateDreamSummaryParams) (db.DreamSummary, error)
 	InsertDreamEvidencePointer(ctx context.Context, arg db.InsertDreamEvidencePointerParams) error
+	CreateDreamRunLineage(ctx context.Context, arg db.CreateDreamRunLineageParams) (db.DreamRunLineage, error)
 	CreateEvidencePointer(ctx context.Context, arg db.CreateEvidencePointerParams) (db.EvidencePointer, error)
 	GetKnowledgeSpace(ctx context.Context, id string) (db.KnowledgeSpace, error)
 	ListSpaceMembers(ctx context.Context, spaceID string) ([]db.SpaceMembershipCache, error)
@@ -296,10 +298,13 @@ func (r *Runner) execute(ctx context.Context, runID string) error {
 		}
 		sealedPointer, err := store.CreateEvidencePointer(ctx, db.CreateEvidencePointerParams{
 			ID: newID("ev"), EnterpriseID: run.EnterpriseID, ResourceType: "dream_sealed_summary",
-			ResourceRef: sealedKey, SourceSystem: "object-storage", RequiredScopes: []string{},
+			ResourceRef: sealedKey, SourceSystem: "object-storage", RequiredScopes: []string{"dream:evidence:read"},
 		})
 		if err != nil {
 			return fmt.Errorf("sealed pointer: %w", err)
+		}
+		if err := persistDreamLineage(ctx, store, run.ID, execution.Input.Inputs); err != nil {
+			return err
 		}
 
 		layers := []struct {
@@ -377,6 +382,30 @@ func (r *Runner) execute(ctx context.Context, runID string) error {
 		}
 		return persist(q)
 	})
+}
+
+type dreamLineageStore interface {
+	CreateDreamRunLineage(context.Context, db.CreateDreamRunLineageParams) (db.DreamRunLineage, error)
+}
+
+func persistDreamLineage(ctx context.Context, store dreamLineageStore, runID string, inputs []ResolvedInput) error {
+	parents := make(map[string]struct{})
+	for _, input := range inputs {
+		if input.ParentRunID != "" {
+			parents[input.ParentRunID] = struct{}{}
+		}
+	}
+	ordered := make([]string, 0, len(parents))
+	for parent := range parents {
+		ordered = append(ordered, parent)
+	}
+	slices.Sort(ordered)
+	for _, parent := range ordered {
+		if _, err := store.CreateDreamRunLineage(ctx, db.CreateDreamRunLineageParams{RunID: runID, ParentRunID: parent, Relation: "child_summary"}); err != nil {
+			return fmt.Errorf("persist Dream child lineage %s: %w", parent, err)
+		}
+	}
+	return nil
 }
 
 func validateRunPolicySnapshot(run db.DreamRun, policyEnterprise string, policy Policy) error {

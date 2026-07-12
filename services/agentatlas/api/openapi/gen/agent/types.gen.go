@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/oapi-codegen/runtime"
+	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
 const (
@@ -728,16 +729,16 @@ func (e VisibilitySnapshotSummaryVisibilityLevel) Valid() bool {
 
 // Defines values for PostAgentRunConfirmationJSONBodyDecision.
 const (
-	Approve PostAgentRunConfirmationJSONBodyDecision = "approve"
-	Reject  PostAgentRunConfirmationJSONBodyDecision = "reject"
+	PostAgentRunConfirmationJSONBodyDecisionApprove PostAgentRunConfirmationJSONBodyDecision = "approve"
+	PostAgentRunConfirmationJSONBodyDecisionReject  PostAgentRunConfirmationJSONBodyDecision = "reject"
 )
 
 // Valid indicates whether the value is a known member of the PostAgentRunConfirmationJSONBodyDecision enum.
 func (e PostAgentRunConfirmationJSONBodyDecision) Valid() bool {
 	switch e {
-	case Approve:
+	case PostAgentRunConfirmationJSONBodyDecisionApprove:
 		return true
-	case Reject:
+	case PostAgentRunConfirmationJSONBodyDecisionReject:
 		return true
 	default:
 		return false
@@ -753,6 +754,30 @@ const (
 func (e CreateDreamPolicy201JSONResponseBodyStatus) Valid() bool {
 	switch e {
 	case Draft:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AnnotateDreamRunJSONBodyAction.
+const (
+	AnnotateDreamRunJSONBodyActionComment       AnnotateDreamRunJSONBodyAction = "comment"
+	AnnotateDreamRunJSONBodyActionConfirm       AnnotateDreamRunJSONBodyAction = "confirm"
+	AnnotateDreamRunJSONBodyActionMarkIncorrect AnnotateDreamRunJSONBodyAction = "mark_incorrect"
+	AnnotateDreamRunJSONBodyActionReject        AnnotateDreamRunJSONBodyAction = "reject"
+)
+
+// Valid indicates whether the value is a known member of the AnnotateDreamRunJSONBodyAction enum.
+func (e AnnotateDreamRunJSONBodyAction) Valid() bool {
+	switch e {
+	case AnnotateDreamRunJSONBodyActionComment:
+		return true
+	case AnnotateDreamRunJSONBodyActionConfirm:
+		return true
+	case AnnotateDreamRunJSONBodyActionMarkIncorrect:
+		return true
+	case AnnotateDreamRunJSONBodyActionReject:
 		return true
 	default:
 		return false
@@ -898,6 +923,11 @@ type DreamPolicyDefinitionInputSources string
 
 // DreamPolicyDefinitionVisibilityLevel defines model for DreamPolicyDefinition.VisibilityLevel.
 type DreamPolicyDefinitionVisibilityLevel string
+
+// DreamRunList defines model for DreamRunList.
+type DreamRunList struct {
+	Runs []DreamRunView `json:"runs"`
+}
 
 // DreamRunView defines model for DreamRunView.
 type DreamRunView struct {
@@ -1115,6 +1145,31 @@ type PostAgentRunMessageJSONBody struct {
 // CreateDreamPolicy201JSONResponseBodyStatus defines parameters for CreateDreamPolicy.
 type CreateDreamPolicy201JSONResponseBodyStatus string
 
+// GetDreamOverviewParams defines parameters for GetDreamOverview.
+type GetDreamOverviewParams struct {
+	OrgUnitId string `form:"org_unit_id" json:"org_unit_id"`
+}
+
+// ListDreamRunsParams defines parameters for ListDreamRuns.
+type ListDreamRunsParams struct {
+	OrgUnitId string              `form:"org_unit_id" json:"org_unit_id"`
+	Window    *openapi_types.Date `form:"window,omitempty" json:"window,omitempty"`
+}
+
+// AnnotateDreamRunJSONBody defines parameters for AnnotateDreamRun.
+type AnnotateDreamRunJSONBody struct {
+	Action  AnnotateDreamRunJSONBodyAction `json:"action"`
+	Comment *string                        `json:"comment,omitempty"`
+}
+
+// AnnotateDreamRunJSONBodyAction defines parameters for AnnotateDreamRun.
+type AnnotateDreamRunJSONBodyAction string
+
+// RerunDreamRunParams defines parameters for RerunDreamRun.
+type RerunDreamRunParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
 // CreateMethodOutlineJSONBody defines parameters for CreateMethodOutline.
 type CreateMethodOutlineJSONBody struct {
 	OrgScope *string `json:"org_scope,omitempty"`
@@ -1153,6 +1208,9 @@ type PostAgentRunMessageJSONRequestBody PostAgentRunMessageJSONBody
 
 // CreateDreamPolicyJSONRequestBody defines body for CreateDreamPolicy for application/json ContentType.
 type CreateDreamPolicyJSONRequestBody = DreamPolicyDefinition
+
+// AnnotateDreamRunJSONRequestBody defines body for AnnotateDreamRun for application/json ContentType.
+type AnnotateDreamRunJSONRequestBody AnnotateDreamRunJSONBody
 
 // CreateMethodOutlineJSONRequestBody defines body for CreateMethodOutline for application/json ContentType.
 type CreateMethodOutlineJSONRequestBody CreateMethodOutlineJSONBody

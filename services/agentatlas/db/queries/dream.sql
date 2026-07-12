@@ -349,7 +349,7 @@ SELECT runs.*,
        COALESCE(summary.trends, '[]'::jsonb) AS trends,
        COALESCE(summary.risk_signals, '[]'::jsonb) AS risks,
        COALESCE(summary.todos, '[]'::jsonb) AS todos,
-       summary.evidence_pointer_id
+       sealed.evidence_pointer_id
 FROM dream_runs AS runs
 LEFT JOIN LATERAL (
     SELECT dream_summaries.*
@@ -357,9 +357,20 @@ LEFT JOIN LATERAL (
     WHERE dream_summaries.run_id = runs.id
       AND dream_summaries.enterprise_id = runs.enterprise_id
       AND dream_summaries.layer = 'display'
+      AND runs.status = 'succeeded'
     ORDER BY dream_summaries.created_at DESC, dream_summaries.id DESC
     LIMIT 1
 ) AS summary ON true
+LEFT JOIN LATERAL (
+    SELECT dream_summaries.evidence_pointer_id
+    FROM dream_summaries
+    WHERE dream_summaries.run_id = runs.id
+      AND dream_summaries.enterprise_id = runs.enterprise_id
+      AND dream_summaries.layer = 'sealed_pointer'
+      AND runs.status = 'succeeded'
+    ORDER BY dream_summaries.created_at DESC, dream_summaries.id DESC
+    LIMIT 1
+) AS sealed ON true
 WHERE runs.enterprise_id = sqlc.arg(enterprise_id)
   AND runs.id = sqlc.arg(run_id);
 
