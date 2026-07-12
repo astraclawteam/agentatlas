@@ -37,6 +37,7 @@ ALTER TABLE org_scope_bindings
 -- The old schema cannot represent a referenced parent when the same bare ID
 -- exists under multiple kinds. Fail closed instead of restoring ambiguous
 -- hierarchy joins; operators must remove or rename the collision first.
+-- +goose StatementBegin
 DO $$
 BEGIN
     IF EXISTS (
@@ -52,6 +53,7 @@ BEGIN
         RAISE EXCEPTION 'cannot roll back migration 000004 while referenced cross-kind parent ID collisions exist';
     END IF;
 END $$;
+-- +goose StatementEnd
 
 ALTER TABLE org_scope_bindings
     DROP CONSTRAINT org_scope_bindings_parent_identity_fk,

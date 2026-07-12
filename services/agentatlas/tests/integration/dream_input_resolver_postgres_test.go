@@ -9,8 +9,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
+	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	dreamresolver "github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/spaces"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/storage"
 )
 
@@ -55,7 +57,7 @@ func TestDreamInputResolverPostgresContracts(t *testing.T) {
 	}
 
 	children, err := q.ListDreamImmediateChildren(ctx, db.ListDreamImmediateChildrenParams{
-		EnterpriseID: ent, ParentOrgUnitID: "company:parent", ResultLimit: 10,
+		EnterpriseID: ent, ParentScopeKind: "company", ParentScopeID: "parent", ResultLimit: 10,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -85,13 +87,47 @@ func TestDreamInputResolverPostgresContracts(t *testing.T) {
 		}
 	}
 	collisionChildren, err := q.ListDreamImmediateChildren(ctx, db.ListDreamImmediateChildrenParams{
-		EnterpriseID: ent, ParentOrgUnitID: "company:collision", ResultLimit: 10,
+		EnterpriseID: ent, ParentScopeKind: "company", ParentScopeID: "collision", ResultLimit: 10,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(collisionChildren) != 0 {
 		t.Fatalf("cross-kind parent collision leaked child: %+v", collisionChildren)
+	}
+	spaceService := spaces.NewService(q)
+	reparentEvent := nexus.OrgEvent{
+		EventID: "reparent-1", EnterpriseID: ent, OrgVersion: 1, Type: nexus.OrgEmployeeUpserted,
+		Scope:      nexus.OrgScope{Kind: nexus.ScopeEmployee, ID: "reparent-user", Name: "Reparent user", ParentKind: nexus.ScopeDepartment, ParentID: "collision"},
+		OccurredAt: time.Now(),
+	}
+	if _, _, err := spaceService.EnsureSpaceFromEvent(ctx, reparentEvent); err != nil {
+		t.Fatal(err)
+	}
+	reparentEvent.EventID, reparentEvent.OrgVersion = "reparent-2", 2
+	reparentEvent.Scope.ParentKind = nexus.ScopeCompany
+	if _, _, err := spaceService.EnsureSpaceFromEvent(ctx, reparentEvent); err != nil {
+		t.Fatal(err)
+	}
+	var reparentKind, reparentID string
+	if err := pool.QueryRow(ctx, `select parent_scope_kind,parent_scope_id from org_scope_bindings
+		where enterprise_id=$1 and scope_kind='employee' and scope_id='reparent-user'`, ent).Scan(&reparentKind, &reparentID); err != nil {
+		t.Fatal(err)
+	}
+	if reparentKind != "company" || reparentID != "collision" {
+		t.Fatalf("newer PostgreSQL reparenting not persisted: kind=%q id=%q", reparentKind, reparentID)
+	}
+	bareCollisionInputs, bareCollisionCoverage, _, err := dreamresolver.NewInputResolver(q).Resolve(ctx, dreamresolver.ResolveRequest{
+		EnterpriseID: ent, OrgUnitID: "collision", OrgUnitKind: "company", SpaceID: collisionCompanyID,
+		Sources:     []sdkdream.Source{sdkdream.SourceChildDreamSummary},
+		WindowStart: time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), WindowEnd: time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC),
+		Visibility: []string{"collision", "company_sanitized"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bareCollisionInputs) != 0 || bareCollisionCoverage.ExpectedChildren != 1 {
+		t.Fatalf("bare company parent crossed kind boundary: inputs=%+v coverage=%+v", bareCollisionInputs, bareCollisionCoverage)
 	}
 
 	workflowID := newID("wf-input")
@@ -139,7 +175,7 @@ func TestDreamInputResolverPostgresContracts(t *testing.T) {
 		}
 	}
 	runs, err := q.ListDreamCompletedChildRuns(ctx, db.ListDreamCompletedChildRunsParams{
-		EnterpriseID: ent, ParentOrgUnitID: "company:parent", WindowStart: ts(windowStart), WindowEnd: ts(windowEnd), ResultLimit: 10,
+		EnterpriseID: ent, ParentScopeKind: "company", ParentScopeID: "parent", WindowStart: ts(windowStart), WindowEnd: ts(windowEnd), ResultLimit: 10,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -211,6 +247,8 @@ func TestDreamInputResolverPostgresContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, date := range []time.Time{
+		time.Date(2026, 3, 8, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC),
@@ -229,6 +267,14 @@ func TestDreamInputResolverPostgresContracts(t *testing.T) {
 	})
 	if err != nil || len(timezoneInputs) != 1 || timezoneInputs[0].SanitizedText != "2026-07-11" {
 		t.Fatalf("Asia/Shanghai non-midnight brief window: inputs=%+v err=%v", timezoneInputs, err)
+	}
+	dstInputs, _, _, err := dreamresolver.NewInputResolver(q).Resolve(ctx, dreamresolver.ResolveRequest{
+		EnterpriseID: ent, OrgUnitID: "employee:tz-user", SpaceID: timezoneSpaceID, Sources: []sdkdream.Source{sdkdream.SourceWorkBrief},
+		WindowStart: time.Date(2026, 3, 8, 5, 0, 0, 0, time.UTC), WindowEnd: time.Date(2026, 3, 9, 4, 0, 0, 0, time.UTC),
+		Timezone: "America/New_York", Visibility: []string{"employee:tz-user"},
+	})
+	if err != nil || len(dstInputs) != 1 || dstInputs[0].SanitizedText != "2026-03-08" {
+		t.Fatalf("America/New_York DST brief window: inputs=%+v err=%v", dstInputs, err)
 	}
 
 	for _, node := range []db.InsertTimelineNodeParams{

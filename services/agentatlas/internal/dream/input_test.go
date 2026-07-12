@@ -24,6 +24,8 @@ type fakeInputStore struct {
 	briefs         []db.WorkBrief
 	children       []db.ListDreamImmediateChildrenRow
 	childRuns      []db.ListDreamCompletedChildRunsRow
+	childrenParams []db.ListDreamImmediateChildrenParams
+	childRunParams []db.ListDreamCompletedChildRunsParams
 	summaries      map[string][]db.DreamSummary
 	timeline       []db.TimelineNode
 	rawBriefReads  int
@@ -45,11 +47,13 @@ func (f *fakeInputStore) ListDreamWorkBriefsForWindow(_ context.Context, arg db.
 	return f.briefs, nil
 }
 
-func (f *fakeInputStore) ListDreamImmediateChildren(context.Context, db.ListDreamImmediateChildrenParams) ([]db.ListDreamImmediateChildrenRow, error) {
+func (f *fakeInputStore) ListDreamImmediateChildren(_ context.Context, arg db.ListDreamImmediateChildrenParams) ([]db.ListDreamImmediateChildrenRow, error) {
+	f.childrenParams = append(f.childrenParams, arg)
 	return f.children, nil
 }
 
-func (f *fakeInputStore) ListDreamCompletedChildRuns(context.Context, db.ListDreamCompletedChildRunsParams) ([]db.ListDreamCompletedChildRunsRow, error) {
+func (f *fakeInputStore) ListDreamCompletedChildRuns(_ context.Context, arg db.ListDreamCompletedChildRunsParams) ([]db.ListDreamCompletedChildRunsRow, error) {
+	f.childRunParams = append(f.childRunParams, arg)
 	return f.childRuns, nil
 }
 
@@ -122,7 +126,7 @@ func TestInputResolverRejectsChildSummaryWithoutVisibilityIntersection(t *testin
 		summaries: map[string][]db.DreamSummary{"child-a|retrieval": {{ID: "sum-a", RunID: "run-a", EnterpriseID: "ent-1", SpaceID: "child-a", Layer: "retrieval", SummaryText: "never return me"}}},
 	}
 	inputs, coverage, missing, err := NewInputResolver(store).Resolve(context.Background(), ResolveRequest{
-		EnterpriseID: "ent-1", OrgUnitID: "company", Sources: []sdkdream.Source{sdkdream.SourceChildDreamSummary},
+		EnterpriseID: "ent-1", OrgUnitID: "company", OrgUnitKind: "company", Sources: []sdkdream.Source{sdkdream.SourceChildDreamSummary},
 		WindowStart: inputWindowStart, WindowEnd: inputWindowEnd, Visibility: []string{"company", "company_sanitized"},
 	})
 	if err != nil {
@@ -423,7 +427,7 @@ func TestInputResolverMalformedChildVisibilityFailsClosed(t *testing.T) {
 			summaries: map[string][]db.DreamSummary{"child|retrieval": {{ID: "sum", RunID: "run", EnterpriseID: "ent-1", SpaceID: "child", Layer: "retrieval", SummaryText: "private"}}},
 		}
 		inputs, _, _, err := NewInputResolver(store).Resolve(context.Background(), ResolveRequest{
-			EnterpriseID: "ent-1", OrgUnitID: "company", Sources: []sdkdream.Source{sdkdream.SourceChildDreamSummary},
+			EnterpriseID: "ent-1", OrgUnitID: "company", OrgUnitKind: "company", Sources: []sdkdream.Source{sdkdream.SourceChildDreamSummary},
 			WindowStart: inputWindowStart, WindowEnd: inputWindowEnd, Visibility: []string{"company", "members"},
 		})
 		if err != nil {
@@ -442,7 +446,7 @@ func TestInputResolverRejectsInjectedNonChild(t *testing.T) {
 		summaries: map[string][]db.DreamSummary{"grandchild|retrieval": {{ID: "sum", RunID: "run", EnterpriseID: "ent-1", SpaceID: "grandchild", Layer: "retrieval", SummaryText: "grandchild"}}},
 	}
 	inputs, coverage, _, err := NewInputResolver(store).Resolve(context.Background(), ResolveRequest{
-		EnterpriseID: "ent-1", OrgUnitID: "company", Sources: []sdkdream.Source{sdkdream.SourceChildDreamSummary},
+		EnterpriseID: "ent-1", OrgUnitID: "company", OrgUnitKind: "company", Sources: []sdkdream.Source{sdkdream.SourceChildDreamSummary},
 		WindowStart: inputWindowStart, WindowEnd: inputWindowEnd, Visibility: []string{"company", "company_sanitized"},
 	})
 	if err != nil {
@@ -563,7 +567,7 @@ func TestInputResolverSelectsExactRunSummary(t *testing.T) {
 		summaries: map[string][]db.DreamSummary{"child|retrieval": distractors},
 	}
 	inputs, _, _, err := NewInputResolver(store).Resolve(context.Background(), ResolveRequest{
-		EnterpriseID: "ent-1", OrgUnitID: "company", Sources: []sdkdream.Source{sdkdream.SourceChildDreamSummary},
+		EnterpriseID: "ent-1", OrgUnitID: "company", OrgUnitKind: "company", Sources: []sdkdream.Source{sdkdream.SourceChildDreamSummary},
 		WindowStart: inputWindowStart, WindowEnd: inputWindowEnd, Visibility: []string{"company", "company_sanitized"},
 	})
 	if err != nil {
@@ -709,7 +713,7 @@ func TestInputResolverBoundsBuiltinsBeforeAccumulation(t *testing.T) {
 			store.children = append(store.children, immediateChild(fmt.Sprintf("child-%d", i), fmt.Sprintf("department:d%d", i), "company"))
 		}
 		_, _, _, err := NewInputResolver(store).Resolve(context.Background(), ResolveRequest{
-			EnterpriseID: "ent-1", OrgUnitID: "company", Sources: []sdkdream.Source{sdkdream.SourceChildDreamSummary}, MaxInputs: 2,
+			EnterpriseID: "ent-1", OrgUnitID: "company", OrgUnitKind: "company", Sources: []sdkdream.Source{sdkdream.SourceChildDreamSummary}, MaxInputs: 2,
 			WindowStart: inputWindowStart, WindowEnd: inputWindowEnd, Visibility: []string{"company"},
 		})
 		if err == nil {
@@ -723,7 +727,7 @@ func TestInputResolverBoundsBuiltinsBeforeAccumulation(t *testing.T) {
 			store.childRuns = append(store.childRuns, completedChildRun(fmt.Sprintf("run-%d", i), "child", "department:d1", "company", []byte(`{"visibility_level":"members","org_unit_ids":["company"]}`)))
 		}
 		_, _, _, err := NewInputResolver(store).Resolve(context.Background(), ResolveRequest{
-			EnterpriseID: "ent-1", OrgUnitID: "company", Sources: []sdkdream.Source{sdkdream.SourceChildDreamSummary}, MaxInputs: 2,
+			EnterpriseID: "ent-1", OrgUnitID: "company", OrgUnitKind: "company", Sources: []sdkdream.Source{sdkdream.SourceChildDreamSummary}, MaxInputs: 2,
 			WindowStart: inputWindowStart, WindowEnd: inputWindowEnd, Visibility: []string{"company", "members"},
 		})
 		if err == nil {
@@ -744,7 +748,7 @@ func TestInputResolverRejectsReservedVisibilityLevelAsChildOrg(t *testing.T) {
 		},
 	}
 	inputs, _, missing, err := NewInputResolver(store).Resolve(context.Background(), ResolveRequest{
-		EnterpriseID: "ent-1", OrgUnitID: "company", Sources: []sdkdream.Source{sdkdream.SourceChildDreamSummary},
+		EnterpriseID: "ent-1", OrgUnitID: "company", OrgUnitKind: "company", Sources: []sdkdream.Source{sdkdream.SourceChildDreamSummary},
 		WindowStart: inputWindowStart, WindowEnd: inputWindowEnd, Visibility: []string{"members", "managers"},
 	})
 	if err != nil {
@@ -752,6 +756,34 @@ func TestInputResolverRejectsReservedVisibilityLevelAsChildOrg(t *testing.T) {
 	}
 	if len(inputs) != 0 || len(missing) != 1 || missing[0].Reason != sdkdream.MissingNotAuthorized {
 		t.Fatalf("reserved visibility token accepted as org scope: inputs=%+v missing=%+v", inputs, missing)
+	}
+}
+
+func TestInputResolverBareParentUsesResolvedScopeKind(t *testing.T) {
+	store := &fakeInputStore{
+		space:    db.KnowledgeSpace{ID: "company-collision", EnterpriseID: "ent-1", Kind: "company", OrgScope: "collision"},
+		children: []db.ListDreamImmediateChildrenRow{immediateChild("wrong-child", "employee:wrong", "department:collision")},
+		childRuns: []db.ListDreamCompletedChildRunsRow{completedChildRun(
+			"wrong-run", "wrong-child", "employee:wrong", "department:collision",
+			[]byte(`{"visibility_level":"company_sanitized","org_unit_ids":["collision"]}`),
+		)},
+		summaries: map[string][]db.DreamSummary{
+			"wrong-child|retrieval": {{ID: "wrong-summary", RunID: "wrong-run", EnterpriseID: "ent-1", SpaceID: "wrong-child", Layer: "retrieval", SummaryText: "must not leak"}},
+		},
+	}
+	inputs, coverage, _, err := NewInputResolver(store).Resolve(context.Background(), ResolveRequest{
+		EnterpriseID: "ent-1", OrgUnitID: "collision", Sources: []sdkdream.Source{sdkdream.SourceChildDreamSummary},
+		WindowStart: inputWindowStart, WindowEnd: inputWindowEnd, Visibility: []string{"collision", "company_sanitized"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 0 || coverage.ExpectedChildren != 0 {
+		t.Fatalf("bare company parent crossed into department identity: inputs=%+v coverage=%+v", inputs, coverage)
+	}
+	if len(store.childrenParams) != 1 || store.childrenParams[0].ParentScopeKind != "company" || store.childrenParams[0].ParentScopeID != "collision" ||
+		len(store.childRunParams) != 1 || store.childRunParams[0].ParentScopeKind != "company" || store.childRunParams[0].ParentScopeID != "collision" {
+		t.Fatalf("bare parent query lost exact identity: children=%+v runs=%+v", store.childrenParams, store.childRunParams)
 	}
 }
 
@@ -873,6 +905,11 @@ func TestInputResolverBriefDateBoundsUsePolicyTimezone(t *testing.T) {
 			name: "same local day nonaligned window", timezone: "Asia/Shanghai",
 			start: time.Date(2026, 7, 11, 1, 0, 0, 0, time.UTC), end: time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC),
 			wantStart: time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC), wantEnd: time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "New York spring DST day", timezone: "America/New_York",
+			start: time.Date(2026, 3, 8, 5, 0, 0, 0, time.UTC), end: time.Date(2026, 3, 9, 4, 0, 0, 0, time.UTC),
+			wantStart: time.Date(2026, 3, 8, 0, 0, 0, 0, time.UTC), wantEnd: time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

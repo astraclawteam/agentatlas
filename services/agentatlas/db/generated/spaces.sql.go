@@ -282,7 +282,7 @@ func (q *Queries) ListSpaceMembers(ctx context.Context, spaceID string) ([]Space
 const updateKnowledgeSpaceIfNewer = `-- name: UpdateKnowledgeSpaceIfNewer :execrows
 UPDATE knowledge_spaces
 SET name = $3, org_version = $4, updated_at = now()
-WHERE id = $1 AND enterprise_id = $2 AND org_version <= $4
+WHERE id = $1 AND enterprise_id = $2 AND org_version < $4
 `
 
 type UpdateKnowledgeSpaceIfNewerParams struct {

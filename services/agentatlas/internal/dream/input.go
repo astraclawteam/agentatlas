@@ -57,6 +57,7 @@ type MissingInput = sdkdream.MissingInput
 type ResolveRequest struct {
 	EnterpriseID string
 	OrgUnitID    string
+	OrgUnitKind  string
 	WindowStart  time.Time
 	WindowEnd    time.Time
 	Timezone     string
@@ -162,9 +163,14 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) ([]ResolvedI
 	if err != nil {
 		return nil, Coverage{}, nil, err
 	}
-	sources, err := r.resolveSources(ctx, req)
+	sources, err := r.resolveSources(ctx, &req)
 	if err != nil {
 		return nil, Coverage{}, nil, err
+	}
+	if containsSource(sources, sdkdream.SourceChildDreamSummary) {
+		if err := r.resolveHierarchyParent(ctx, &req); err != nil {
+			return nil, Coverage{}, nil, err
+		}
 	}
 	if len(sources) > maxResolvedInputs {
 		return nil, Coverage{}, nil, fmt.Errorf("Dream input source count exceeds bound %d", maxResolvedInputs)
@@ -237,7 +243,7 @@ func (r *Resolver) sourceResolver(source sdkdream.Source) (SourceResolver, bool,
 	return resolver, builtin, ok
 }
 
-func (r *Resolver) resolveSources(ctx context.Context, req ResolveRequest) ([]sdkdream.Source, error) {
+func (r *Resolver) resolveSources(ctx context.Context, req *ResolveRequest) ([]sdkdream.Source, error) {
 	if len(req.Sources) > 0 {
 		return uniqueSources(req.Sources), nil
 	}
@@ -248,13 +254,61 @@ func (r *Resolver) resolveSources(ctx context.Context, req ResolveRequest) ([]sd
 	if err != nil {
 		return nil, fmt.Errorf("load Dream org scope %s: %w", req.OrgUnitID, err)
 	}
-	if space.EnterpriseID != req.EnterpriseID || !sameOrgUnit(space.OrgScope, req.OrgUnitID) {
+	if space.EnterpriseID != req.EnterpriseID || !scopeLookupMatches(space.OrgScope, req.OrgUnitID) {
 		return nil, fmt.Errorf("Dream org scope %s is outside enterprise %s", req.OrgUnitID, req.EnterpriseID)
 	}
+	if req.SpaceID == "" {
+		req.SpaceID = space.ID
+	}
+	req.OrgUnitKind = space.Kind
 	if directBriefScope(space.Kind) {
 		return []sdkdream.Source{sdkdream.SourceWorkBrief}, nil
 	}
 	return []sdkdream.Source{sdkdream.SourceChildDreamSummary}, nil
+}
+
+func (r *Resolver) resolveHierarchyParent(ctx context.Context, req *ResolveRequest) error {
+	parsed, ok := parseScopeRef(req.OrgUnitID)
+	if !ok {
+		return fmt.Errorf("invalid Dream org unit %q", req.OrgUnitID)
+	}
+	if parsed.kind != "" {
+		if req.OrgUnitKind != "" && req.OrgUnitKind != parsed.kind {
+			return fmt.Errorf("Dream org unit kind %q conflicts with %q", req.OrgUnitKind, req.OrgUnitID)
+		}
+		req.OrgUnitKind = parsed.kind
+		return nil
+	}
+	if req.OrgUnitKind != "" {
+		if !validScopeKind(req.OrgUnitKind) {
+			return fmt.Errorf("invalid Dream org unit kind %q", req.OrgUnitKind)
+		}
+		return nil
+	}
+	space, err := r.store.GetKnowledgeSpaceByScope(ctx, db.GetKnowledgeSpaceByScopeParams{
+		EnterpriseID: req.EnterpriseID,
+		OrgScope:     req.OrgUnitID,
+	})
+	if err != nil {
+		return fmt.Errorf("resolve bare Dream parent %s: %w", req.OrgUnitID, err)
+	}
+	if space.EnterpriseID != req.EnterpriseID || !scopeLookupMatches(space.OrgScope, req.OrgUnitID) || !validScopeKind(space.Kind) || (req.SpaceID != "" && req.SpaceID != space.ID) {
+		return fmt.Errorf("bare Dream parent %s has invalid scope provenance", req.OrgUnitID)
+	}
+	req.OrgUnitKind = space.Kind
+	if req.SpaceID == "" {
+		req.SpaceID = space.ID
+	}
+	return nil
+}
+
+func containsSource(sources []sdkdream.Source, wanted sdkdream.Source) bool {
+	for _, source := range sources {
+		if source == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func validateSourceMetadata(source sdkdream.Source, inputs []SourceInput, coverage Coverage, missing []MissingInput, req ResolveRequest, builtin bool, masker *Masker) error {
@@ -500,6 +554,15 @@ func directBriefScope(kind string) bool {
 	return kind == "employee" || kind == "project_group"
 }
 
+func validScopeKind(kind string) bool {
+	switch kind {
+	case "employee", "project_group", "department", "business_unit", "company":
+		return true
+	default:
+		return false
+	}
+}
+
 func scopeKindMatches(kind, scope string) bool {
 	parsed, ok := parseScopeRef(scope)
 	return ok && (parsed.kind == "" || parsed.kind == kind)
@@ -515,6 +578,17 @@ func sameOrgUnit(stored, requested string) bool {
 		return left.kind == right.kind && left.id == right.id
 	}
 	return left.id == right.id
+}
+
+func scopeLookupMatches(stored, requested string) bool {
+	parsed, ok := parseScopeRef(requested)
+	if !ok {
+		return false
+	}
+	if parsed.kind == "" {
+		return stored == requested
+	}
+	return sameOrgUnit(stored, requested)
 }
 
 type scopeRef struct{ kind, id string }

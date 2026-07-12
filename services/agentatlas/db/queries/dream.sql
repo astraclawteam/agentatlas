@@ -98,10 +98,8 @@ JOIN knowledge_spaces AS parent_space
  AND parent_space.enterprise_id = bindings.enterprise_id
 WHERE spaces.enterprise_id = sqlc.arg(enterprise_id)
   AND bindings.enterprise_id = sqlc.arg(enterprise_id)
-  AND (
-      parent_binding.scope_id = sqlc.arg(parent_org_unit_id)::text
-      OR parent_space.org_scope = sqlc.arg(parent_org_unit_id)::text
-  )
+  AND parent_binding.scope_kind = sqlc.arg(parent_scope_kind)::text
+  AND parent_binding.scope_id = sqlc.arg(parent_scope_id)::text
 ORDER BY spaces.kind, spaces.name, spaces.id;
 
 -- name: ListDreamImmediateChildren :many
@@ -122,10 +120,8 @@ JOIN knowledge_spaces AS parent_space
   ON parent_space.enterprise_id = parent_binding.enterprise_id
  AND parent_space.id = parent_binding.space_id
 WHERE spaces.enterprise_id = sqlc.arg(enterprise_id)
-  AND (
-      parent_binding.scope_id = sqlc.arg(parent_org_unit_id)::text
-      OR parent_space.org_scope = sqlc.arg(parent_org_unit_id)::text
-  )
+  AND parent_binding.scope_kind = sqlc.arg(parent_scope_kind)::text
+  AND parent_binding.scope_id = sqlc.arg(parent_scope_id)::text
 ORDER BY spaces.kind, spaces.name, spaces.id, parent_space.id,
          parent_binding.scope_kind, parent_binding.scope_id, parent_space.org_scope
 LIMIT sqlc.arg(result_limit);
@@ -147,10 +143,8 @@ JOIN knowledge_spaces AS parent_space
   ON parent_space.id = parent_binding.space_id
  AND parent_space.enterprise_id = bindings.enterprise_id
 WHERE runs.enterprise_id = sqlc.arg(enterprise_id)
-  AND (
-      parent_binding.scope_id = sqlc.arg(parent_org_unit_id)::text
-      OR parent_space.org_scope = sqlc.arg(parent_org_unit_id)::text
-  )
+  AND parent_binding.scope_kind = sqlc.arg(parent_scope_kind)::text
+  AND parent_binding.scope_id = sqlc.arg(parent_scope_id)::text
   AND runs.status = 'succeeded'
   AND runs.window_start = sqlc.arg(window_start)
   AND runs.window_end = sqlc.arg(window_end)
@@ -179,10 +173,8 @@ JOIN knowledge_spaces AS parent_space
   ON parent_space.id = parent_binding.space_id
  AND parent_space.enterprise_id = bindings.enterprise_id
 WHERE runs.enterprise_id = sqlc.arg(enterprise_id)
-  AND (
-      parent_binding.scope_id = sqlc.arg(parent_org_unit_id)::text
-      OR parent_space.org_scope = sqlc.arg(parent_org_unit_id)::text
-  )
+  AND parent_binding.scope_kind = sqlc.arg(parent_scope_kind)::text
+  AND parent_binding.scope_id = sqlc.arg(parent_scope_id)::text
   AND runs.status = 'succeeded'
   AND runs.window_start = sqlc.arg(window_start)
   AND runs.window_end = sqlc.arg(window_end)

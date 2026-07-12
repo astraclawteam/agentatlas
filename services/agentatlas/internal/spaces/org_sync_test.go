@@ -69,7 +69,7 @@ func (f *fakeStore) InsertKnowledgeSpace(_ context.Context, arg db.InsertKnowled
 
 func (f *fakeStore) UpdateKnowledgeSpaceIfNewer(_ context.Context, arg db.UpdateKnowledgeSpaceIfNewerParams) (int64, error) {
 	s, ok := f.byID[arg.ID]
-	if !ok || s.OrgVersion > arg.OrgVersion {
+	if !ok || s.OrgVersion >= arg.OrgVersion {
 		return 0, nil
 	}
 	s.Name = arg.Name
@@ -242,5 +242,34 @@ func TestOrgSyncRequiresAndPersistsTypedParentIdentity(t *testing.T) {
 	binding := store.bindings["ent_1|department|child"]
 	if !binding.ParentScopeKind.Valid || binding.ParentScopeKind.String != "company" || !binding.ParentScopeID.Valid || binding.ParentScopeID.String != "parent" {
 		t.Fatalf("typed parent identity not persisted: %+v", binding)
+	}
+}
+
+func TestOrgSyncNewerEventReparentsExistingScope(t *testing.T) {
+	store := newFakeStore()
+	service := NewService(store)
+	child := orgEvent(nexus.OrgDepartmentUpserted, 1, nexus.ScopeDepartment, "child", "Child")
+	child.Scope.ParentKind, child.Scope.ParentID = nexus.ScopeCompany, "company-a"
+	if _, _, err := service.EnsureSpaceFromEvent(context.Background(), child); err != nil {
+		t.Fatal(err)
+	}
+
+	child.OrgVersion = 2
+	child.Scope.ParentKind, child.Scope.ParentID = nexus.ScopeBusinessUnit, "business-b"
+	if _, created, err := service.EnsureSpaceFromEvent(context.Background(), child); err != nil || created {
+		t.Fatalf("reparent existing scope: created=%v err=%v", created, err)
+	}
+	binding := store.bindings["ent_1|department|child"]
+	if !binding.ParentScopeKind.Valid || binding.ParentScopeKind.String != "business_unit" || !binding.ParentScopeID.Valid || binding.ParentScopeID.String != "business-b" {
+		t.Fatalf("newer reparenting was not persisted: %+v", binding)
+	}
+
+	child.Scope.ParentKind, child.Scope.ParentID = nexus.ScopeCompany, "equal-version-replay"
+	if _, _, err := service.EnsureSpaceFromEvent(context.Background(), child); err != nil {
+		t.Fatal(err)
+	}
+	binding = store.bindings["ent_1|department|child"]
+	if binding.ParentScopeKind.String != "business_unit" || binding.ParentScopeID.String != "business-b" {
+		t.Fatalf("equal-version replay changed parent identity: %+v", binding)
 	}
 }

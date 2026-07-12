@@ -13,6 +13,7 @@ ALTER TABLE timeline_nodes
 -- Rollback intentionally fails closed while rows use source types that the
 -- previous constraint cannot represent; operators must migrate those rows
 -- explicitly before retrying the down migration.
+-- +goose StatementBegin
 DO $$
 BEGIN
     IF EXISTS (
@@ -22,6 +23,7 @@ BEGIN
         RAISE EXCEPTION 'cannot roll back migration 000003 while extended Dream timeline source rows exist';
     END IF;
 END $$;
+-- +goose StatementEnd
 
 ALTER TABLE timeline_nodes
     DROP CONSTRAINT timeline_nodes_source_type_check,

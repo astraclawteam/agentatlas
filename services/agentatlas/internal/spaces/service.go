@@ -60,6 +60,9 @@ func (s *Service) EnsureSpaceFromEvent(ctx context.Context, ev nexus.OrgEvent) (
 			return "", false, fmt.Errorf("update space %s: %w", existing.ID, uerr)
 		}
 		if rows > 0 {
+			if berr := s.upsertBinding(ctx, existing.ID, ev); berr != nil {
+				return "", false, berr
+			}
 			if verr := s.recordVersion(ctx, existing.ID, ev); verr != nil {
 				return "", false, verr
 			}
@@ -77,15 +80,8 @@ func (s *Service) EnsureSpaceFromEvent(ctx context.Context, ev nexus.OrgEvent) (
 		if ierr != nil {
 			return "", false, fmt.Errorf("insert space for %s: %w", scope, ierr)
 		}
-		if berr := s.store.UpsertOrgScopeBinding(ctx, db.UpsertOrgScopeBindingParams{
-			EnterpriseID:    ev.EnterpriseID,
-			SpaceID:         space.ID,
-			ScopeKind:       string(ev.Scope.Kind),
-			ScopeID:         ev.Scope.ID,
-			ParentScopeKind: pgTextOrEmpty(string(ev.Scope.ParentKind)),
-			ParentScopeID:   pgTextOrEmpty(ev.Scope.ParentID),
-		}); berr != nil {
-			return "", false, fmt.Errorf("bind scope %s: %w", scope, berr)
+		if berr := s.upsertBinding(ctx, space.ID, ev); berr != nil {
+			return "", false, berr
 		}
 		if verr := s.recordVersion(ctx, space.ID, ev); verr != nil {
 			return "", false, verr
@@ -106,6 +102,20 @@ func (s *Service) EnsureSpaceFromEvent(ctx context.Context, ev nexus.OrgEvent) (
 		}
 	}
 	return spaceID, created, nil
+}
+
+func (s *Service) upsertBinding(ctx context.Context, spaceID string, ev nexus.OrgEvent) error {
+	if err := s.store.UpsertOrgScopeBinding(ctx, db.UpsertOrgScopeBindingParams{
+		EnterpriseID:    ev.EnterpriseID,
+		SpaceID:         spaceID,
+		ScopeKind:       string(ev.Scope.Kind),
+		ScopeID:         ev.Scope.ID,
+		ParentScopeKind: pgTextOrEmpty(string(ev.Scope.ParentKind)),
+		ParentScopeID:   pgTextOrEmpty(ev.Scope.ParentID),
+	}); err != nil {
+		return fmt.Errorf("bind scope %s: %w", ScopeString(ev.Scope.Kind, ev.Scope.ID), err)
+	}
+	return nil
 }
 
 func (s *Service) recordVersion(ctx context.Context, spaceID string, ev nexus.OrgEvent) error {

@@ -29,7 +29,7 @@ SELECT * FROM knowledge_spaces WHERE enterprise_id = $1 ORDER BY kind, name;
 -- name: UpdateKnowledgeSpaceIfNewer :execrows
 UPDATE knowledge_spaces
 SET name = $3, org_version = $4, updated_at = now()
-WHERE id = $1 AND enterprise_id = $2 AND org_version <= $4;
+WHERE id = $1 AND enterprise_id = $2 AND org_version < $4;
 
 -- name: InsertKnowledgeSpaceVersion :exec
 INSERT INTO knowledge_space_versions (space_id, org_version, snapshot)

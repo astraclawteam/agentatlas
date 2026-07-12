@@ -605,20 +605,19 @@ JOIN knowledge_spaces AS parent_space
  AND parent_space.enterprise_id = bindings.enterprise_id
 WHERE spaces.enterprise_id = $1
   AND bindings.enterprise_id = $1
-  AND (
-      parent_binding.scope_id = $2::text
-      OR parent_space.org_scope = $2::text
-  )
+  AND parent_binding.scope_kind = $2::text
+  AND parent_binding.scope_id = $3::text
 ORDER BY spaces.kind, spaces.name, spaces.id
 `
 
 type ListChildSpacesParams struct {
 	EnterpriseID    string `json:"enterprise_id"`
-	ParentOrgUnitID string `json:"parent_org_unit_id"`
+	ParentScopeKind string `json:"parent_scope_kind"`
+	ParentScopeID   string `json:"parent_scope_id"`
 }
 
 func (q *Queries) ListChildSpaces(ctx context.Context, arg ListChildSpacesParams) ([]KnowledgeSpace, error) {
-	rows, err := q.db.Query(ctx, listChildSpaces, arg.EnterpriseID, arg.ParentOrgUnitID)
+	rows, err := q.db.Query(ctx, listChildSpaces, arg.EnterpriseID, arg.ParentScopeKind, arg.ParentScopeID)
 	if err != nil {
 		return nil, err
 	}
@@ -663,19 +662,18 @@ JOIN knowledge_spaces AS parent_space
   ON parent_space.id = parent_binding.space_id
  AND parent_space.enterprise_id = bindings.enterprise_id
 WHERE runs.enterprise_id = $1
-  AND (
-      parent_binding.scope_id = $2::text
-      OR parent_space.org_scope = $2::text
-  )
+  AND parent_binding.scope_kind = $2::text
+  AND parent_binding.scope_id = $3::text
   AND runs.status = 'succeeded'
-  AND runs.window_start = $3
-  AND runs.window_end = $4
+  AND runs.window_start = $4
+  AND runs.window_end = $5
 ORDER BY runs.org_unit_id, runs.id
 `
 
 type ListCompletedChildDreamRunsParams struct {
 	EnterpriseID    string             `json:"enterprise_id"`
-	ParentOrgUnitID string             `json:"parent_org_unit_id"`
+	ParentScopeKind string             `json:"parent_scope_kind"`
+	ParentScopeID   string             `json:"parent_scope_id"`
 	WindowStart     pgtype.Timestamptz `json:"window_start"`
 	WindowEnd       pgtype.Timestamptz `json:"window_end"`
 }
@@ -683,7 +681,8 @@ type ListCompletedChildDreamRunsParams struct {
 func (q *Queries) ListCompletedChildDreamRuns(ctx context.Context, arg ListCompletedChildDreamRunsParams) ([]DreamRun, error) {
 	rows, err := q.db.Query(ctx, listCompletedChildDreamRuns,
 		arg.EnterpriseID,
-		arg.ParentOrgUnitID,
+		arg.ParentScopeKind,
+		arg.ParentScopeID,
 		arg.WindowStart,
 		arg.WindowEnd,
 	)
@@ -753,21 +752,20 @@ JOIN knowledge_spaces AS parent_space
   ON parent_space.id = parent_binding.space_id
  AND parent_space.enterprise_id = bindings.enterprise_id
 WHERE runs.enterprise_id = $1
-  AND (
-      parent_binding.scope_id = $2::text
-      OR parent_space.org_scope = $2::text
-  )
+  AND parent_binding.scope_kind = $2::text
+  AND parent_binding.scope_id = $3::text
   AND runs.status = 'succeeded'
-  AND runs.window_start = $3
-  AND runs.window_end = $4
+  AND runs.window_start = $4
+  AND runs.window_end = $5
 ORDER BY runs.org_unit_id, runs.id, child_space.id, child_space.org_scope,
          parent_space.id, parent_binding.scope_kind, parent_binding.scope_id, parent_space.org_scope
-LIMIT $5
+LIMIT $6
 `
 
 type ListDreamCompletedChildRunsParams struct {
 	EnterpriseID    string             `json:"enterprise_id"`
-	ParentOrgUnitID string             `json:"parent_org_unit_id"`
+	ParentScopeKind string             `json:"parent_scope_kind"`
+	ParentScopeID   string             `json:"parent_scope_id"`
 	WindowStart     pgtype.Timestamptz `json:"window_start"`
 	WindowEnd       pgtype.Timestamptz `json:"window_end"`
 	ResultLimit     int32              `json:"result_limit"`
@@ -809,7 +807,8 @@ type ListDreamCompletedChildRunsRow struct {
 func (q *Queries) ListDreamCompletedChildRuns(ctx context.Context, arg ListDreamCompletedChildRunsParams) ([]ListDreamCompletedChildRunsRow, error) {
 	rows, err := q.db.Query(ctx, listDreamCompletedChildRuns,
 		arg.EnterpriseID,
-		arg.ParentOrgUnitID,
+		arg.ParentScopeKind,
+		arg.ParentScopeID,
 		arg.WindowStart,
 		arg.WindowEnd,
 		arg.ResultLimit,
@@ -881,18 +880,17 @@ JOIN knowledge_spaces AS parent_space
   ON parent_space.enterprise_id = parent_binding.enterprise_id
  AND parent_space.id = parent_binding.space_id
 WHERE spaces.enterprise_id = $1
-  AND (
-      parent_binding.scope_id = $2::text
-      OR parent_space.org_scope = $2::text
-  )
+  AND parent_binding.scope_kind = $2::text
+  AND parent_binding.scope_id = $3::text
 ORDER BY spaces.kind, spaces.name, spaces.id, parent_space.id,
          parent_binding.scope_kind, parent_binding.scope_id, parent_space.org_scope
-LIMIT $3
+LIMIT $4
 `
 
 type ListDreamImmediateChildrenParams struct {
 	EnterpriseID    string `json:"enterprise_id"`
-	ParentOrgUnitID string `json:"parent_org_unit_id"`
+	ParentScopeKind string `json:"parent_scope_kind"`
+	ParentScopeID   string `json:"parent_scope_id"`
 	ResultLimit     int32  `json:"result_limit"`
 }
 
@@ -912,7 +910,12 @@ type ListDreamImmediateChildrenRow struct {
 }
 
 func (q *Queries) ListDreamImmediateChildren(ctx context.Context, arg ListDreamImmediateChildrenParams) ([]ListDreamImmediateChildrenRow, error) {
-	rows, err := q.db.Query(ctx, listDreamImmediateChildren, arg.EnterpriseID, arg.ParentOrgUnitID, arg.ResultLimit)
+	rows, err := q.db.Query(ctx, listDreamImmediateChildren,
+		arg.EnterpriseID,
+		arg.ParentScopeKind,
+		arg.ParentScopeID,
+		arg.ResultLimit,
+	)
 	if err != nil {
 		return nil, err
 	}

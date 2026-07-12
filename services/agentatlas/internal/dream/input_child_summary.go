@@ -22,8 +22,12 @@ type childVisibilitySnapshot struct {
 
 func (r childSummaryResolver) ResolveSource(ctx context.Context, req ResolveRequest, masker *Masker) ([]SourceInput, Coverage, []MissingInput, error) {
 	limit := effectiveInputLimit(req.MaxInputs)
+	parent, ok := parseScopeRef(req.OrgUnitID)
+	if !ok || req.OrgUnitKind == "" {
+		return nil, Coverage{}, nil, fmt.Errorf("resolved Dream parent kind and ID are required")
+	}
 	children, err := r.store.ListDreamImmediateChildren(ctx, db.ListDreamImmediateChildrenParams{
-		EnterpriseID: req.EnterpriseID, ParentOrgUnitID: req.OrgUnitID, ResultLimit: int32(limit + 1),
+		EnterpriseID: req.EnterpriseID, ParentScopeKind: req.OrgUnitKind, ParentScopeID: parent.id, ResultLimit: int32(limit + 1),
 	})
 	if err != nil {
 		return nil, Coverage{}, nil, fmt.Errorf("list immediate child spaces: %w", err)
@@ -34,7 +38,7 @@ func (r childSummaryResolver) ResolveSource(ctx context.Context, req ResolveRequ
 	children = scopedChildren(children, req)
 	coverage := Coverage{ExpectedChildren: len(children)}
 	runs, err := r.store.ListDreamCompletedChildRuns(ctx, db.ListDreamCompletedChildRunsParams{
-		EnterpriseID: req.EnterpriseID, ParentOrgUnitID: req.OrgUnitID,
+		EnterpriseID: req.EnterpriseID, ParentScopeKind: req.OrgUnitKind, ParentScopeID: parent.id,
 		WindowStart: pgtype.Timestamptz{Time: req.WindowStart, Valid: true},
 		WindowEnd:   pgtype.Timestamptz{Time: req.WindowEnd, Valid: true},
 		ResultLimit: int32(limit + 1),
@@ -89,7 +93,7 @@ func scopedChildren(children []db.ListDreamImmediateChildrenRow, req ResolveRequ
 	result := make([]db.ListDreamImmediateChildrenRow, 0, len(children))
 	for _, child := range children {
 		if child.EnterpriseID != req.EnterpriseID || child.ID == "" || child.OrgScope == "" ||
-			!parentIdentityMatches(child.ParentScopeKind, child.ParentScopeID, child.ParentOrgScope, req.OrgUnitID) ||
+			!parentIdentityMatches(child.ParentScopeKind, child.ParentScopeID, child.ParentOrgScope, req) ||
 			(req.SpaceID != "" && child.ParentSpaceID != req.SpaceID) {
 			continue
 		}
@@ -118,7 +122,7 @@ func scopedSuccessfulRuns(runs []db.ListDreamCompletedChildRunsRow, req ResolveR
 	result := make([]db.ListDreamCompletedChildRunsRow, 0, len(runs))
 	for _, run := range runs {
 		if run.EnterpriseID != req.EnterpriseID || run.Status != "succeeded" || run.ChildSpaceID == "" || run.ChildOrgScope == "" ||
-			!parentIdentityMatches(run.ParentScopeKind, run.ParentScopeID, run.ParentOrgScope, req.OrgUnitID) ||
+			!parentIdentityMatches(run.ParentScopeKind, run.ParentScopeID, run.ParentOrgScope, req) ||
 			(req.SpaceID != "" && run.ParentSpaceID != req.SpaceID) {
 			continue
 		}
@@ -187,10 +191,11 @@ func childVisibility(raw []byte) ([]string, bool) {
 	return visibility, len(visibility) >= 2 && len(visibility) <= maxVisibilityEntries
 }
 
-func parentIdentityMatches(kind, id, orgScope, requested string) bool {
+func parentIdentityMatches(kind, id, orgScope string, req ResolveRequest) bool {
 	parent, ok := parseScopeRef(orgScope)
-	if !ok || parent.kind == "" || parent.kind != kind || parent.id != id {
+	requested, requestedOK := parseScopeRef(req.OrgUnitID)
+	if !ok || !requestedOK || parent.kind == "" || parent.kind != kind || kind != req.OrgUnitKind || parent.id != id || id != requested.id {
 		return false
 	}
-	return sameOrgUnit(orgScope, requested)
+	return sameOrgUnit(orgScope, req.OrgUnitID)
 }

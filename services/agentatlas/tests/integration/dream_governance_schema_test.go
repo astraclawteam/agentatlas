@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,6 +70,159 @@ func TestDreamGovernanceSchemaUpgradeFromPopulatedV1(t *testing.T) {
 	if err := goose.UpContext(ctx, sqldb, "migrations"); err != nil {
 		t.Fatalf("upgrade populated v1: %v", err)
 	}
+}
+
+func openDreamMigrationDB(t *testing.T, dsn string, version int64) (context.Context, *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	admin, err := storage.NewPool(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := newID("migration")
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err := admin.Exec(ctx, "create schema "+quotedSchema); err != nil {
+		admin.Close()
+		t.Fatal(err)
+	}
+	sqldb, err := sql.Open("pgx", dsn)
+	if err != nil {
+		admin.Close()
+		t.Fatal(err)
+	}
+	sqldb.SetMaxOpenConns(1)
+	if _, err := sqldb.ExecContext(ctx, "set search_path to "+quotedSchema); err != nil {
+		_ = sqldb.Close()
+		admin.Close()
+		t.Fatal(err)
+	}
+	goose.SetBaseFS(dbfs.Migrations)
+	if err := goose.SetDialect("postgres"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.UpToContext(ctx, sqldb, "migrations", version); err != nil {
+		t.Fatalf("migrate to %d: %v", version, err)
+	}
+	t.Cleanup(func() {
+		_ = sqldb.Close()
+		_, _ = admin.Exec(ctx, "drop schema "+quotedSchema+" cascade")
+		admin.Close()
+	})
+	return ctx, sqldb
+}
+
+func TestOrgParentScopeKindMigrationContracts(t *testing.T) {
+	dsn := os.Getenv("ATLAS_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("set ATLAS_TEST_POSTGRES_DSN (production-standard postgres from deploy/compose)")
+	}
+	ctx, sqldb := openDreamMigrationDB(t, dsn, 3)
+	if _, err := sqldb.ExecContext(ctx, `
+		insert into enterprises(id,name) values('parent-migration-ent','Parent migration');
+		insert into knowledge_spaces(id,enterprise_id,kind,name,org_scope) values
+			('unique-parent-space','parent-migration-ent','company','Unique parent','company:unique-parent'),
+			('unique-child-space','parent-migration-ent','department','Unique child','department:unique-child'),
+			('collision-company-space','parent-migration-ent','company','Collision company','company:collision'),
+			('collision-department-space','parent-migration-ent','department','Collision department','department:collision'),
+			('ambiguous-child-space','parent-migration-ent','employee','Ambiguous child','employee:ambiguous-child'),
+			('dangling-child-space','parent-migration-ent','employee','Dangling child','employee:dangling-child');
+		insert into org_scope_bindings(enterprise_id,space_id,scope_kind,scope_id,parent_scope_id) values
+			('parent-migration-ent','unique-parent-space','company','unique-parent',null),
+			('parent-migration-ent','unique-child-space','department','unique-child','unique-parent'),
+			('parent-migration-ent','collision-company-space','company','collision',null),
+			('parent-migration-ent','collision-department-space','department','collision',null),
+			('parent-migration-ent','ambiguous-child-space','employee','ambiguous-child','collision'),
+			('parent-migration-ent','dangling-child-space','employee','dangling-child','missing-parent');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.UpToContext(ctx, sqldb, "migrations", 4); err != nil {
+		t.Fatal(err)
+	}
+
+	var uniqueKind, uniqueID sql.NullString
+	if err := sqldb.QueryRowContext(ctx, `select parent_scope_kind,parent_scope_id from org_scope_bindings where scope_id='unique-child'`).Scan(&uniqueKind, &uniqueID); err != nil {
+		t.Fatal(err)
+	}
+	if !uniqueKind.Valid || uniqueKind.String != "company" || !uniqueID.Valid || uniqueID.String != "unique-parent" {
+		t.Fatalf("unique legacy parent was not backfilled: kind=%+v id=%+v", uniqueKind, uniqueID)
+	}
+	for _, scopeID := range []string{"ambiguous-child", "dangling-child"} {
+		var kind, id sql.NullString
+		if err := sqldb.QueryRowContext(ctx, `select parent_scope_kind,parent_scope_id from org_scope_bindings where scope_id=$1`, scopeID).Scan(&kind, &id); err != nil {
+			t.Fatal(err)
+		}
+		if kind.Valid || id.Valid {
+			t.Fatalf("%s legacy edge did not fail closed: kind=%+v id=%+v", scopeID, kind, id)
+		}
+	}
+
+	if _, err := sqldb.ExecContext(ctx, `insert into knowledge_spaces(id,enterprise_id,kind,name,org_scope) values
+		('fk-child-space','parent-migration-ent','employee','FK child','employee:fk-child')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqldb.ExecContext(ctx, `insert into org_scope_bindings(
+		enterprise_id,space_id,scope_kind,scope_id,parent_scope_kind,parent_scope_id
+	) values('parent-migration-ent','fk-child-space','employee','fk-child','business_unit','unique-parent')`); err == nil {
+		t.Fatal("composite parent FK accepted the right ID under the wrong kind")
+	}
+}
+
+func TestDreamMigrationDownContracts(t *testing.T) {
+	dsn := os.Getenv("ATLAS_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("set ATLAS_TEST_POSTGRES_DSN (production-standard postgres from deploy/compose)")
+	}
+
+	t.Run("000003 safe", func(t *testing.T) {
+		ctx, db := openDreamMigrationDB(t, dsn, 3)
+		if err := goose.DownToContext(ctx, db, "migrations", 2); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("000003 fail closed", func(t *testing.T) {
+		ctx, db := openDreamMigrationDB(t, dsn, 3)
+		if _, err := db.ExecContext(ctx, `
+			insert into enterprises(id,name) values('down3-ent','Down 3');
+			insert into knowledge_spaces(id,enterprise_id,kind,name,org_scope) values('down3-space','down3-ent','department','Down 3','department:down3');
+			insert into timeline_nodes(id,enterprise_id,space_id,org_scope,node_time,source_type,summary_text)
+			values('down3-node','down3-ent','down3-space','department:down3',now(),'risk_event','risk');
+		`); err != nil {
+			t.Fatal(err)
+		}
+		if err := goose.DownToContext(ctx, db, "migrations", 2); err == nil {
+			t.Fatal("000003 down accepted an extended timeline source row")
+		} else if !strings.Contains(err.Error(), "cannot roll back migration 000003") {
+			t.Fatalf("000003 down failed for the wrong reason: %v", err)
+		}
+	})
+	t.Run("000004 safe", func(t *testing.T) {
+		ctx, db := openDreamMigrationDB(t, dsn, 4)
+		if err := goose.DownToContext(ctx, db, "migrations", 3); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("000004 fail closed", func(t *testing.T) {
+		ctx, db := openDreamMigrationDB(t, dsn, 4)
+		if _, err := db.ExecContext(ctx, `
+			insert into enterprises(id,name) values('down4-ent','Down 4');
+			insert into knowledge_spaces(id,enterprise_id,kind,name,org_scope) values
+				('down4-company','down4-ent','company','Company','company:collision'),
+				('down4-department','down4-ent','department','Department','department:collision'),
+				('down4-child','down4-ent','employee','Child','employee:child');
+			insert into org_scope_bindings(enterprise_id,space_id,scope_kind,scope_id,parent_scope_kind,parent_scope_id) values
+				('down4-ent','down4-company','company','collision',null,null),
+				('down4-ent','down4-department','department','collision',null,null),
+				('down4-ent','down4-child','employee','child','department','collision');
+		`); err != nil {
+			t.Fatal(err)
+		}
+		if err := goose.DownToContext(ctx, db, "migrations", 3); err == nil {
+			t.Fatal("000004 down restored ambiguous bare parent identities")
+		} else if !strings.Contains(err.Error(), "cannot roll back migration 000004") {
+			t.Fatalf("000004 down failed for the wrong reason: %v", err)
+		}
+	})
 }
 
 func TestDreamGovernancePublishOperationConcurrency(t *testing.T) {
@@ -282,13 +436,13 @@ func TestDreamGovernanceSchema(t *testing.T) {
 
 	queries := db.New(pool)
 	children, err := queries.ListChildSpaces(ctx, db.ListChildSpacesParams{
-		EnterpriseID: "ent-dream-a", ParentOrgUnitID: "department:parent",
+		EnterpriseID: "ent-dream-a", ParentScopeKind: "department", ParentScopeID: "parent",
 	})
 	if err != nil || len(children) != 1 || children[0].ID != "space-child" {
 		t.Fatalf("canonical parent org query: children=%+v err=%v", children, err)
 	}
 	completed, err := queries.ListCompletedChildDreamRuns(ctx, db.ListCompletedChildDreamRunsParams{
-		EnterpriseID: "ent-dream-a", ParentOrgUnitID: "department:parent",
+		EnterpriseID: "ent-dream-a", ParentScopeKind: "department", ParentScopeID: "parent",
 		WindowStart: ts(windowStart), WindowEnd: ts(windowEnd),
 	})
 	if err != nil || len(completed) != 1 || completed[0].ID != "child" {
