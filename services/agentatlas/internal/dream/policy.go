@@ -10,10 +10,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/robfig/cron/v3"
 
@@ -134,11 +136,12 @@ type policyLifecycleStore interface {
 	DecideDreamPolicyIfRevision(context.Context, db.DecideDreamPolicyIfRevisionParams) (db.DecideDreamPolicyIfRevisionRow, error)
 	PublishDreamPolicyGoverned(context.Context, db.PublishDreamPolicyGovernedParams) (db.PublishDreamPolicyGovernedRow, error)
 	DisableDreamPolicyIfRevision(context.Context, db.DisableDreamPolicyIfRevisionParams) (db.DisableDreamPolicyIfRevisionRow, error)
-	RefreshDreamPolicyReviewRoute(context.Context, db.RefreshDreamPolicyReviewRouteParams) (db.DreamPolicy, error)
+	RefreshDreamPolicyReviewRoute(context.Context, db.RefreshDreamPolicyReviewRouteParams) (db.RefreshDreamPolicyReviewRouteRow, error)
 	ReserveDreamPolicyOperation(context.Context, db.ReserveDreamPolicyOperationParams) (db.DreamPolicyOperation, error)
 	GetDreamPolicyOperation(context.Context, db.GetDreamPolicyOperationParams) (db.DreamPolicyOperation, error)
 	RecordDreamPolicyOperationAudit(context.Context, db.RecordDreamPolicyOperationAuditParams) (db.DreamPolicyOperation, error)
 	CompleteDreamPolicyOperation(context.Context, db.CompleteDreamPolicyOperationParams) (db.DreamPolicyOperation, error)
+	GetDreamPolicyTransitionAuditByOperation(context.Context, db.GetDreamPolicyTransitionAuditByOperationParams) (db.DreamPolicyTransitionAudit, error)
 }
 
 type LifecycleView struct {
@@ -201,21 +204,68 @@ type Operation struct {
 	Replay *LifecycleView
 }
 
-func (s *PolicyService) BeginOperation(ctx context.Context, enterpriseID, key, kind, policyID, actor, requestHash string) (Operation, error) {
-	if len(key) < 16 || len(key) > 128 || len(requestHash) != 64 || actor == "" || policyID == "" {
-		return Operation{}, fmt.Errorf("invalid lifecycle operation")
+type ReceiptOperation struct {
+	Row    db.DreamPolicyOperation
+	Replay json.RawMessage
+}
+
+func (s *PolicyService) BeginReceipt(ctx context.Context, enterpriseID, key, kind, resourceID, actor, requestHash string) (ReceiptOperation, error) {
+	if len(key) < 16 || len(key) > 128 || len(requestHash) != 64 || actor == "" || resourceID == "" {
+		return ReceiptOperation{}, fmt.Errorf("invalid operation receipt")
 	}
 	ls, ok := s.store.(policyLifecycleStore)
 	if !ok {
-		return Operation{}, fmt.Errorf("policy store does not support governed lifecycle")
+		return ReceiptOperation{}, fmt.Errorf("policy store does not support operation receipts")
 	}
 	sum := sha256.Sum256([]byte(enterpriseID + "\x00" + key))
-	nonce := "facts_" + hex.EncodeToString(sum[:16])
-	row, err := ls.ReserveDreamPolicyOperation(ctx, db.ReserveDreamPolicyOperationParams{EnterpriseID: enterpriseID, OperationKey: key, OperationKind: kind, PolicyID: policyID, ActorUserID: actor, RequestHash: requestHash, FactsNonce: nonce})
+	row, err := ls.ReserveDreamPolicyOperation(ctx, db.ReserveDreamPolicyOperationParams{EnterpriseID: enterpriseID, OperationKey: key, OperationKind: kind, PolicyID: resourceID, ActorUserID: actor, RequestHash: requestHash, FactsNonce: "facts_" + hex.EncodeToString(sum[:16])})
 	if err != nil {
-		return Operation{}, fmt.Errorf("operation key conflict: %w", err)
+		return ReceiptOperation{}, fmt.Errorf("operation key conflict: %w", err)
 	}
+	op := ReceiptOperation{Row: row}
+	if row.Status == "completed" {
+		op.Replay = append(json.RawMessage(nil), row.Result...)
+	}
+	return op, nil
+}
+
+func (s *PolicyService) CompleteReceipt(ctx context.Context, enterpriseID, key string, result any) (json.RawMessage, error) {
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return nil, err
+	}
+	ls := s.store.(policyLifecycleStore)
+	row, err := ls.CompleteDreamPolicyOperation(ctx, db.CompleteDreamPolicyOperationParams{Result: raw, EnterpriseID: enterpriseID, OperationKey: key})
+	if err != nil {
+		return nil, err
+	}
+	return append(json.RawMessage(nil), row.Result...), nil
+}
+
+func (s *PolicyService) BeginOperation(ctx context.Context, enterpriseID, key, kind, policyID, actor, requestHash string) (Operation, error) {
+	receipt, err := s.BeginReceipt(ctx, enterpriseID, key, kind, policyID, actor, requestHash)
+	if err != nil {
+		return Operation{}, err
+	}
+	ls := s.store.(policyLifecycleStore)
+	row := receipt.Row
 	op := Operation{Row: row}
+	if row.Status == "pending" && row.AuditRefID.Valid {
+		if _, transitionErr := ls.GetDreamPolicyTransitionAuditByOperation(ctx, db.GetDreamPolicyTransitionAuditByOperationParams{EnterpriseID: enterpriseID, OperationKey: key}); transitionErr == nil {
+			view, viewErr := s.GetLifecycle(ctx, enterpriseID, policyID)
+			if viewErr != nil {
+				return Operation{}, fmt.Errorf("reconcile lifecycle operation: %w", viewErr)
+			}
+			if _, completeErr := s.CompleteOperation(ctx, enterpriseID, key, view); completeErr != nil {
+				return Operation{}, fmt.Errorf("reconcile lifecycle receipt: %w", completeErr)
+			}
+			op.Row, _ = ls.GetDreamPolicyOperation(ctx, db.GetDreamPolicyOperationParams{EnterpriseID: enterpriseID, OperationKey: key})
+			op.Replay = &view
+			return op, nil
+		} else if !errors.Is(transitionErr, pgx.ErrNoRows) {
+			return Operation{}, transitionErr
+		}
+	}
 	if row.Status == "completed" {
 		var view LifecycleView
 		if err := json.Unmarshal(row.Result, &view); err != nil {
@@ -237,6 +287,14 @@ func (s *PolicyService) CompleteOperation(ctx context.Context, enterpriseID, key
 	ls := s.store.(policyLifecycleStore)
 	_, err = ls.CompleteDreamPolicyOperation(ctx, db.CompleteDreamPolicyOperationParams{Result: raw, EnterpriseID: enterpriseID, OperationKey: key})
 	return view, err
+}
+
+func (s *PolicyService) reconcileTransition(ctx context.Context, enterpriseID, policyID, operationKey string, transitionErr error) (LifecycleView, error) {
+	ls := s.store.(policyLifecycleStore)
+	if _, err := ls.GetDreamPolicyTransitionAuditByOperation(ctx, db.GetDreamPolicyTransitionAuditByOperationParams{EnterpriseID: enterpriseID, OperationKey: operationKey}); err != nil {
+		return LifecycleView{}, transitionErr
+	}
+	return s.GetLifecycle(ctx, enterpriseID, policyID)
 }
 
 // LoadVersion returns exactly one immutable published policy version.
@@ -323,7 +381,7 @@ func (s *PolicyService) CreateGovernedDraft(ctx context.Context, enterpriseID, p
 	}
 	row, err := ls.CreateDreamPolicyLifecycle(ctx, db.CreateDreamPolicyLifecycleParams{ID: policyID, EnterpriseID: enterpriseID, OrgScope: p.OrgUnitID, Draft: raw, RequesterUserID: requester, PermissionMode: string(mode), OperationKey: operationKey})
 	if err != nil {
-		return LifecycleView{}, fmt.Errorf("store governed policy draft: %w", err)
+		return s.reconcileTransition(ctx, enterpriseID, policyID, operationKey, fmt.Errorf("store governed policy draft: %w", err))
 	}
 	return lifecycleView(db.DreamPolicy{ID: row.ID, EnterpriseID: row.EnterpriseID, OrgScope: row.OrgScope, Status: row.Status, Draft: row.Draft, Revision: row.Revision, RequesterUserID: row.RequesterUserID, PermissionMode: row.PermissionMode, PendingAction: row.PendingAction, ReviewState: row.ReviewState, RiskLevel: row.RiskLevel, RiskReasons: row.RiskReasons, ReviewMode: row.ReviewMode, ReviewerUserID: row.ReviewerUserID, ReviewOrgPath: row.ReviewOrgPath, ReviewQueue: row.ReviewQueue, Decision: row.Decision, AuditRefID: row.AuditRefID}, 0)
 }
@@ -377,9 +435,9 @@ func (s *PolicyService) UpdateGovernedDraft(ctx context.Context, enterpriseID, p
 	if !ok {
 		return LifecycleView{}, fmt.Errorf("policy store does not support governed lifecycle")
 	}
-	row, err := ls.UpdateDreamPolicyDraftIfRevision(ctx, db.UpdateDreamPolicyDraftIfRevisionParams{OrgScope: p.OrgUnitID, Draft: raw, AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor, OperationKey: operationKey})
+	row, err := ls.UpdateDreamPolicyDraftIfRevision(ctx, db.UpdateDreamPolicyDraftIfRevisionParams{OrgScope: p.OrgUnitID, Draft: raw, AuditRefID: text(auditRef), TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor, OperationKey: operationKey})
 	if err != nil {
-		return LifecycleView{}, fmt.Errorf("update Dream policy revision: %w", err)
+		return s.reconcileTransition(ctx, enterpriseID, policyID, operationKey, fmt.Errorf("update Dream policy revision: %w", err))
 	}
 	_ = row
 	return s.GetLifecycle(ctx, enterpriseID, policyID)
@@ -449,7 +507,11 @@ func (s *PolicyService) SubmitReview(ctx context.Context, enterpriseID, policyID
 	if err := route.Validate(); err != nil {
 		return LifecycleView{}, err
 	}
-	if route.ResourceType != governance.ResourceDreamPolicy || route.ResourceID != policyID || route.RequesterUserID != actor {
+	current, err := s.GetLifecycle(ctx, enterpriseID, policyID)
+	if err != nil {
+		return LifecycleView{}, err
+	}
+	if route.ResourceType != governance.ResourceDreamPolicy || route.ResourceID != policyID || route.RequesterUserID != current.RequesterUserID {
 		return LifecycleView{}, fmt.Errorf("review route is not bound to Dream policy requester")
 	}
 	reasonsJSON, _ := json.Marshal(reasons)
@@ -461,14 +523,14 @@ func (s *PolicyService) SubmitReview(ctx context.Context, enterpriseID, policyID
 	if action != "publish" && action != "disable" {
 		return LifecycleView{}, fmt.Errorf("invalid pending action")
 	}
-	_, err := ls.SubmitDreamPolicyReviewIfRevision(ctx, db.SubmitDreamPolicyReviewIfRevisionParams{PendingAction: action, RiskLevel: string(route.RiskLevel), RiskReasons: reasonsJSON, ReviewMode: string(route.Mode), ReviewerUserID: text(route.ReviewerUserID), ReviewOrgPath: pathJSON, ReviewQueue: text(route.Queue), AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor, OperationKey: operationKey})
+	_, err = ls.SubmitDreamPolicyReviewIfRevision(ctx, db.SubmitDreamPolicyReviewIfRevisionParams{PendingAction: action, RiskLevel: string(route.RiskLevel), RiskReasons: reasonsJSON, ReviewMode: string(route.Mode), ReviewerUserID: text(route.ReviewerUserID), ReviewOrgPath: pathJSON, ReviewQueue: text(route.Queue), AuditRefID: text(auditRef), TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor, OperationKey: operationKey})
 	if err != nil {
 		current, currentErr := s.GetLifecycle(ctx, enterpriseID, policyID)
 		if currentErr == nil && current.ReviewMode == governance.ReviewAdminQueue {
-			_, err = ls.RefreshDreamPolicyReviewRoute(ctx, db.RefreshDreamPolicyReviewRouteParams{RiskLevel: string(route.RiskLevel), RiskReasons: reasonsJSON, ReviewMode: string(route.Mode), ReviewerUserID: text(route.ReviewerUserID), ReviewOrgPath: pathJSON, ReviewQueue: text(route.Queue), TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision})
+			_, err = ls.RefreshDreamPolicyReviewRoute(ctx, db.RefreshDreamPolicyReviewRouteParams{RiskLevel: string(route.RiskLevel), RiskReasons: reasonsJSON, ReviewMode: string(route.Mode), ReviewerUserID: text(route.ReviewerUserID), ReviewOrgPath: pathJSON, ReviewQueue: text(route.Queue), AuditRefID: text(auditRef), ActorUserID: actor, OperationKey: operationKey, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision})
 		}
 		if err != nil {
-			return LifecycleView{}, fmt.Errorf("submit Dream policy review: %w", err)
+			return s.reconcileTransition(ctx, enterpriseID, policyID, operationKey, fmt.Errorf("submit Dream policy review: %w", err))
 		}
 	}
 	return s.GetLifecycle(ctx, enterpriseID, policyID)
@@ -482,9 +544,9 @@ func (s *PolicyService) Decide(ctx context.Context, enterpriseID, policyID, acto
 	if !ok {
 		return LifecycleView{}, fmt.Errorf("policy store does not support governed lifecycle")
 	}
-	row, err := ls.DecideDreamPolicyIfRevision(ctx, db.DecideDreamPolicyIfRevisionParams{Decision: decision, AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: text(actor), OperationKey: operationKey})
+	row, err := ls.DecideDreamPolicyIfRevision(ctx, db.DecideDreamPolicyIfRevisionParams{Decision: decision, AuditRefID: text(auditRef), TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor, OperationKey: operationKey})
 	if err != nil {
-		return LifecycleView{}, fmt.Errorf("decide Dream policy: %w", err)
+		return s.reconcileTransition(ctx, enterpriseID, policyID, operationKey, fmt.Errorf("decide Dream policy: %w", err))
 	}
 	_ = row
 	return s.GetLifecycle(ctx, enterpriseID, policyID)
@@ -517,9 +579,9 @@ func (s *PolicyService) PublishGoverned(ctx context.Context, enterpriseID, polic
 		return LifecycleView{}, err
 	}
 	ls := s.store.(policyLifecycleStore)
-	published, err := ls.PublishDreamPolicyGoverned(ctx, db.PublishDreamPolicyGovernedParams{AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor, OperationKey: operationKey})
+	published, err := ls.PublishDreamPolicyGoverned(ctx, db.PublishDreamPolicyGovernedParams{AuditRefID: text(auditRef), TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor, OperationKey: operationKey})
 	if err != nil {
-		return LifecycleView{}, fmt.Errorf("publish governed Dream policy: %w", err)
+		return s.reconcileTransition(ctx, enterpriseID, policyID, operationKey, fmt.Errorf("publish governed Dream policy: %w", err))
 	}
 	view, err = s.GetLifecycle(ctx, enterpriseID, policyID)
 	if err != nil {
@@ -534,9 +596,9 @@ func (s *PolicyService) Disable(ctx context.Context, enterpriseID, policyID, act
 	if !ok {
 		return LifecycleView{}, fmt.Errorf("policy store does not support governed lifecycle")
 	}
-	row, err := ls.DisableDreamPolicyIfRevision(ctx, db.DisableDreamPolicyIfRevisionParams{AuditRefID: auditRef, TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor, OperationKey: operationKey})
+	row, err := ls.DisableDreamPolicyIfRevision(ctx, db.DisableDreamPolicyIfRevisionParams{AuditRefID: text(auditRef), TargetEnterpriseID: enterpriseID, TargetID: policyID, ExpectedRevision: revision, ActorUserID: actor, OperationKey: operationKey})
 	if err != nil {
-		return LifecycleView{}, fmt.Errorf("disable Dream policy: %w", err)
+		return s.reconcileTransition(ctx, enterpriseID, policyID, operationKey, fmt.Errorf("disable Dream policy: %w", err))
 	}
 	_ = row
 	return s.GetLifecycle(ctx, enterpriseID, policyID)

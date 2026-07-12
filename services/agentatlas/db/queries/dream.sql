@@ -25,8 +25,12 @@ RETURNING *;
 -- name: CompleteDreamPolicyOperation :one
 UPDATE dream_policy_operations SET status='completed',result=sqlc.arg(result),updated_at=now()
 WHERE enterprise_id=sqlc.arg(enterprise_id) AND operation_key=sqlc.arg(operation_key)
-  AND status='pending' AND audit_ref_id IS NOT NULL
+  AND ((status='pending' AND audit_ref_id IS NOT NULL) OR (status='completed' AND result=sqlc.arg(result)))
 RETURNING *;
+
+-- name: GetDreamPolicyTransitionAuditByOperation :one
+SELECT * FROM dream_policy_transition_audits
+WHERE enterprise_id=sqlc.arg(enterprise_id) AND operation_key=sqlc.arg(operation_key);
 
 -- name: CreateDreamPolicyLifecycle :one
 WITH created AS (
@@ -35,7 +39,8 @@ WITH created AS (
          sqlc.arg(requester_user_id),sqlc.arg(permission_mode),op.audit_ref_id
   FROM dream_policy_operations op
   WHERE op.enterprise_id=sqlc.arg(enterprise_id) AND op.operation_key=sqlc.arg(operation_key)
-    AND op.operation_kind='create' AND op.policy_id=sqlc.arg(id) AND op.status='pending' AND op.audit_ref_id IS NOT NULL
+    AND op.operation_kind='create' AND op.policy_id=sqlc.arg(id) AND op.actor_user_id=sqlc.arg(requester_user_id)
+    AND op.status='pending' AND op.audit_ref_id IS NOT NULL
   RETURNING *
 ), audit AS (
   INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
@@ -51,15 +56,21 @@ SELECT * FROM dream_policies WHERE id = $1;
 SELECT * FROM dream_policies WHERE enterprise_id = sqlc.arg(enterprise_id) AND id = sqlc.arg(id);
 
 -- name: UpdateDreamPolicyDraftIfRevision :one
-WITH changed AS (
+WITH op AS (
+  SELECT * FROM dream_policy_operations op
+  WHERE op.enterprise_id=sqlc.arg(target_enterprise_id) AND op.operation_key=sqlc.arg(operation_key)
+    AND op.operation_kind='update' AND op.policy_id=sqlc.arg(target_id) AND op.actor_user_id=sqlc.arg(actor_user_id)
+    AND op.status='pending' AND op.audit_ref_id=sqlc.arg(audit_ref_id)
+  FOR UPDATE
+), changed AS (
   UPDATE dream_policies SET org_scope=sqlc.arg(org_scope), draft=sqlc.arg(draft), revision=revision+1,
       status='draft', requester_user_id=CASE WHEN requester_user_id='' THEN sqlc.arg(actor_user_id) ELSE requester_user_id END,
       pending_action='',review_state='',risk_level='', risk_reasons='[]', review_mode='', reviewer_user_id=NULL,
       review_org_path='[]', review_queue=NULL, decision='', audit_ref_id=sqlc.arg(audit_ref_id), updated_at=now()
-  WHERE dream_policies.enterprise_id=sqlc.arg(target_enterprise_id) AND dream_policies.id=sqlc.arg(target_id)
+  FROM op WHERE dream_policies.enterprise_id=sqlc.arg(target_enterprise_id) AND dream_policies.id=sqlc.arg(target_id)
     AND dream_policies.revision=sqlc.arg(expected_revision) AND dream_policies.status IN ('draft','rejected','published','disabled')
     AND dream_policies.permission_mode='direct_edit'
-  RETURNING *
+  RETURNING dream_policies.*
 ), audit AS (
   INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
   SELECT enterprise_id,id,revision,'update',sqlc.arg(operation_key),sqlc.arg(audit_ref_id),sqlc.arg(actor_user_id) FROM changed
@@ -68,16 +79,22 @@ WITH changed AS (
 SELECT changed.* FROM changed JOIN audit ON audit.policy_id=changed.id;
 
 -- name: SubmitDreamPolicyReviewIfRevision :one
-WITH changed AS (
+WITH op AS (
+  SELECT * FROM dream_policy_operations op
+  WHERE op.enterprise_id=sqlc.arg(target_enterprise_id) AND op.operation_key=sqlc.arg(operation_key)
+    AND op.operation_kind='review' AND op.policy_id=sqlc.arg(target_id) AND op.actor_user_id=sqlc.arg(actor_user_id)
+    AND op.status='pending' AND op.audit_ref_id=sqlc.arg(audit_ref_id)
+  FOR UPDATE
+), changed AS (
   UPDATE dream_policies SET pending_action=sqlc.arg(pending_action),review_state='pending', risk_level=sqlc.arg(risk_level),
       risk_reasons=sqlc.arg(risk_reasons), review_mode=sqlc.arg(review_mode),
       reviewer_user_id=sqlc.narg(reviewer_user_id), review_org_path=sqlc.arg(review_org_path),
       review_queue=sqlc.narg(review_queue), decision='', audit_ref_id=sqlc.arg(audit_ref_id), updated_at=now()
-  WHERE dream_policies.enterprise_id=sqlc.arg(target_enterprise_id) AND dream_policies.id=sqlc.arg(target_id)
+  FROM op WHERE dream_policies.enterprise_id=sqlc.arg(target_enterprise_id) AND dream_policies.id=sqlc.arg(target_id)
     AND dream_policies.revision=sqlc.arg(expected_revision) AND dream_policies.permission_mode='direct_edit'
     AND ((sqlc.arg(pending_action)::text='publish' AND dream_policies.status='draft') OR (sqlc.arg(pending_action)::text='disable' AND dream_policies.status='published'))
     AND dream_policies.review_state IN ('','rejected')
-  RETURNING *
+  RETURNING dream_policies.*
 ), audit AS (
   INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
   SELECT enterprise_id,id,revision,'review:'||pending_action,sqlc.arg(operation_key),sqlc.arg(audit_ref_id),sqlc.arg(actor_user_id) FROM changed
@@ -86,21 +103,41 @@ WITH changed AS (
 SELECT changed.* FROM changed JOIN audit ON audit.policy_id=changed.id;
 
 -- name: RefreshDreamPolicyReviewRoute :one
-UPDATE dream_policies SET risk_level=sqlc.arg(risk_level),risk_reasons=sqlc.arg(risk_reasons),review_mode=sqlc.arg(review_mode),
-  reviewer_user_id=sqlc.narg(reviewer_user_id),review_org_path=sqlc.arg(review_org_path),review_queue=sqlc.narg(review_queue),updated_at=now()
-WHERE enterprise_id=sqlc.arg(target_enterprise_id) AND id=sqlc.arg(target_id)
-  AND revision=sqlc.arg(expected_revision) AND review_state='pending' AND review_mode='enterprise_knowledge_admin_queue'
-RETURNING *;
+WITH op AS (
+  SELECT * FROM dream_policy_operations op
+  WHERE op.enterprise_id=sqlc.arg(target_enterprise_id) AND op.operation_key=sqlc.arg(operation_key)
+    AND op.operation_kind='review' AND op.policy_id=sqlc.arg(target_id) AND op.actor_user_id=sqlc.arg(actor_user_id)
+    AND op.status='pending' AND op.audit_ref_id=sqlc.arg(audit_ref_id)
+  FOR UPDATE
+), changed AS (
+  UPDATE dream_policies SET risk_level=sqlc.arg(risk_level),risk_reasons=sqlc.arg(risk_reasons),review_mode=sqlc.arg(review_mode),
+    reviewer_user_id=sqlc.narg(reviewer_user_id),review_org_path=sqlc.arg(review_org_path),review_queue=sqlc.narg(review_queue),
+    audit_ref_id=sqlc.arg(audit_ref_id),updated_at=now()
+  FROM op WHERE dream_policies.enterprise_id=sqlc.arg(target_enterprise_id) AND dream_policies.id=sqlc.arg(target_id)
+    AND dream_policies.revision=sqlc.arg(expected_revision) AND dream_policies.review_state='pending' AND dream_policies.review_mode='enterprise_knowledge_admin_queue'
+  RETURNING dream_policies.*
+), audit AS (
+  INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
+  SELECT enterprise_id,id,revision,'review-refresh:'||pending_action,sqlc.arg(operation_key),sqlc.arg(audit_ref_id),sqlc.arg(actor_user_id) FROM changed
+  RETURNING policy_id
+)
+SELECT changed.* FROM changed JOIN audit ON audit.policy_id=changed.id;
 
 -- name: DecideDreamPolicyIfRevision :one
-WITH changed AS (
+WITH op AS (
+  SELECT * FROM dream_policy_operations op
+  WHERE op.enterprise_id=sqlc.arg(target_enterprise_id) AND op.operation_key=sqlc.arg(operation_key)
+    AND op.operation_kind='decision' AND op.policy_id=sqlc.arg(target_id) AND op.actor_user_id=sqlc.arg(actor_user_id)::text
+    AND op.status='pending' AND op.audit_ref_id=sqlc.arg(audit_ref_id)
+  FOR UPDATE
+), changed AS (
   UPDATE dream_policies SET review_state=CASE WHEN sqlc.arg(decision)::text='approve' THEN 'approved' ELSE 'rejected' END,
       decision=sqlc.arg(decision), audit_ref_id=sqlc.arg(audit_ref_id), updated_at=now()
-  WHERE dream_policies.enterprise_id=sqlc.arg(target_enterprise_id) AND dream_policies.id=sqlc.arg(target_id)
+  FROM op WHERE dream_policies.enterprise_id=sqlc.arg(target_enterprise_id) AND dream_policies.id=sqlc.arg(target_id)
     AND dream_policies.revision=sqlc.arg(expected_revision) AND dream_policies.review_state='pending'
     AND ((dream_policies.review_mode='upward_review' AND dream_policies.reviewer_user_id=sqlc.arg(actor_user_id) AND dream_policies.requester_user_id<>sqlc.arg(actor_user_id))
       OR (dream_policies.risk_level='low' AND dream_policies.requester_user_id=sqlc.arg(actor_user_id) AND dream_policies.review_mode='single_confirmation'))
-  RETURNING *
+  RETURNING dream_policies.*
 ), audit AS (
   INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
   SELECT enterprise_id,id,revision,'decision:'||pending_action||':'||sqlc.arg(decision),sqlc.arg(operation_key),sqlc.arg(audit_ref_id),sqlc.arg(actor_user_id) FROM changed
@@ -109,11 +146,17 @@ WITH changed AS (
 SELECT changed.* FROM changed JOIN audit ON audit.policy_id=changed.id;
 
 -- name: PublishDreamPolicyGoverned :one
-WITH changed AS (
+WITH op AS (
+  SELECT * FROM dream_policy_operations op
+  WHERE op.enterprise_id=sqlc.arg(target_enterprise_id) AND op.operation_key=sqlc.arg(operation_key)
+    AND op.operation_kind='publish' AND op.policy_id=sqlc.arg(target_id) AND op.actor_user_id=sqlc.arg(actor_user_id)
+    AND op.status='pending' AND op.audit_ref_id=sqlc.arg(audit_ref_id)
+  FOR UPDATE
+), changed AS (
   UPDATE dream_policies SET status='published', revision=revision+1, pending_action='',review_state='',audit_ref_id=sqlc.arg(audit_ref_id), updated_at=now()
-  WHERE dream_policies.enterprise_id=sqlc.arg(target_enterprise_id) AND dream_policies.id=sqlc.arg(target_id)
+  FROM op WHERE dream_policies.enterprise_id=sqlc.arg(target_enterprise_id) AND dream_policies.id=sqlc.arg(target_id)
     AND dream_policies.revision=sqlc.arg(expected_revision) AND dream_policies.status='draft' AND dream_policies.review_state='approved' AND dream_policies.pending_action='publish' AND dream_policies.permission_mode='direct_edit'
-  RETURNING *
+  RETURNING dream_policies.*
 ), inserted AS (
   INSERT INTO dream_policy_versions(policy_id,version,definition)
   SELECT id, COALESCE((SELECT max(version)+1 FROM dream_policy_versions WHERE policy_id=id),1), draft FROM changed
@@ -126,11 +169,17 @@ WITH changed AS (
 SELECT inserted.* FROM inserted JOIN audit ON audit.policy_id=inserted.policy_id;
 
 -- name: DisableDreamPolicyIfRevision :one
-WITH changed AS (
+WITH op AS (
+  SELECT * FROM dream_policy_operations op
+  WHERE op.enterprise_id=sqlc.arg(target_enterprise_id) AND op.operation_key=sqlc.arg(operation_key)
+    AND op.operation_kind='disable' AND op.policy_id=sqlc.arg(target_id) AND op.actor_user_id=sqlc.arg(actor_user_id)
+    AND op.status='pending' AND op.audit_ref_id=sqlc.arg(audit_ref_id)
+  FOR UPDATE
+), changed AS (
   UPDATE dream_policies SET status='disabled', revision=revision+1,pending_action='',review_state='',audit_ref_id=sqlc.arg(audit_ref_id), updated_at=now()
-  WHERE dream_policies.enterprise_id=sqlc.arg(target_enterprise_id) AND dream_policies.id=sqlc.arg(target_id)
+  FROM op WHERE dream_policies.enterprise_id=sqlc.arg(target_enterprise_id) AND dream_policies.id=sqlc.arg(target_id)
     AND dream_policies.revision=sqlc.arg(expected_revision) AND dream_policies.status='published' AND dream_policies.review_state='approved' AND dream_policies.pending_action='disable' AND dream_policies.permission_mode='direct_edit'
-  RETURNING *
+  RETURNING dream_policies.*
 ), audit AS (
   INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
   SELECT enterprise_id,id,revision,'disable',sqlc.arg(operation_key),sqlc.arg(audit_ref_id),sqlc.arg(actor_user_id) FROM changed

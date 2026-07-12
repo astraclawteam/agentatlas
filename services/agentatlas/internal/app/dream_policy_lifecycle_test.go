@@ -76,6 +76,52 @@ func TestDreamPolicyLifecycleAuditFailurePreventsUpdate(t *testing.T) {
 	}
 }
 
+func TestDreamPolicyLifecycleRecoversAfterRemoteAuditReceiptPersistenceFailure(t *testing.T) {
+	mock := adminMock()
+	mock.Tickets["tick_editor"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "editor", Scopes: []string{"edit"}}
+	store := newFakePolicyStore()
+	store.failRecordOnce = true
+	srv, _, _ := newAgentTestServerWithProvidedPolicyStore(t, mock, store)
+	first := doLifecycleJSON(t, http.MethodPost, srv.URL+"/v1/dream-policies", "tick_editor", "audit-record-failure", canonicalDreamPolicyBody())
+	if first.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("first=%d", first.StatusCode)
+	}
+	first.Body.Close()
+	retry := doLifecycleJSON(t, http.MethodPost, srv.URL+"/v1/dream-policies", "tick_editor", "audit-record-failure", canonicalDreamPolicyBody())
+	if retry.StatusCode != http.StatusCreated {
+		t.Fatalf("retry=%d body=%v", retry.StatusCode, decodeBody(t, retry))
+	}
+	retry.Body.Close()
+	if len(mock.AuditLog) != 1 {
+		t.Fatalf("semantic remote audits=%d", len(mock.AuditLog))
+	}
+}
+
+func TestDreamPolicyLifecycleReconcilesTransitionAfterCompletionFailure(t *testing.T) {
+	mock := adminMock()
+	mock.Tickets["tick_editor"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "editor", Scopes: []string{"edit"}}
+	store := newFakePolicyStore()
+	srv, _, _ := newAgentTestServerWithProvidedPolicyStore(t, mock, store)
+	created := decodeBody(t, postJSONReq(t, srv.URL+"/v1/dream-policies", "tick_editor", canonicalDreamPolicyBody()))
+	id := created["dream_policy_id"].(string)
+	store.failCompleteOnce = true
+	updatedPolicy := canonicalDreamPolicyBody()
+	updatedPolicy["schedule"] = "15 22 * * *"
+	first := doLifecycleJSON(t, http.MethodPut, srv.URL+"/v1/dream-policies/"+id, "tick_editor", "transition-complete-failure", map[string]any{"revision": 0, "policy": updatedPolicy})
+	if first.StatusCode != http.StatusInternalServerError || store.policies[id].Revision != 1 {
+		t.Fatalf("first=%d revision=%d", first.StatusCode, store.policies[id].Revision)
+	}
+	first.Body.Close()
+	retry := doLifecycleJSON(t, http.MethodPut, srv.URL+"/v1/dream-policies/"+id, "tick_editor", "transition-complete-failure", map[string]any{"revision": 0, "policy": updatedPolicy})
+	if retry.StatusCode != http.StatusOK {
+		t.Fatalf("retry=%d body=%v", retry.StatusCode, decodeBody(t, retry))
+	}
+	retry.Body.Close()
+	if len(mock.AuditLog) != 2 { // create + exactly one update attempt
+		t.Fatalf("remote audits=%d", len(mock.AuditLog))
+	}
+}
+
 func TestDreamPolicyLifecycleAdminQueueRefreshesFromNexus(t *testing.T) {
 	mock := adminMock()
 	mock.Tickets["tick_editor"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "editor", Scopes: []string{"edit"}}
@@ -106,6 +152,30 @@ func TestDreamPolicyLifecycleAdminQueueRefreshesFromNexus(t *testing.T) {
 		t.Fatalf("queue decision=%d", decision.StatusCode)
 	}
 	decision.Body.Close()
+}
+
+func TestDreamPolicyLifecycleDifferentEditorUsesStoredRequesterForReviewAndRefresh(t *testing.T) {
+	mock := adminMock()
+	mock.Tickets["tick_creator"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "creator", Scopes: []string{"edit"}}
+	mock.Tickets["tick_editor2"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "editor-2", Scopes: []string{"edit"}}
+	mock.ApprovalRoute = nexus.ApprovalRoute{Mode: string(governance.ReviewAdminQueue), RiskLevel: "high", RiskReasons: []string{"workflow_binding"}, RequesterUserID: "creator", OrgPath: []string{"pg_mes"}, Queue: "enterprise_knowledge_admin"}
+	srv, _, _ := newAgentTestServerWithPolicyStore(t, mock)
+	created := decodeBody(t, postJSONReq(t, srv.URL+"/v1/dream-policies", "tick_creator", canonicalDreamPolicyBody()))
+	id := created["dream_policy_id"].(string)
+	queued := doLifecycleJSON(t, http.MethodPost, srv.URL+"/v1/dream-policies/"+id+"/review", "tick_editor2", "different-editor-review", map[string]any{"revision": 0, "action": "publish"})
+	if queued.StatusCode != http.StatusOK {
+		t.Fatalf("different editor queue=%d body=%v", queued.StatusCode, decodeBody(t, queued))
+	}
+	queued.Body.Close()
+	mock.ApprovalRoute = nexus.ApprovalRoute{Mode: string(governance.ReviewUpward), RiskLevel: "high", RiskReasons: []string{"workflow_binding"}, RequesterUserID: "creator", ReviewerUserID: "manager", OrgPath: []string{"pg_mes", "dept"}}
+	refreshed := doLifecycleJSON(t, http.MethodPost, srv.URL+"/v1/dream-policies/"+id+"/review", "tick_editor2", "different-editor-refresh", map[string]any{"revision": 0, "action": "publish"})
+	if refreshed.StatusCode != http.StatusOK {
+		t.Fatalf("different editor refresh=%d body=%v", refreshed.StatusCode, decodeBody(t, refreshed))
+	}
+	body := decodeBody(t, refreshed)
+	if body["requester_user_id"] != "creator" || body["reviewer_user_id"] != "manager" {
+		t.Fatalf("refreshed route=%v", body)
+	}
 }
 
 func TestDreamPolicyLifecycleHighRiskUsesUpwardDifferentReviewer(t *testing.T) {

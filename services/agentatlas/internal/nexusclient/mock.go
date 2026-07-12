@@ -2,6 +2,9 @@ package nexusclient
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -23,7 +26,13 @@ type Mock struct {
 	ApprovalErr      error
 	ApprovalRequests []nexus.ApprovalResolveRequest
 
-	AuditLog []nexus.AppendAuditEvidenceRequest
+	AuditLog      []nexus.AppendAuditEvidenceRequest
+	auditReceipts map[string]mockAuditReceipt
+}
+
+type mockAuditReceipt struct {
+	hash string
+	ref  string
 }
 
 func (m *Mock) ResolveApprovalRoute(_ context.Context, req nexus.ApprovalResolveRequest) (nexus.ApprovalRoute, error) {
@@ -91,6 +100,24 @@ func (m *Mock) ReadEvidence(_ context.Context, req nexus.ReadEvidenceRequest) (n
 func (m *Mock) AppendAuditEvidence(_ context.Context, req nexus.AppendAuditEvidenceRequest) (nexus.AppendAuditEvidenceResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if req.IdempotencyKey != "" {
+		if m.auditReceipts == nil {
+			m.auditReceipts = map[string]mockAuditReceipt{}
+		}
+		raw, _ := json.Marshal(req)
+		sum := sha256.Sum256(raw)
+		hash := hex.EncodeToString(sum[:])
+		if receipt, ok := m.auditReceipts[req.EnterpriseID+"\x00"+req.IdempotencyKey]; ok {
+			if receipt.hash != hash {
+				return nexus.AppendAuditEvidenceResponse{}, fmt.Errorf("audit idempotency payload mismatch")
+			}
+			return nexus.AppendAuditEvidenceResponse{AuditRefID: receipt.ref}, nil
+		}
+		ref := fmt.Sprintf("audit_%d", len(m.AuditLog)+1)
+		m.AuditLog = append(m.AuditLog, req)
+		m.auditReceipts[req.EnterpriseID+"\x00"+req.IdempotencyKey] = mockAuditReceipt{hash: hash, ref: ref}
+		return nexus.AppendAuditEvidenceResponse{AuditRefID: ref}, nil
+	}
 	m.AuditLog = append(m.AuditLog, req)
 	return nexus.AppendAuditEvidenceResponse{AuditRefID: fmt.Sprintf("audit_%d", len(m.AuditLog))}, nil
 }

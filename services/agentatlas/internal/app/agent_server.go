@@ -88,7 +88,7 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 	if dreamRuns == nil && deps.Store != nil {
 		dreamRuns = deps.Store
 	}
-	dr := &dreamRunHandler{store: dreamRuns, nexus: deps.Nexus, rerun: deps.DreamRerun}
+	dr := &dreamRunHandler{store: dreamRuns, nexus: deps.Nexus, rerun: deps.DreamRerun, operations: deps.Dreams}
 	ar := newAgentRunHandler(deps)
 	outlineStore := deps.Outlines
 	if outlineStore == nil && deps.Store != nil {

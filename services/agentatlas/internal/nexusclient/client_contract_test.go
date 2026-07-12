@@ -64,6 +64,9 @@ func contractServer(t *testing.T, serviceSecret string) *httptest.Server {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		if r.Header.Get("Idempotency-Key") != "audit-contract-key-0001" {
+			t.Errorf("audit idempotency header=%q", r.Header.Get("Idempotency-Key"))
+		}
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
@@ -157,6 +160,7 @@ func TestHTTPClientContract(t *testing.T) {
 	}
 
 	audit, err := c.AppendAuditEvidence(ctx, nexus.AppendAuditEvidenceRequest{
+		IdempotencyKey: "audit-contract-key-0001",
 		TicketID: "tick_ok", EnterpriseID: "ent_1", Action: nexus.AuditEvidenceRead,
 		ResourceType: "answer_trace", ResourceID: "trace-1",
 	})

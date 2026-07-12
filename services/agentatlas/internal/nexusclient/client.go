@@ -100,6 +100,9 @@ func (c *HTTPClient) doPost(ctx context.Context, path string, in, out any) error
 	req.Header.Set("Content-Type", "application/json")
 	if path == "/v1/audit/evidence" {
 		req.SetBasicAuth(c.serviceClientID, c.serviceSecret)
+		if auditReq, ok := in.(nexus.AppendAuditEvidenceRequest); ok && auditReq.IdempotencyKey != "" {
+			req.Header.Set("Idempotency-Key", auditReq.IdempotencyKey)
+		}
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {

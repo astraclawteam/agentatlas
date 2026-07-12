@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -42,22 +44,40 @@ func (f *fakeDreamRunStore) CreateDreamAnnotation(_ context.Context, p db.Create
 }
 
 type evidenceNexus struct {
-	scopes     []string
-	denyRead   bool
-	failAudit  bool
-	emptyAudit bool
-	orgAuth    map[string]bool
-	locates    []nexus.LocateEvidenceRequest
-	reads      []nexus.ReadEvidenceRequest
-	audits     []nexus.AppendAuditEvidenceRequest
+	scopes        []string
+	denyRead      bool
+	failAudit     bool
+	emptyAudit    bool
+	orgAuth       map[string]bool
+	locates       []nexus.LocateEvidenceRequest
+	reads         []nexus.ReadEvidenceRequest
+	audits        []nexus.AppendAuditEvidenceRequest
+	auditReceipts map[string]string
 }
 
 type fakeDreamRerunner struct {
-	calls      int
-	sourceRun  string
-	key        string
-	runID      string
-	auditRefID string
+	calls         int
+	sourceRun     string
+	key           string
+	runID         string
+	auditRefID    string
+	backfillCalls int
+	backfillReq   dream.BackfillRequest
+}
+
+func (f *fakeDreamRerunner) Backfill(_ context.Context, req dream.BackfillRequest) (string, error) {
+	f.backfillCalls++
+	f.backfillReq = req
+	return "backfill-1", nil
+}
+func (f *fakeDreamRerunner) LookupBackfill(_ context.Context, req dream.BackfillRequest) (string, bool, error) {
+	if f.backfillReq.IdempotencyKey == "" || f.backfillReq.IdempotencyKey != req.IdempotencyKey {
+		return "", false, nil
+	}
+	if f.backfillReq.PolicyID != req.PolicyID || !f.backfillReq.WindowStart.Equal(req.WindowStart) || !f.backfillReq.WindowEnd.Equal(req.WindowEnd) || f.backfillReq.RerunOfRunID != req.RerunOfRunID {
+		return "", false, errors.New("idempotency key is bound to another backfill")
+	}
+	return "backfill-1", true, nil
 }
 
 func (f *fakeDreamRerunner) Rerun(_ context.Context, _, sourceRun, key, auditRefID string) (string, error) {
@@ -97,13 +117,25 @@ func (n *evidenceNexus) ReadEvidence(_ context.Context, p nexus.ReadEvidenceRequ
 	return nexus.ReadEvidenceResponse{GrantID: "grant-bound", ContentType: "text/markdown", SanitizedExcerpt: "sanitized detail", ContentHash: "sha256:abc"}, nil
 }
 func (n *evidenceNexus) AppendAuditEvidence(_ context.Context, p nexus.AppendAuditEvidenceRequest) (nexus.AppendAuditEvidenceResponse, error) {
-	n.audits = append(n.audits, p)
 	if n.failAudit {
 		return nexus.AppendAuditEvidenceResponse{}, errors.New("audit down")
 	}
 	if n.emptyAudit {
 		return nexus.AppendAuditEvidenceResponse{}, nil
 	}
+	if p.IdempotencyKey != "" {
+		if n.auditReceipts == nil {
+			n.auditReceipts = map[string]string{}
+		}
+		if ref := n.auditReceipts[p.IdempotencyKey]; ref != "" {
+			return nexus.AppendAuditEvidenceResponse{AuditRefID: ref}, nil
+		}
+		n.audits = append(n.audits, p)
+		ref := fmt.Sprintf("audit-%d", len(n.audits))
+		n.auditReceipts[p.IdempotencyKey] = ref
+		return nexus.AppendAuditEvidenceResponse{AuditRefID: ref}, nil
+	}
+	n.audits = append(n.audits, p)
 	return nexus.AppendAuditEvidenceResponse{AuditRefID: "audit-1"}, nil
 }
 
@@ -219,6 +251,64 @@ func TestDreamRoutesRequireScopeAndOrgBoundNexusAuthorization(t *testing.T) {
 			t.Fatalf("status=%d reads=%v", resp.Code, nx.reads)
 		}
 	})
+}
+
+func TestDreamRerunReceiptReconcilesAfterRunBeforeCompletionFailure(t *testing.T) {
+	store := &fakeDreamRunStore{run: dreamRunFixture()}
+	nx := &evidenceNexus{scopes: []string{"dream:rerun"}}
+	allowDreamOrg(nx, "dream:rerun", "ent-1", store.run.OrgUnitID)
+	rerunner := &fakeDreamRerunner{}
+	policyStore := newFakePolicyStore()
+	policyStore.failCompleteOnce = true
+	router := NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRuns: store, DreamRerun: rerunner, Dreams: dream.NewPolicyService(policyStore)})
+	request := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/dream/runs/run-1/reruns", nil)
+		req.Header.Set("X-Nexus-Ticket", "ticket-1")
+		req.Header.Set("Idempotency-Key", "rerun-receipt-key-0001")
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		return resp
+	}
+	if first := request(); first.Code != http.StatusInternalServerError {
+		t.Fatalf("first=%d body=%s", first.Code, first.Body.String())
+	}
+	if retry := request(); retry.Code != http.StatusAccepted {
+		t.Fatalf("retry=%d body=%s", retry.Code, retry.Body.String())
+	}
+	if rerunner.calls != 1 || len(nx.audits) != 1 {
+		t.Fatalf("reruns=%d semantic_audits=%d", rerunner.calls, len(nx.audits))
+	}
+}
+
+func TestDreamBackfillReceiptReconcilesAfterRunBeforeCompletionFailure(t *testing.T) {
+	nx := &evidenceNexus{scopes: []string{"edit"}}
+	allowDreamOrg(nx, "edit", "ent-1", "pg_mes")
+	runner := &fakeDreamRerunner{}
+	policyStore := newFakePolicyStore()
+	raw, _ := json.Marshal(canonicalDreamPolicyBody())
+	policyStore.policies["policy-1"] = db.DreamPolicy{ID: "policy-1", EnterpriseID: "ent-1", OrgScope: "department:rd", Status: "published", Draft: raw, RequesterUserID: "manager-1", PermissionMode: "direct_edit", RiskReasons: []byte(`[]`), ReviewOrgPath: []byte(`[]`)}
+	policyStore.failCompleteOnce = true
+	router := NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRerun: runner, Dreams: dream.NewPolicyService(policyStore)})
+	body := map[string]any{"window_start": "2026-07-01T00:00:00Z", "window_end": "2026-07-02T00:00:00Z"}
+	request := func() *httptest.ResponseRecorder {
+		raw, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/v1/dream-policies/policy-1/backfills", bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Nexus-Ticket", "ticket-1")
+		req.Header.Set("Idempotency-Key", "backfill-receipt-key-0001")
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		return resp
+	}
+	if first := request(); first.Code != http.StatusInternalServerError {
+		t.Fatalf("first=%d body=%s", first.Code, first.Body.String())
+	}
+	if retry := request(); retry.Code != http.StatusAccepted {
+		t.Fatalf("retry=%d body=%s", retry.Code, retry.Body.String())
+	}
+	if runner.backfillCalls != 1 || len(nx.audits) != 1 {
+		t.Fatalf("backfills=%d semantic_audits=%d", runner.backfillCalls, len(nx.audits))
+	}
 }
 
 func TestFailedDreamRunNeverExposesStoredSummary(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
 	"github.com/go-chi/chi/v5"
 )
@@ -31,9 +32,10 @@ type dreamRerunner interface {
 }
 
 type dreamRunHandler struct {
-	store dreamRunStore
-	nexus nexus.Client
-	rerun dreamRerunner
+	store      dreamRunStore
+	nexus      nexus.Client
+	rerun      dreamRerunner
+	operations *dream.PolicyService
 }
 
 func (h *dreamRunHandler) detail(w http.ResponseWriter, r *http.Request) {
@@ -157,19 +159,42 @@ func (h *dreamRunHandler) rerunRun(w http.ResponseWriter, r *http.Request) {
 	if !h.authorizeOrg(w, r, "dream:rerun", view.OrgUnitID) {
 		return
 	}
-	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
-	if key == "" || len(key) > 256 {
-		writeError(w, http.StatusBadRequest, "bad_request", "bounded Idempotency-Key is required")
+	if h.operations == nil {
+		writeError(w, http.StatusServiceUnavailable, "rerun_unavailable", "Dream operation receipt service unavailable")
+		return
+	}
+	key, err := operationKey(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	op, err := h.operations.BeginReceipt(r.Context(), actor.Ticket.EnterpriseID, key, "rerun", view.RunID, actor.Ticket.ActorUserID, operationHash(map[string]any{"source_run_id": view.RunID}))
+	if err != nil {
+		writeError(w, http.StatusConflict, "rerun_failed", err.Error())
+		return
+	}
+	if len(op.Replay) > 0 {
+		var result map[string]string
+		if err := json.Unmarshal(op.Replay, &result); err != nil {
+			writeError(w, http.StatusInternalServerError, "rerun_failed", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, result)
 		return
 	}
 	if id, found, err := h.rerun.LookupRerun(r.Context(), actor.Ticket.EnterpriseID, chi.URLParam(r, "id"), key); err != nil {
 		writeError(w, http.StatusConflict, "rerun_failed", err.Error())
 		return
 	} else if found {
-		writeJSON(w, http.StatusAccepted, map[string]string{"run_id": id})
+		result := map[string]string{"run_id": id}
+		if _, err := h.operations.CompleteReceipt(r.Context(), actor.Ticket.EnterpriseID, key, result); err != nil {
+			writeError(w, http.StatusInternalServerError, "rerun_failed", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, result)
 		return
 	}
-	audit, err := h.nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, Action: nexus.AuditDreamJobRun, ResourceType: "dream_run", ResourceID: view.RunID, Details: map[string]any{"org_unit_id": view.OrgUnitID, "idempotency_key": key, "phase": "manual_rerun_attempt"}})
+	audit, err := h.nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{IdempotencyKey: auditIdempotencyKey(actor.Ticket.EnterpriseID, key), TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, Action: nexus.AuditDreamJobRun, ResourceType: "dream_run", ResourceID: view.RunID, Details: map[string]any{"org_unit_id": view.OrgUnitID, "idempotency_key": key, "phase": "manual_rerun_attempt"}})
 	if err != nil || strings.TrimSpace(audit.AuditRefID) == "" {
 		if err == nil {
 			err = fmt.Errorf("AgentNexus returned no durable audit reference")
@@ -177,12 +202,21 @@ func (h *dreamRunHandler) rerunRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "audit_failed", err.Error())
 		return
 	}
+	if _, err := h.operations.RecordOperationAudit(r.Context(), actor.Ticket.EnterpriseID, key, audit.AuditRefID); err != nil {
+		writeError(w, http.StatusInternalServerError, "operation_receipt_failed", err.Error())
+		return
+	}
 	id, err := h.rerun.Rerun(r.Context(), actor.Ticket.EnterpriseID, chi.URLParam(r, "id"), key, audit.AuditRefID)
 	if err != nil {
 		writeError(w, http.StatusConflict, "rerun_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": id})
+	result := map[string]string{"run_id": id}
+	if _, err := h.operations.CompleteReceipt(r.Context(), actor.Ticket.EnterpriseID, key, result); err != nil {
+		writeError(w, http.StatusInternalServerError, "operation_receipt_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, result)
 }
 
 func (h *dreamRunHandler) evidenceAccess(w http.ResponseWriter, r *http.Request) {

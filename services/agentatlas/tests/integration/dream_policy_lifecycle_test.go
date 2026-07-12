@@ -63,7 +63,7 @@ func TestDreamPolicyLifecyclePostgresCASAndAtomicPublish(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			_, e := q.UpdateDreamPolicyDraftIfRevision(ctx, db.UpdateDreamPolicyDraftIfRevisionParams{OrgScope: "department:d1", Draft: definition, AuditRefID: updateAudits[i], TargetEnterpriseID: enterprise, TargetID: policy, ExpectedRevision: 0, ActorUserID: "editor", OperationKey: updateKeys[i]})
+			_, e := q.UpdateDreamPolicyDraftIfRevision(ctx, db.UpdateDreamPolicyDraftIfRevisionParams{OrgScope: "department:d1", Draft: definition, AuditRefID: pgtype.Text{String: updateAudits[i], Valid: true}, TargetEnterpriseID: enterprise, TargetID: policy, ExpectedRevision: 0, ActorUserID: "editor", OperationKey: updateKeys[i]})
 			errs <- e
 		}(i)
 	}
@@ -111,7 +111,7 @@ func TestDreamPolicyLifecyclePostgresCASAndAtomicPublish(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			_, e := q.PublishDreamPolicyGoverned(ctx, db.PublishDreamPolicyGovernedParams{AuditRefID: publishAudits[i], TargetEnterpriseID: enterprise, TargetID: publishPolicy, ExpectedRevision: 0, ActorUserID: "editor", OperationKey: publishKeys[i]})
+			_, e := q.PublishDreamPolicyGoverned(ctx, db.PublishDreamPolicyGovernedParams{AuditRefID: pgtype.Text{String: publishAudits[i], Valid: true}, TargetEnterpriseID: enterprise, TargetID: publishPolicy, ExpectedRevision: 0, ActorUserID: "editor", OperationKey: publishKeys[i]})
 			errs <- e
 		}(i)
 	}
@@ -150,12 +150,79 @@ func TestDreamPolicyLifecyclePostgresCASAndAtomicPublish(t *testing.T) {
 	}
 	conflictKey := "conflict-audit-" + suffix
 	reserveLifecycleOperation(t, ctx, q, enterprise, conflictKey, "update", auditPolicy, duplicate+"-other")
-	if _, err := q.UpdateDreamPolicyDraftIfRevision(ctx, db.UpdateDreamPolicyDraftIfRevisionParams{OrgScope: "department:d1", Draft: definition, AuditRefID: duplicate, TargetEnterpriseID: enterprise, TargetID: auditPolicy, ExpectedRevision: 0, ActorUserID: "editor", OperationKey: conflictKey}); err == nil {
+	if _, err := q.UpdateDreamPolicyDraftIfRevision(ctx, db.UpdateDreamPolicyDraftIfRevisionParams{OrgScope: "department:d1", Draft: definition, AuditRefID: pgtype.Text{String: duplicate, Valid: true}, TargetEnterpriseID: enterprise, TargetID: auditPolicy, ExpectedRevision: 0, ActorUserID: "editor", OperationKey: conflictKey}); err == nil {
 		t.Fatal("duplicate audit unexpectedly committed transition")
 	}
 	row, err = q.GetEnterpriseDreamPolicy(ctx, db.GetEnterpriseDreamPolicyParams{EnterpriseID: enterprise, ID: auditPolicy})
 	if err != nil || row.Revision != 0 {
 		t.Fatalf("audit failure mutated row=%+v err=%v", row, err)
+	}
+
+	boundPolicy := "policy-bound-" + suffix
+	boundCreateKey := "create-bound-" + suffix
+	reserveLifecycleOperation(t, ctx, q, enterprise, boundCreateKey, "create", boundPolicy, "audit-create-bound-"+suffix)
+	if _, err := q.CreateDreamPolicyLifecycle(ctx, db.CreateDreamPolicyLifecycleParams{ID: boundPolicy, EnterpriseID: enterprise, OrgScope: "department:d1", Draft: definition, RequesterUserID: "editor", PermissionMode: "direct_edit", OperationKey: boundCreateKey}); err != nil {
+		t.Fatal(err)
+	}
+	boundKey := "update-bound-" + suffix
+	boundAudit := "audit-update-bound-" + suffix
+	reserveLifecycleOperation(t, ctx, q, enterprise, boundKey, "update", boundPolicy, boundAudit)
+	for name, params := range map[string]db.UpdateDreamPolicyDraftIfRevisionParams{
+		"policy": {OrgScope: "department:d1", Draft: definition, AuditRefID: pgtype.Text{String: boundAudit, Valid: true}, TargetEnterpriseID: enterprise, TargetID: auditPolicy, ExpectedRevision: 0, ActorUserID: "editor", OperationKey: boundKey},
+		"actor":  {OrgScope: "department:d1", Draft: definition, AuditRefID: pgtype.Text{String: boundAudit, Valid: true}, TargetEnterpriseID: enterprise, TargetID: boundPolicy, ExpectedRevision: 0, ActorUserID: "other", OperationKey: boundKey},
+		"audit":  {OrgScope: "department:d1", Draft: definition, AuditRefID: pgtype.Text{String: "different-audit", Valid: true}, TargetEnterpriseID: enterprise, TargetID: boundPolicy, ExpectedRevision: 0, ActorUserID: "editor", OperationKey: boundKey},
+	} {
+		if _, err := q.UpdateDreamPolicyDraftIfRevision(ctx, params); !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("%s operation substitution err=%v", name, err)
+		}
+	}
+	concurrent := make(chan error, 2)
+	start = make(chan struct{})
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := q.UpdateDreamPolicyDraftIfRevision(ctx, db.UpdateDreamPolicyDraftIfRevisionParams{OrgScope: "department:d1", Draft: definition, AuditRefID: pgtype.Text{String: boundAudit, Valid: true}, TargetEnterpriseID: enterprise, TargetID: boundPolicy, ExpectedRevision: 0, ActorUserID: "editor", OperationKey: boundKey})
+			concurrent <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(concurrent)
+	success, stale = 0, 0
+	for err := range concurrent {
+		if err == nil {
+			success++
+		} else {
+			stale++
+		}
+	}
+	if success != 1 || stale != 1 {
+		t.Fatalf("same operation transition success=%d stale=%d", success, stale)
+	}
+	var transitionCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM dream_policy_transition_audits WHERE enterprise_id=$1 AND operation_key=$2`, enterprise, boundKey).Scan(&transitionCount); err != nil || transitionCount != 1 {
+		t.Fatalf("same operation transition audits=%d err=%v", transitionCount, err)
+	}
+
+	refreshPolicy := "policy-refresh-" + suffix
+	refreshCreateKey := "create-refresh-" + suffix
+	reserveLifecycleOperationActor(t, ctx, q, enterprise, refreshCreateKey, "create", refreshPolicy, "creator", "audit-create-refresh-"+suffix)
+	if _, err := q.CreateDreamPolicyLifecycle(ctx, db.CreateDreamPolicyLifecycleParams{ID: refreshPolicy, EnterpriseID: enterprise, OrgScope: "department:d1", Draft: definition, RequesterUserID: "creator", PermissionMode: "direct_edit", OperationKey: refreshCreateKey}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE dream_policies SET pending_action='publish',review_state='pending',risk_level='high',review_mode='enterprise_knowledge_admin_queue',review_queue='admins' WHERE id=$1`, refreshPolicy); err != nil {
+		t.Fatal(err)
+	}
+	refreshKey := "review-refresh-" + suffix
+	refreshAudit := "audit-review-refresh-" + suffix
+	reserveLifecycleOperation(t, ctx, q, enterprise, refreshKey, "review", refreshPolicy, refreshAudit)
+	if _, err := q.RefreshDreamPolicyReviewRoute(ctx, db.RefreshDreamPolicyReviewRouteParams{TargetEnterpriseID: enterprise, OperationKey: refreshKey, TargetID: refreshPolicy, ActorUserID: "editor", AuditRefID: pgtype.Text{String: refreshAudit, Valid: true}, RiskLevel: "high", RiskReasons: []byte(`[]`), ReviewMode: "upward_review", ReviewerUserID: pgtype.Text{String: "manager", Valid: true}, ReviewOrgPath: []byte(`["department:d1"]`), ExpectedRevision: 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM dream_policy_transition_audits WHERE enterprise_id=$1 AND operation_key=$2 AND transition='review-refresh:publish'`, enterprise, refreshKey).Scan(&transitionCount); err != nil || transitionCount != 1 {
+		t.Fatalf("refresh audit rows=%d err=%v", transitionCount, err)
 	}
 
 	legacyPolicy := "policy-legacy-" + suffix
@@ -164,8 +231,8 @@ func TestDreamPolicyLifecyclePostgresCASAndAtomicPublish(t *testing.T) {
 	}
 	legacyUpdateKey := "update-legacy-" + suffix
 	legacyAudit := "audit-update-legacy-" + suffix
-	reserveLifecycleOperation(t, ctx, q, enterprise, legacyUpdateKey, "update", legacyPolicy, legacyAudit)
-	if _, err := q.UpdateDreamPolicyDraftIfRevision(ctx, db.UpdateDreamPolicyDraftIfRevisionParams{OrgScope: "department:d1", Draft: definition, AuditRefID: legacyAudit, TargetEnterpriseID: enterprise, TargetID: legacyPolicy, ExpectedRevision: 0, ActorUserID: "legacy-owner", OperationKey: legacyUpdateKey}); err != nil {
+	reserveLifecycleOperationActor(t, ctx, q, enterprise, legacyUpdateKey, "update", legacyPolicy, "legacy-owner", legacyAudit)
+	if _, err := q.UpdateDreamPolicyDraftIfRevision(ctx, db.UpdateDreamPolicyDraftIfRevisionParams{OrgScope: "department:d1", Draft: definition, AuditRefID: pgtype.Text{String: legacyAudit, Valid: true}, TargetEnterpriseID: enterprise, TargetID: legacyPolicy, ExpectedRevision: 0, ActorUserID: "legacy-owner", OperationKey: legacyUpdateKey}); err != nil {
 		t.Fatal(err)
 	}
 	legacy, err := q.GetEnterpriseDreamPolicy(ctx, db.GetEnterpriseDreamPolicyParams{EnterpriseID: enterprise, ID: legacyPolicy})
@@ -231,8 +298,12 @@ func TestDreamPolicyLifecycleMigrationDownRestoresV8(t *testing.T) {
 }
 
 func reserveLifecycleOperation(t *testing.T, ctx context.Context, q *db.Queries, enterprise, key, kind, policy, audit string) {
+	reserveLifecycleOperationActor(t, ctx, q, enterprise, key, kind, policy, "editor", audit)
+}
+
+func reserveLifecycleOperationActor(t *testing.T, ctx context.Context, q *db.Queries, enterprise, key, kind, policy, actor, audit string) {
 	t.Helper()
-	_, err := q.ReserveDreamPolicyOperation(ctx, db.ReserveDreamPolicyOperationParams{EnterpriseID: enterprise, OperationKey: key, OperationKind: kind, PolicyID: policy, ActorUserID: "editor", RequestHash: strings.Repeat("a", 64), FactsNonce: "facts-" + key})
+	_, err := q.ReserveDreamPolicyOperation(ctx, db.ReserveDreamPolicyOperationParams{EnterpriseID: enterprise, OperationKey: key, OperationKind: kind, PolicyID: policy, ActorUserID: actor, RequestHash: strings.Repeat("a", 64), FactsNonce: "facts-" + key})
 	if err != nil {
 		t.Fatal(err)
 	}

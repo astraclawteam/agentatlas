@@ -34,6 +34,10 @@ func policyIDForOperation(enterprise, key string) string {
 	sum := sha256.Sum256([]byte(enterprise + "\x00" + key))
 	return "pol_" + hex.EncodeToString(sum[:8])
 }
+func auditIdempotencyKey(enterprise, operationKey string) string {
+	sum := sha256.Sum256([]byte(enterprise + "\x00audit\x00" + operationKey))
+	return "audit_" + hex.EncodeToString(sum[:])
+}
 func (h *dreamPolicyHandler) beginOperation(w http.ResponseWriter, r *http.Request, kind, policyID string, payload any) (dream.Operation, bool) {
 	actor, _ := actorFrom(r.Context())
 	key, err := operationKey(r)
@@ -58,7 +62,7 @@ func (h *dreamPolicyHandler) operationAudit(w http.ResponseWriter, r *http.Reque
 	}
 	details["phase"] = phase + "_attempt"
 	details["operation_key"] = op.Row.OperationKey
-	ref, ok := h.audit(w, r, action, id, details)
+	ref, ok := h.auditWithKey(w, r, action, id, auditIdempotencyKey(op.Row.EnterpriseID, op.Row.OperationKey), details)
 	if !ok {
 		return "", false
 	}
@@ -289,12 +293,12 @@ func (h *dreamPolicyHandler) review(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 503, "governance_unavailable", err.Error())
 		return
 	}
-	resolved, err := client.ResolveApprovalRoute(r.Context(), nexus.ApprovalResolveRequest{TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, ActorUserID: actor.Ticket.ActorUserID, IdempotencyKey: op.Row.OperationKey, OrgVersion: orgVersion, OrgUnitID: view.Policy.OrgUnitID, ResourceType: "dream_policy", ResourceID: id, Action: "dream_policy." + req.Action, ChangedFields: changed, ImpactedOrgUnitIDs: []string{view.Policy.OrgUnitID}, RequestedRisk: string(assessment.RiskLevel), FactsIssuedAt: op.Row.FactsIssuedAt.Time, FactsExpiresAt: op.Row.FactsExpiresAt.Time, FactsNonce: op.Row.FactsNonce})
+	resolved, err := client.ResolveApprovalRoute(r.Context(), nexus.ApprovalResolveRequest{TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, ActorUserID: view.RequesterUserID, IdempotencyKey: op.Row.OperationKey, OrgVersion: orgVersion, OrgUnitID: view.Policy.OrgUnitID, ResourceType: "dream_policy", ResourceID: id, Action: "dream_policy." + req.Action, ChangedFields: changed, ImpactedOrgUnitIDs: []string{view.Policy.OrgUnitID}, RequestedRisk: string(assessment.RiskLevel), FactsIssuedAt: op.Row.FactsIssuedAt.Time, FactsExpiresAt: op.Row.FactsExpiresAt.Time, FactsNonce: op.Row.FactsNonce})
 	if err != nil {
 		writeError(w, 502, "governance_failed", err.Error())
 		return
 	}
-	if resolved.RequesterUserID != actor.Ticket.ActorUserID || (assessment.RiskLevel == governance.RiskHigh && resolved.RiskLevel != "high") {
+	if resolved.RequesterUserID != view.RequesterUserID || (assessment.RiskLevel == governance.RiskHigh && resolved.RiskLevel != "high") {
 		writeError(w, http.StatusBadGateway, "governance_binding_mismatch", "AgentNexus approval route changed requester or downgraded deterministic risk")
 		return
 	}
@@ -302,8 +306,8 @@ func (h *dreamPolicyHandler) review(w http.ResponseWriter, r *http.Request) {
 	if level != governance.RiskLow {
 		level = governance.RiskHigh
 	}
-	route := governance.ReviewRoute{ChangeID: id, ResourceType: governance.ResourceDreamPolicy, ResourceID: id, RequesterUserID: actor.Ticket.ActorUserID, ReviewerUserID: resolved.ReviewerUserID, RiskLevel: level, Mode: governance.ReviewMode(resolved.Mode), State: governance.RoutePending, OrgPath: resolved.OrgPath, Queue: resolved.Queue}
-	if route.RiskLevel == governance.RiskHigh && route.ReviewerUserID == actor.Ticket.ActorUserID {
+	route := governance.ReviewRoute{ChangeID: id, ResourceType: governance.ResourceDreamPolicy, ResourceID: id, RequesterUserID: view.RequesterUserID, ReviewerUserID: resolved.ReviewerUserID, RiskLevel: level, Mode: governance.ReviewMode(resolved.Mode), State: governance.RoutePending, OrgPath: resolved.OrgPath, Queue: resolved.Queue}
+	if route.RiskLevel == governance.RiskHigh && route.ReviewerUserID == view.RequesterUserID {
 		writeError(w, 403, "self_review_denied", "requester cannot review their own high-risk change")
 		return
 	}
@@ -519,9 +523,9 @@ func (h *dreamPolicyHandler) backfill(w http.ResponseWriter, r *http.Request) {
 	if !h.authorizeOrg(w, r, "edit", view.Policy.OrgUnitID) {
 		return
 	}
-	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
-	if key == "" || len(key) > 256 {
-		writeError(w, 400, "bad_request", "bounded Idempotency-Key is required")
+	key, err := operationKey(r)
+	if err != nil {
+		writeError(w, 400, "bad_request", err.Error())
 		return
 	}
 	backfill := dream.BackfillRequest{
@@ -532,15 +536,38 @@ func (h *dreamPolicyHandler) backfill(w http.ResponseWriter, r *http.Request) {
 		RerunOfRunID:   req.RerunOfRunID,
 		IdempotencyKey: key,
 	}
+	op, err := h.deps.Dreams.BeginReceipt(r.Context(), actor.Ticket.EnterpriseID, key, "backfill", id, actor.Ticket.ActorUserID, operationHash(map[string]any{"policy_id": id, "window_start": req.WindowStart, "window_end": req.WindowEnd, "rerun_of_run_id": req.RerunOfRunID}))
+	if err != nil {
+		writeError(w, 409, "backfill_failed", err.Error())
+		return
+	}
+	if len(op.Replay) > 0 {
+		var result map[string]string
+		if err := json.Unmarshal(op.Replay, &result); err != nil {
+			writeError(w, 500, "backfill_failed", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, result)
+		return
+	}
 	if runID, found, err := runner.LookupBackfill(r.Context(), backfill); err != nil {
 		writeError(w, 409, "backfill_failed", err.Error())
 		return
 	} else if found {
-		writeJSON(w, http.StatusAccepted, map[string]string{"run_id": runID})
+		result := map[string]string{"run_id": runID}
+		if _, err := h.deps.Dreams.CompleteReceipt(r.Context(), actor.Ticket.EnterpriseID, key, result); err != nil {
+			writeError(w, 500, "operation_receipt_failed", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, result)
 		return
 	}
-	audit, ok := h.audit(w, r, nexus.AuditDreamJobRun, id, map[string]any{"window_start": req.WindowStart, "window_end": req.WindowEnd, "rerun_of_run_id": req.RerunOfRunID, "idempotency_key": key, "phase": "backfill_attempt"})
+	audit, ok := h.auditWithKey(w, r, nexus.AuditDreamJobRun, id, auditIdempotencyKey(actor.Ticket.EnterpriseID, key), map[string]any{"window_start": req.WindowStart, "window_end": req.WindowEnd, "rerun_of_run_id": req.RerunOfRunID, "idempotency_key": key, "phase": "backfill_attempt"})
 	if !ok {
+		return
+	}
+	if _, err := h.deps.Dreams.RecordOperationAudit(r.Context(), actor.Ticket.EnterpriseID, key, audit); err != nil {
+		writeError(w, 500, "operation_receipt_failed", err.Error())
 		return
 	}
 	backfill.AuditRefID = audit
@@ -549,15 +576,23 @@ func (h *dreamPolicyHandler) backfill(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "backfill_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": runID})
+	result := map[string]string{"run_id": runID}
+	if _, err := h.deps.Dreams.CompleteReceipt(r.Context(), actor.Ticket.EnterpriseID, key, result); err != nil {
+		writeError(w, 500, "operation_receipt_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, result)
 }
 
 func (h *dreamPolicyHandler) authorizeOrg(w http.ResponseWriter, r *http.Request, action, org string) bool {
 	return (&dreamRunHandler{nexus: h.deps.Nexus}).authorizeOrg(w, r, action, org)
 }
 func (h *dreamPolicyHandler) audit(w http.ResponseWriter, r *http.Request, action nexus.AuditAction, id string, details map[string]any) (string, bool) {
+	return h.auditWithKey(w, r, action, id, "", details)
+}
+func (h *dreamPolicyHandler) auditWithKey(w http.ResponseWriter, r *http.Request, action nexus.AuditAction, id, idempotencyKey string, details map[string]any) (string, bool) {
 	actor, _ := actorFrom(r.Context())
-	resp, err := h.deps.Nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, Action: action, ResourceType: "dream_policy", ResourceID: id, Details: details})
+	resp, err := h.deps.Nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{IdempotencyKey: idempotencyKey, TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, Action: action, ResourceType: "dream_policy", ResourceID: id, Details: details})
 	if err != nil || strings.TrimSpace(resp.AuditRefID) == "" {
 		if err == nil {
 			err = fmt.Errorf("AgentNexus returned no durable audit reference")

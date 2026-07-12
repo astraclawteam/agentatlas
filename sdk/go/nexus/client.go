@@ -70,13 +70,14 @@ const (
 )
 
 type AppendAuditEvidenceRequest struct {
-	TicketID     string         `json:"ticket_id"`
-	EnterpriseID string         `json:"enterprise_id"`
-	Action       AuditAction    `json:"action"`
-	ResourceType string         `json:"resource_type"`
-	ResourceID   string         `json:"resource_id"`
-	TraceID      string         `json:"trace_id,omitempty"`
-	Details      map[string]any `json:"details,omitempty"`
+	IdempotencyKey string         `json:"-"`
+	TicketID       string         `json:"ticket_id"`
+	EnterpriseID   string         `json:"enterprise_id"`
+	Action         AuditAction    `json:"action"`
+	ResourceType   string         `json:"resource_type"`
+	ResourceID     string         `json:"resource_id"`
+	TraceID        string         `json:"trace_id,omitempty"`
+	Details        map[string]any `json:"details,omitempty"`
 }
 
 type AppendAuditEvidenceResponse struct {

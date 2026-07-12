@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"iter"
 	"mime/multipart"
@@ -128,13 +129,16 @@ func (f *fakeWorkflowStore) ListWorkflowRunEvents(context.Context, string) ([]db
 
 // fakePolicyStore backs dream.PolicyService in memory.
 type fakePolicyStore struct {
-	policies   map[string]db.DreamPolicy
-	versions   map[string]db.DreamPolicyVersion
-	operations map[string]db.DreamPolicyOperation
+	policies         map[string]db.DreamPolicy
+	versions         map[string]db.DreamPolicyVersion
+	operations       map[string]db.DreamPolicyOperation
+	transitions      map[string]db.DreamPolicyTransitionAudit
+	failRecordOnce   bool
+	failCompleteOnce bool
 }
 
 func newFakePolicyStore() *fakePolicyStore {
-	return &fakePolicyStore{policies: map[string]db.DreamPolicy{}, versions: map[string]db.DreamPolicyVersion{}, operations: map[string]db.DreamPolicyOperation{}}
+	return &fakePolicyStore{policies: map[string]db.DreamPolicy{}, versions: map[string]db.DreamPolicyVersion{}, operations: map[string]db.DreamPolicyOperation{}, transitions: map[string]db.DreamPolicyTransitionAudit{}}
 }
 
 func (f *fakePolicyStore) CreateDreamPolicy(_ context.Context, arg db.CreateDreamPolicyParams) (db.DreamPolicy, error) {
@@ -150,7 +154,18 @@ func (f *fakePolicyStore) CreateDreamPolicyLifecycle(_ context.Context, arg db.C
 	}
 	p := db.DreamPolicy{ID: arg.ID, EnterpriseID: arg.EnterpriseID, OrgScope: arg.OrgScope, Status: "draft", Draft: arg.Draft, RequesterUserID: arg.RequesterUserID, PermissionMode: arg.PermissionMode, RiskReasons: []byte(`[]`), ReviewOrgPath: []byte(`[]`), AuditRefID: op.AuditRefID.String}
 	f.policies[p.ID] = p
+	f.recordTransition(arg.EnterpriseID, arg.OperationKey, p.ID, "create", p.Revision)
 	return db.CreateDreamPolicyLifecycleRow{ID: p.ID, EnterpriseID: p.EnterpriseID, OrgScope: p.OrgScope, Status: p.Status, Draft: p.Draft, Revision: p.Revision, RequesterUserID: p.RequesterUserID, PermissionMode: p.PermissionMode, RiskReasons: p.RiskReasons, ReviewOrgPath: p.ReviewOrgPath, AuditRefID: p.AuditRefID}, nil
+}
+func (f *fakePolicyStore) recordTransition(enterprise, key, policy, transition string, revision int32) {
+	f.transitions[enterprise+"\x00"+key] = db.DreamPolicyTransitionAudit{EnterpriseID: enterprise, OperationKey: key, PolicyID: policy, Transition: transition, Revision: revision}
+}
+func (f *fakePolicyStore) GetDreamPolicyTransitionAuditByOperation(_ context.Context, a db.GetDreamPolicyTransitionAuditByOperationParams) (db.DreamPolicyTransitionAudit, error) {
+	row, ok := f.transitions[a.EnterpriseID+"\x00"+a.OperationKey]
+	if !ok {
+		return db.DreamPolicyTransitionAudit{}, pgx.ErrNoRows
+	}
+	return row, nil
 }
 func (f *fakePolicyStore) GetEnterpriseDreamPolicy(_ context.Context, arg db.GetEnterpriseDreamPolicyParams) (db.DreamPolicy, error) {
 	p, ok := f.policies[arg.ID]
@@ -183,6 +198,10 @@ func (f *fakePolicyStore) GetDreamPolicyOperation(_ context.Context, a db.GetDre
 	return op, nil
 }
 func (f *fakePolicyStore) RecordDreamPolicyOperationAudit(_ context.Context, a db.RecordDreamPolicyOperationAuditParams) (db.DreamPolicyOperation, error) {
+	if f.failRecordOnce {
+		f.failRecordOnce = false
+		return db.DreamPolicyOperation{}, errors.New("injected record audit failure")
+	}
 	key := a.EnterpriseID + "\x00" + a.OperationKey
 	op, ok := f.operations[key]
 	if !ok || op.Status != "pending" {
@@ -193,6 +212,10 @@ func (f *fakePolicyStore) RecordDreamPolicyOperationAudit(_ context.Context, a d
 	return op, nil
 }
 func (f *fakePolicyStore) CompleteDreamPolicyOperation(_ context.Context, a db.CompleteDreamPolicyOperationParams) (db.DreamPolicyOperation, error) {
+	if f.failCompleteOnce {
+		f.failCompleteOnce = false
+		return db.DreamPolicyOperation{}, errors.New("injected operation completion failure")
+	}
 	key := a.EnterpriseID + "\x00" + a.OperationKey
 	op, ok := f.operations[key]
 	if !ok || !op.AuditRefID.Valid {
@@ -237,8 +260,9 @@ func (f *fakePolicyStore) UpdateDreamPolicyDraftIfRevision(_ context.Context, a 
 	p.ReviewOrgPath = []byte(`[]`)
 	p.ReviewQueue = pgtype.Text{}
 	p.Decision = ""
-	p.AuditRefID = a.AuditRefID
+	p.AuditRefID = a.AuditRefID.String
 	f.policies[p.ID] = p
+	f.recordTransition(a.TargetEnterpriseID, a.OperationKey, p.ID, "update", p.Revision)
 	return updateRow(p), nil
 }
 func (f *fakePolicyStore) SubmitDreamPolicyReviewIfRevision(_ context.Context, a db.SubmitDreamPolicyReviewIfRevisionParams) (db.SubmitDreamPolicyReviewIfRevisionRow, error) {
@@ -255,14 +279,15 @@ func (f *fakePolicyStore) SubmitDreamPolicyReviewIfRevision(_ context.Context, a
 	p.ReviewerUserID = a.ReviewerUserID
 	p.ReviewOrgPath = a.ReviewOrgPath
 	p.ReviewQueue = a.ReviewQueue
-	p.AuditRefID = a.AuditRefID
+	p.AuditRefID = a.AuditRefID.String
 	f.policies[p.ID] = p
+	f.recordTransition(a.TargetEnterpriseID, a.OperationKey, p.ID, "review:"+a.PendingAction, p.Revision)
 	return submitRow(p), nil
 }
-func (f *fakePolicyStore) RefreshDreamPolicyReviewRoute(_ context.Context, a db.RefreshDreamPolicyReviewRouteParams) (db.DreamPolicy, error) {
+func (f *fakePolicyStore) RefreshDreamPolicyReviewRoute(_ context.Context, a db.RefreshDreamPolicyReviewRouteParams) (db.RefreshDreamPolicyReviewRouteRow, error) {
 	p, ok := f.policies[a.TargetID]
 	if !ok || p.ReviewState != "pending" || p.ReviewMode != "enterprise_knowledge_admin_queue" || p.Revision != a.ExpectedRevision {
-		return db.DreamPolicy{}, pgx.ErrNoRows
+		return db.RefreshDreamPolicyReviewRouteRow{}, pgx.ErrNoRows
 	}
 	p.RiskLevel = a.RiskLevel
 	p.RiskReasons = a.RiskReasons
@@ -270,12 +295,14 @@ func (f *fakePolicyStore) RefreshDreamPolicyReviewRoute(_ context.Context, a db.
 	p.ReviewerUserID = a.ReviewerUserID
 	p.ReviewOrgPath = a.ReviewOrgPath
 	p.ReviewQueue = a.ReviewQueue
+	p.AuditRefID = a.AuditRefID.String
 	f.policies[p.ID] = p
-	return p, nil
+	f.recordTransition(a.TargetEnterpriseID, a.OperationKey, p.ID, "review-refresh:"+p.PendingAction, p.Revision)
+	return db.RefreshDreamPolicyReviewRouteRow{ID: p.ID, EnterpriseID: p.EnterpriseID, OrgScope: p.OrgScope, Status: p.Status, Draft: p.Draft, Revision: p.Revision, RequesterUserID: p.RequesterUserID, PermissionMode: p.PermissionMode, PendingAction: p.PendingAction, ReviewState: p.ReviewState, RiskLevel: p.RiskLevel, RiskReasons: p.RiskReasons, ReviewMode: p.ReviewMode, ReviewerUserID: p.ReviewerUserID, ReviewOrgPath: p.ReviewOrgPath, ReviewQueue: p.ReviewQueue, Decision: p.Decision, AuditRefID: p.AuditRefID}, nil
 }
 func (f *fakePolicyStore) DecideDreamPolicyIfRevision(_ context.Context, a db.DecideDreamPolicyIfRevisionParams) (db.DecideDreamPolicyIfRevisionRow, error) {
 	p, ok := f.policies[a.TargetID]
-	actor := a.ActorUserID.String
+	actor := a.ActorUserID
 	validActor := (p.ReviewMode == "upward_review" && p.ReviewerUserID.Valid && p.ReviewerUserID.String == actor && p.RequesterUserID != actor) || (p.RiskLevel == "low" && p.ReviewMode == "single_confirmation" && p.RequesterUserID == actor)
 	if !ok || p.EnterpriseID != a.TargetEnterpriseID || p.Revision != a.ExpectedRevision || p.ReviewState != "pending" || !validActor {
 		return db.DecideDreamPolicyIfRevisionRow{}, pgx.ErrNoRows
@@ -286,8 +313,9 @@ func (f *fakePolicyStore) DecideDreamPolicyIfRevision(_ context.Context, a db.De
 	} else {
 		p.ReviewState = "rejected"
 	}
-	p.AuditRefID = a.AuditRefID
+	p.AuditRefID = a.AuditRefID.String
 	f.policies[p.ID] = p
+	f.recordTransition(a.TargetEnterpriseID, a.OperationKey, p.ID, "decision", p.Revision)
 	return decisionRow(p), nil
 }
 func (f *fakePolicyStore) PublishDreamPolicyGoverned(_ context.Context, a db.PublishDreamPolicyGovernedParams) (db.PublishDreamPolicyGovernedRow, error) {
@@ -305,10 +333,11 @@ func (f *fakePolicyStore) PublishDreamPolicyGoverned(_ context.Context, a db.Pub
 	p.PendingAction = ""
 	p.ReviewState = ""
 	p.Revision++
-	p.AuditRefID = a.AuditRefID
+	p.AuditRefID = a.AuditRefID.String
 	f.policies[p.ID] = p
 	row := db.DreamPolicyVersion{PolicyID: p.ID, Version: v, Definition: p.Draft}
 	f.versions[fmt.Sprintf("%s@%d", p.ID, v)] = row
+	f.recordTransition(a.TargetEnterpriseID, a.OperationKey, p.ID, "publish", p.Revision)
 	return db.PublishDreamPolicyGovernedRow{PolicyID: p.ID, Version: v, Definition: p.Draft}, nil
 }
 func (f *fakePolicyStore) DisableDreamPolicyIfRevision(_ context.Context, a db.DisableDreamPolicyIfRevisionParams) (db.DisableDreamPolicyIfRevisionRow, error) {
@@ -320,8 +349,9 @@ func (f *fakePolicyStore) DisableDreamPolicyIfRevision(_ context.Context, a db.D
 	p.PendingAction = ""
 	p.ReviewState = ""
 	p.Revision++
-	p.AuditRefID = a.AuditRefID
+	p.AuditRefID = a.AuditRefID.String
 	f.policies[p.ID] = p
+	f.recordTransition(a.TargetEnterpriseID, a.OperationKey, p.ID, "disable", p.Revision)
 	return disableRow(p), nil
 }
 
@@ -618,6 +648,11 @@ func newAgentTestServer(t *testing.T, nexusClient nexus.Client) (*httptest.Serve
 
 func newAgentTestServerWithPolicyStore(t *testing.T, nexusClient nexus.Client) (*httptest.Server, *fakeOutlineStore, *fakePolicyStore) {
 	t.Helper()
+	return newAgentTestServerWithProvidedPolicyStore(t, nexusClient, newFakePolicyStore())
+}
+
+func newAgentTestServerWithProvidedPolicyStore(t *testing.T, nexusClient nexus.Client, policies *fakePolicyStore) (*httptest.Server, *fakeOutlineStore, *fakePolicyStore) {
+	t.Helper()
 	wfSvc, err := workflow.NewService(newFakeWorkflowStore())
 	if err != nil {
 		t.Fatal(err)
@@ -627,7 +662,6 @@ func newAgentTestServerWithPolicyStore(t *testing.T, nexusClient nexus.Client) (
 		t.Fatal(err)
 	}
 	outlines := &fakeOutlineStore{outlines: map[string]db.MethodOutline{}}
-	policies := newFakePolicyStore()
 	producer := tasks.NewRunner(tasks.NewMemBus())
 	producer.AllowEnqueue(retrieval.JobTypeIndex)
 	router := NewAgentRouter(AgentRouterDeps{
