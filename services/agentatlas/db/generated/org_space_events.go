@@ -39,7 +39,7 @@ type orgSpaceMember struct {
 // reading any related table. Separate statements then receive fresh READ
 // COMMITTED snapshots while the transaction preserves all-or-nothing updates.
 func (q *Queries) ApplyOrgSpaceEvent(ctx context.Context, arg ApplyOrgSpaceEventParams) (result ApplyOrgSpaceEventRow, err error) {
-	err = q.InTransaction(ctx, func(txq *Queries) error {
+	err = q.InTransactionWithOptions(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(txq *Queries) error {
 		if err := txq.LockOrgSpaceMutation(ctx, LockOrgSpaceMutationParams{
 			LockEnterpriseID: arg.EventEnterpriseID,
 			LockOrgScope:     arg.EventOrgScope,

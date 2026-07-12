@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
@@ -92,6 +93,87 @@ func TestOrgSpaceEventAtomicityPostgres(t *testing.T) {
 		assertPostgresOrgState(t, ctx, pool, enterpriseID, "department", "retry-child", 2, "business_unit", "missing-v2", []string{"v2-member"}, 2)
 	})
 
+	t.Run("enforces read committed over session default", func(t *testing.T) {
+		operationConn, err := pool.Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer operationConn.Release()
+		if _, err := operationConn.Exec(ctx, `set default_transaction_isolation = 'repeatable read'`); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _, _ = operationConn.Exec(ctx, `reset default_transaction_isolation`) }()
+		operationPID := postgresBackendPID(t, ctx, operationConn)
+
+		blocker, err := pool.Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer blocker.Release()
+		blockerPID := postgresBackendPID(t, ctx, blocker)
+		const scope = "department:isolation-child"
+		if _, err := blocker.Exec(ctx, `select pg_advisory_lock(hashtextextended($1 || chr(31) || $2, 0))`, enterpriseID, scope); err != nil {
+			t.Fatal(err)
+		}
+		lockHeld := true
+		defer func() {
+			if lockHeld {
+				_, _ = blocker.Exec(ctx, `select pg_advisory_unlock(hashtextextended($1 || chr(31) || $2, 0))`, enterpriseID, scope)
+			}
+		}()
+
+		v2 := atomicOrgEvent(enterpriseID, 2, nexus.ScopeDepartment, "isolation-child", nexus.ScopeCompany, "parent-v3",
+			[]nexus.OrgMember{{UserID: "v2-member", DisplayName: "v2"}})
+		errCh := make(chan error, 1)
+		operationService := spaces.NewService(db.New(operationConn))
+		go func() { _, _, err := operationService.EnsureSpaceFromEvent(ctx, v2); errCh <- err }()
+		waitForAdvisoryLockBlockedBy(t, ctx, pool, operationPID, blockerPID)
+
+		spaceID := newID("isolation-space")
+		seedTx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seed := q.WithTx(seedTx)
+		if _, err := seed.InsertKnowledgeSpace(ctx, db.InsertKnowledgeSpaceParams{
+			ID: spaceID, EnterpriseID: enterpriseID, Kind: "department", Name: "isolation-child",
+			OrgScope: scope, OrgVersion: 1,
+		}); err != nil {
+			_ = seedTx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		if err := seed.UpsertOrgScopeBinding(ctx, db.UpsertOrgScopeBindingParams{
+			EnterpriseID: enterpriseID, SpaceID: spaceID, ScopeKind: "department", ScopeID: "isolation-child",
+			ParentScopeKind: pgText("company"), ParentScopeID: pgText("parent-v1"),
+		}); err != nil {
+			_ = seedTx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		if err := seed.InsertKnowledgeSpaceVersion(ctx, db.InsertKnowledgeSpaceVersionParams{
+			SpaceID: spaceID, OrgVersion: 1, Snapshot: []byte(`{}`),
+		}); err != nil {
+			_ = seedTx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		if err := seed.UpsertSpaceMember(ctx, db.UpsertSpaceMemberParams{
+			SpaceID: spaceID, UserID: "v1-member", DisplayName: "v1", OrgVersion: 1,
+		}); err != nil {
+			_ = seedTx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		if err := seedTx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := blocker.Exec(ctx, `select pg_advisory_unlock(hashtextextended($1 || chr(31) || $2, 0))`, enterpriseID, scope); err != nil {
+			t.Fatal(err)
+		}
+		lockHeld = false
+		if err := <-errCh; err != nil {
+			t.Fatalf("operation inherited repeatable-read session default: %v", err)
+		}
+		assertPostgresOrgState(t, ctx, pool, enterpriseID, "department", "isolation-child", 2, "company", "parent-v3", []string{"v2-member"}, 2)
+	})
+
 	t.Run("concurrent and out-of-order v2 v3", func(t *testing.T) {
 		insertParent(nexus.ScopeBusinessUnit, "parent-v2")
 		v1 := atomicOrgEvent(enterpriseID, 1, nexus.ScopeDepartment, "concurrent-child", nexus.ScopeCompany, "parent-v1", nil)
@@ -103,6 +185,7 @@ func TestOrgSpaceEventAtomicityPostgres(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer blocker.Release()
+		blockerPID := postgresBackendPID(t, ctx, blocker)
 		const triggerLockKey int64 = 734892137
 		if _, err := blocker.Exec(ctx, `select pg_advisory_lock($1)`, triggerLockKey); err != nil {
 			t.Fatal(err)
@@ -136,12 +219,25 @@ func TestOrgSpaceEventAtomicityPostgres(t *testing.T) {
 			[]nexus.OrgMember{{UserID: "v2-member", DisplayName: "v2"}})
 		v3 := atomicOrgEvent(enterpriseID, 3, nexus.ScopeDepartment, "concurrent-child", nexus.ScopeCompany, "parent-v3",
 			[]nexus.OrgMember{{UserID: "v3-member", DisplayName: "v3"}})
+		v2Conn, err := pool.Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer v2Conn.Release()
+		v3Conn, err := pool.Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer v3Conn.Release()
+		v2PID := postgresBackendPID(t, ctx, v2Conn)
+		v3PID := postgresBackendPID(t, ctx, v3Conn)
 		errCh := make(chan error, 2)
-		baselineWaiters := postgresLockWaiters(t, ctx, pool)
-		go func() { _, _, err := service.EnsureSpaceFromEvent(ctx, v2); errCh <- err }()
-		waitForPostgresLockWaiters(t, ctx, pool, baselineWaiters+1)
-		go func() { _, _, err := service.EnsureSpaceFromEvent(ctx, v3); errCh <- err }()
-		waitForPostgresLockWaiters(t, ctx, pool, baselineWaiters+2)
+		v2Service := spaces.NewService(db.New(v2Conn))
+		v3Service := spaces.NewService(db.New(v3Conn))
+		go func() { _, _, err := v2Service.EnsureSpaceFromEvent(ctx, v2); errCh <- err }()
+		waitForAdvisoryLockBlockedBy(t, ctx, pool, v2PID, blockerPID)
+		go func() { _, _, err := v3Service.EnsureSpaceFromEvent(ctx, v3); errCh <- err }()
+		waitForAdvisoryLockBlockedBy(t, ctx, pool, v3PID, v2PID)
 		if _, err := blocker.Exec(ctx, `select pg_advisory_unlock($1)`, triggerLockKey); err != nil {
 			t.Fatal(err)
 		}
@@ -159,38 +255,54 @@ func TestOrgSpaceEventAtomicityPostgres(t *testing.T) {
 	})
 }
 
-func waitForPostgresLockWaiters(t *testing.T, ctx context.Context, pool interface {
+func waitForAdvisoryLockBlockedBy(t *testing.T, ctx context.Context, pool interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
-}, want int) {
+}, waiterPID, blockerPID int32) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		got := postgresLockWaiters(t, ctx, pool)
-		if got >= want {
+		var blocked bool
+		if err := pool.QueryRow(ctx, `
+			select exists (
+				select 1
+				from pg_locks waiting
+				join pg_locks holding
+				  on holding.locktype = waiting.locktype
+				 and holding.database is not distinct from waiting.database
+				 and holding.classid is not distinct from waiting.classid
+				 and holding.objid is not distinct from waiting.objid
+				 and holding.objsubid is not distinct from waiting.objsubid
+				where waiting.locktype = 'advisory'
+				  and waiting.pid = $1
+				  and not waiting.granted
+				  and holding.pid = $2
+				  and holding.granted
+			)
+		`, waiterPID, blockerPID).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("PostgreSQL lock waiters=%d want at least %d", got, want)
+			t.Fatalf("PostgreSQL backend %d did not wait on advisory lock held by backend %d", waiterPID, blockerPID)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 }
 
-func postgresLockWaiters(t *testing.T, ctx context.Context, pool interface {
+func postgresBackendPID(t *testing.T, ctx context.Context, conn interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
-}) int {
+}) int32 {
 	t.Helper()
-	var got int
-	if err := pool.QueryRow(ctx, `
-		select count(*)
-		from pg_stat_activity
-		where datname = current_database()
-		  and wait_event_type = 'Lock'
-	`).Scan(&got); err != nil {
+	var pid int32
+	if err := conn.QueryRow(ctx, `select pg_backend_pid()`).Scan(&pid); err != nil {
 		t.Fatal(err)
 	}
-	return got
+	return pid
 }
+
+func pgText(value string) pgtype.Text { return pgtype.Text{String: value, Valid: true} }
 
 func atomicOrgEvent(enterpriseID string, version int64, kind nexus.OrgScopeKind, id string, parentKind nexus.OrgScopeKind, parentID string, members []nexus.OrgMember) nexus.OrgEvent {
 	return nexus.OrgEvent{

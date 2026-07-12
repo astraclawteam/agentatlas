@@ -64,3 +64,35 @@ Windows-native `-race` was unavailable because the host has no C compiler; the p
 - Failure paths return through the existing transaction helper, whose deferred rollback preserves same-version retry behavior.
 - Generated sqlc output matches the checked-in query source.
 - No enterprise-only material, secrets, private endpoints, or customer data were added.
+
+## Review follow-up
+
+Review found that the first fix relied on the deployment/session default being READ COMMITTED and that its test barrier counted unrelated database waiters.
+
+### Isolation RED
+
+A new real-PostgreSQL regression sets one operation connection's `default_transaction_isolation` to `repeatable read`, starts v2 while its scope advisory lock is held, commits a complete v1 state from another transaction, and then releases the lock. Before the follow-up fix, the operation retained its pre-lock snapshot and failed as expected:
+
+```text
+operation inherited repeatable-read session default: apply org space event department:isolation-child v2: ERROR: duplicate key value violates unique constraint "knowledge_spaces_enterprise_id_org_scope_key" (SQLSTATE 23505)
+```
+
+### Follow-up fix
+
+- Added an options-aware transaction helper using `BeginTx`.
+- `ApplyOrgSpaceEvent` now explicitly begins with `pgx.TxOptions{IsoLevel: pgx.ReadCommitted}` regardless of the session or deployment default.
+- The regression resets the session setting before returning its connection to the pool.
+- The concurrency test now assigns dedicated connections to v2 and v3, captures their PostgreSQL backend PIDs, and waits for exact advisory-lock waiter/holder pairs in `pg_locks`. It no longer observes global lock-waiter counts.
+
+### Follow-up GREEN evidence
+
+- Repeatable-read-default regression plus PID-specific concurrency test: PASS.
+- Pinned Linux container, real PostgreSQL, both reviewed subtests with `-count=10`: PASS (`2.675s`, exit 0).
+- Focused unit and complete PostgreSQL atomicity test: PASS.
+- Pinned Linux container, `-race` focused `internal/spaces` plus real-PostgreSQL atomicity: PASS (`internal/spaces 1.023s`, `tests/integration 1.453s`, exit 0).
+- Pinned Linux container, DSN-enabled `go test ./... -count=1`: PASS, including `tests/integration` (`9.210s`, exit 0).
+- `sqlc generate`: PASS and reproducible.
+- `go vet ./...`: PASS.
+- `git diff --check`: PASS.
+
+Follow-up self-review confirmed that the isolation override is local to this operation, unrelated transaction users keep their existing behavior, advisory waits are identified by exact backend PIDs and matching advisory lock identity, and no unrelated Dream/workflow code changed.
