@@ -23,7 +23,7 @@ func validPolicy() Policy {
 
 func TestPolicyPublishValidatesExactPublishedDreamWorkflow(t *testing.T) {
 	p := validPolicy()
-	def := sdkworkflow.Workflow{WorkflowID: p.Workflow.ID, Version: int(p.Workflow.Version), Kind: sdkworkflow.KindDream, RiskLevel: sdkworkflow.RiskLow, Nodes: []sdkworkflow.Node{{ID: "aggregate", Type: sdkworkflow.NodeDreamAggregate}}}
+	def := sdkworkflow.Workflow{WorkflowID: p.Workflow.ID, Version: int(p.Workflow.Version), Kind: sdkworkflow.KindDream, RiskLevel: sdkworkflow.RiskLow, Nodes: []sdkworkflow.Node{{ID: "aggregate", Type: sdkworkflow.NodeDreamAggregate}, {ID: "trace", Type: sdkworkflow.NodeTraceAppend}}, Edges: []sdkworkflow.Edge{{From: "aggregate", To: "trace"}}}
 	raw, _ := json.Marshal(def)
 	if err := validatePublishedDreamWorkflow("ent-1", p, db.Workflow{ID: p.Workflow.ID, EnterpriseID: "ent-1", Kind: "dream"}, db.WorkflowVersion{WorkflowID: p.Workflow.ID, Version: p.Workflow.Version, Definition: raw}); err != nil {
 		t.Fatal(err)
@@ -40,6 +40,17 @@ func TestPolicyPublishValidatesExactPublishedDreamWorkflow(t *testing.T) {
 		"ambiguous_aggregate": func(_ *db.Workflow, v *db.WorkflowVersion) {
 			d := def
 			d.Nodes = append(d.Nodes, sdkworkflow.Node{ID: "aggregate2", Type: sdkworkflow.NodeDreamAggregate})
+			v.Definition, _ = json.Marshal(d)
+		},
+		"missing_trace": func(_ *db.Workflow, v *db.WorkflowVersion) {
+			d := def
+			d.Nodes = d.Nodes[:1]
+			d.Edges = nil
+			v.Definition, _ = json.Marshal(d)
+		},
+		"unreachable_trace": func(_ *db.Workflow, v *db.WorkflowVersion) {
+			d := def
+			d.Edges = nil
 			v.Definition, _ = json.Marshal(d)
 		},
 	} {

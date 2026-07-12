@@ -20,6 +20,7 @@ type fakeDreamRunStore struct {
 	run         db.GetDreamRunViewRow
 	runs        []db.DreamRun
 	annotations []db.CreateDreamAnnotationParams
+	listCalls   int
 }
 
 func (f *fakeDreamRunStore) GetDreamRunView(_ context.Context, p db.GetDreamRunViewParams) (db.GetDreamRunViewRow, error) {
@@ -29,6 +30,7 @@ func (f *fakeDreamRunStore) GetDreamRunView(_ context.Context, p db.GetDreamRunV
 	return f.run, nil
 }
 func (f *fakeDreamRunStore) ListDreamRunsByOrg(_ context.Context, p db.ListDreamRunsByOrgParams) ([]db.DreamRun, error) {
+	f.listCalls++
 	if p.EnterpriseID != f.run.EnterpriseID || p.OrgUnitID != f.run.OrgUnitID {
 		return nil, errors.New("outside enterprise")
 	}
@@ -40,12 +42,21 @@ func (f *fakeDreamRunStore) CreateDreamAnnotation(_ context.Context, p db.Create
 }
 
 type evidenceNexus struct {
-	scopes    []string
-	denyRead  bool
-	failAudit bool
-	locates   []nexus.LocateEvidenceRequest
-	reads     []nexus.ReadEvidenceRequest
-	audits    []nexus.AppendAuditEvidenceRequest
+	scopes     []string
+	denyRead   bool
+	failAudit  bool
+	emptyAudit bool
+	orgAuth    map[string]bool
+	locates    []nexus.LocateEvidenceRequest
+	reads      []nexus.ReadEvidenceRequest
+	audits     []nexus.AppendAuditEvidenceRequest
+}
+
+type fakeDreamRerunner struct{ calls int }
+
+func (f *fakeDreamRerunner) Rerun(context.Context, string, string, string) (string, error) {
+	f.calls++
+	return "rerun-1", nil
 }
 
 func (n *evidenceNexus) VerifyTicket(context.Context, nexus.VerifyTicketRequest) (nexus.VerifyTicketResponse, error) {
@@ -53,6 +64,12 @@ func (n *evidenceNexus) VerifyTicket(context.Context, nexus.VerifyTicketRequest)
 }
 func (n *evidenceNexus) LocateEvidence(_ context.Context, p nexus.LocateEvidenceRequest) (nexus.LocateEvidenceResponse, error) {
 	n.locates = append(n.locates, p)
+	if p.ResourceURI != "" {
+		if !n.orgAuth[p.QueryIntent+"|"+p.ResourceURI] {
+			return nexus.LocateEvidenceResponse{}, nexusclient.ErrDenied
+		}
+		return nexus.LocateEvidenceResponse{ResourceURI: p.ResourceURI, SourceSystem: "agentatlas"}, nil
+	}
 	return nexus.LocateEvidenceResponse{ResourceURI: "s3://sealed/run-1"}, nil
 }
 func (n *evidenceNexus) ReadEvidence(_ context.Context, p nexus.ReadEvidenceRequest) (nexus.ReadEvidenceResponse, error) {
@@ -67,7 +84,17 @@ func (n *evidenceNexus) AppendAuditEvidence(_ context.Context, p nexus.AppendAud
 	if n.failAudit {
 		return nexus.AppendAuditEvidenceResponse{}, errors.New("audit down")
 	}
+	if n.emptyAudit {
+		return nexus.AppendAuditEvidenceResponse{}, nil
+	}
 	return nexus.AppendAuditEvidenceResponse{AuditRefID: "audit-1"}, nil
+}
+
+func allowDreamOrg(n *evidenceNexus, action, enterprise, org string) {
+	if n.orgAuth == nil {
+		n.orgAuth = map[string]bool{}
+	}
+	n.orgAuth[action+"|"+dreamOrgResourceURI(enterprise, org)] = true
 }
 func (*evidenceNexus) SubscribeOrgEvents(context.Context, string, int64, nexus.OrgEventHandler) error {
 	return nil
@@ -104,6 +131,8 @@ func TestDreamRunReadAndAppendOnlyAnnotation(t *testing.T) {
 	run := dreamRunFixture()
 	store := &fakeDreamRunStore{run: run, runs: []db.DreamRun{{ID: run.ID, EnterpriseID: run.EnterpriseID, OrgUnitID: run.OrgUnitID}}}
 	nx := &evidenceNexus{scopes: []string{"dream:read", "dream:annotate"}}
+	allowDreamOrg(nx, "dream:read", "ent-1", "department:rd")
+	allowDreamOrg(nx, "dream:annotate", "ent-1", "department:rd")
 	router := NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRuns: store})
 
 	resp := requestDream(t, router, http.MethodGet, "/v1/dream/runs/run-1", nil)
@@ -115,6 +144,64 @@ func TestDreamRunReadAndAppendOnlyAnnotation(t *testing.T) {
 	if resp.Code != http.StatusCreated || len(store.annotations) != 1 || store.annotations[0].AnnotationType != "mark_incorrect" || !bytes.Equal(before, []byte(store.run.DisplaySummary)) {
 		t.Fatalf("annotation = %d %s %+v", resp.Code, resp.Body.String(), store.annotations)
 	}
+}
+
+func TestDreamRoutesRequireScopeAndOrgBoundNexusAuthorization(t *testing.T) {
+	run := dreamRunFixture()
+	store := &fakeDreamRunStore{run: run, runs: []db.DreamRun{{ID: run.ID, EnterpriseID: run.EnterpriseID, OrgUnitID: run.OrgUnitID}}}
+
+	t.Run("read scope", func(t *testing.T) {
+		nx := &evidenceNexus{}
+		resp := requestDream(t, NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRuns: store}), http.MethodGet, "/v1/dream/runs/run-1", nil)
+		if resp.Code != http.StatusForbidden {
+			t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+		}
+	})
+	t.Run("cross org list denied before query", func(t *testing.T) {
+		store.listCalls = 0
+		nx := &evidenceNexus{scopes: []string{"dream:read"}, orgAuth: map[string]bool{}}
+		resp := requestDream(t, NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRuns: store}), http.MethodGet, "/v1/dream/runs?org_unit_id=department:other", nil)
+		if resp.Code != http.StatusForbidden || store.listCalls != 0 {
+			t.Fatalf("status=%d listCalls=%d body=%s", resp.Code, store.listCalls, resp.Body.String())
+		}
+		if len(nx.locates) != 1 || nx.locates[0].EnterpriseID != "ent-1" || nx.locates[0].ResourceURI != dreamOrgResourceURI("ent-1", "department:other") {
+			t.Fatalf("authorization binding=%+v", nx.locates)
+		}
+	})
+	t.Run("cross org detail denied", func(t *testing.T) {
+		nx := &evidenceNexus{scopes: []string{"dream:read"}, orgAuth: map[string]bool{}}
+		resp := requestDream(t, NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRuns: store}), http.MethodGet, "/v1/dream/runs/run-1", nil)
+		if resp.Code != http.StatusForbidden {
+			t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+		}
+	})
+	t.Run("cross org annotation denied", func(t *testing.T) {
+		store.annotations = nil
+		nx := &evidenceNexus{scopes: []string{"dream:annotate"}, orgAuth: map[string]bool{}}
+		resp := requestDream(t, NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRuns: store}), http.MethodPost, "/v1/dream/runs/run-1/annotations", map[string]any{"action": "comment", "comment": "x"})
+		if resp.Code != http.StatusForbidden || len(store.annotations) != 0 {
+			t.Fatalf("status=%d annotations=%v", resp.Code, store.annotations)
+		}
+	})
+	t.Run("cross org rerun denied", func(t *testing.T) {
+		nx := &evidenceNexus{scopes: []string{"dream:rerun"}, orgAuth: map[string]bool{}}
+		rerunner := &fakeDreamRerunner{}
+		req := httptest.NewRequest(http.MethodPost, "/v1/dream/runs/run-1/reruns", nil)
+		req.Header.Set("X-Nexus-Ticket", "ticket-1")
+		req.Header.Set("Idempotency-Key", "idem")
+		resp := httptest.NewRecorder()
+		NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRuns: store, DreamRerun: rerunner}).ServeHTTP(resp, req)
+		if resp.Code != http.StatusForbidden || rerunner.calls != 0 {
+			t.Fatalf("status=%d calls=%d", resp.Code, rerunner.calls)
+		}
+	})
+	t.Run("cross org evidence denied before grant", func(t *testing.T) {
+		nx := &evidenceNexus{scopes: []string{"dream:evidence:read"}, orgAuth: map[string]bool{}}
+		resp := requestDream(t, NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRuns: store}), http.MethodPost, "/v1/dream/runs/run-1/evidence-access", nil)
+		if resp.Code != http.StatusForbidden || len(nx.reads) != 0 {
+			t.Fatalf("status=%d reads=%v", resp.Code, nx.reads)
+		}
+	})
 }
 
 func TestFailedDreamRunNeverExposesStoredSummary(t *testing.T) {
@@ -133,17 +220,20 @@ func TestDreamEvidenceAccessRequiresScopeBoundGrantAndAudit(t *testing.T) {
 	run := dreamRunFixture()
 	store := &fakeDreamRunStore{run: run}
 	for _, tc := range []struct {
-		name      string
-		scopes    []string
-		failAudit bool
-		want      int
+		name       string
+		scopes     []string
+		failAudit  bool
+		emptyAudit bool
+		want       int
 	}{
-		{"missing scope", []string{"dream:read"}, false, http.StatusForbidden},
-		{"audit failure", []string{"dream:evidence:read"}, true, http.StatusInternalServerError},
-		{"success", []string{"dream:evidence:read"}, false, http.StatusOK},
+		{"missing scope", []string{"dream:read"}, false, false, http.StatusForbidden},
+		{"audit failure", []string{"dream:evidence:read"}, true, false, http.StatusInternalServerError},
+		{"empty audit reference", []string{"dream:evidence:read"}, false, true, http.StatusInternalServerError},
+		{"success", []string{"dream:evidence:read"}, false, false, http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			nx := &evidenceNexus{scopes: tc.scopes, failAudit: tc.failAudit}
+			nx := &evidenceNexus{scopes: tc.scopes, failAudit: tc.failAudit, emptyAudit: tc.emptyAudit}
+			allowDreamOrg(nx, "dream:evidence:read", "ent-1", "department:rd")
 			resp := requestDream(t, NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRuns: store}), http.MethodPost, "/v1/dream/runs/run-1/evidence-access", nil)
 			if resp.Code != tc.want {
 				t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
@@ -153,7 +243,7 @@ func TestDreamEvidenceAccessRequiresScopeBoundGrantAndAudit(t *testing.T) {
 					t.Fatalf("binding/audit/response = %+v %+v %s", nx.reads, nx.audits, resp.Body.String())
 				}
 			}
-			if tc.failAudit && bytes.Contains(resp.Body.Bytes(), []byte("sanitized detail")) {
+			if (tc.failAudit || tc.emptyAudit) && bytes.Contains(resp.Body.Bytes(), []byte("sanitized detail")) {
 				t.Fatal("detail leaked before mandatory audit")
 			}
 		})

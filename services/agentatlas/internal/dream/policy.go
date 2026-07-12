@@ -239,15 +239,52 @@ func validatePublishedDreamWorkflow(enterpriseID string, p Policy, wf db.Workflo
 		return fmt.Errorf("published Dream workflow definition mismatch")
 	}
 	count := 0
+	aggregateID := ""
+	traceID := ""
+	traceCount := 0
 	for _, node := range def.Nodes {
 		if node.Type == sdkworkflow.NodeDreamAggregate {
 			count++
+			aggregateID = node.ID
+		}
+		if node.Type == sdkworkflow.NodeTraceAppend {
+			traceCount++
+			traceID = node.ID
 		}
 	}
 	if count != 1 {
 		return fmt.Errorf("published Dream workflow requires exactly one dream.aggregate node")
 	}
+	if traceCount != 1 || !workflowNodeReachable(def.Edges, aggregateID, traceID) {
+		return fmt.Errorf("published Dream workflow requires exactly one reachable trace.append after dream.aggregate")
+	}
 	return nil
+}
+
+func workflowNodeReachable(edges []sdkworkflow.Edge, from, target string) bool {
+	if from == "" || target == "" || from == target {
+		return false
+	}
+	adjacency := make(map[string][]string)
+	for _, edge := range edges {
+		adjacency[edge.From] = append(adjacency[edge.From], edge.To)
+	}
+	seen := map[string]bool{from: true}
+	queue := []string{from}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		for _, next := range adjacency[current] {
+			if next == target {
+				return true
+			}
+			if !seen[next] {
+				seen[next] = true
+				queue = append(queue, next)
+			}
+		}
+	}
+	return false
 }
 
 // LoadPublished returns the policy definition of the newest published version.

@@ -224,6 +224,9 @@ func (r *Runner) execute(ctx context.Context, runID string) error {
 	if execution.Status == workflow.RunWaitingConfirmation {
 		return ErrDreamWorkflowPaused
 	}
+	if execution.TraceID == "" {
+		return fmt.Errorf("Dream workflow completed without mandatory trace.append")
+	}
 	out := execution.Output
 	riskJSON, err := json.Marshal(out.Risks)
 	if err != nil {

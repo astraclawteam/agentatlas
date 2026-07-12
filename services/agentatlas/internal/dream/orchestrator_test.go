@@ -34,7 +34,7 @@ func (r *recordingDreamRuntime) DreamResult(_ context.Context, runID string, ver
 }
 
 func TestOrchestratorReconcilesExactExistingWorkflowRun(t *testing.T) {
-	runtime := &recordingDreamRuntime{result: workflow.RunResult{RunID: "wrun-pinned", Status: workflow.RunSucceeded, AggregateNodeID: "aggregate", Outputs: map[string]map[string]any{"aggregate": validDreamWorkflowOutput()}}}
+	runtime := &recordingDreamRuntime{result: workflow.RunResult{RunID: "wrun-pinned", Status: workflow.RunSucceeded, AggregateNodeID: "aggregate", Outputs: validDreamWorkflowOutputs()}}
 	exec := validDreamExecution()
 	exec.ExistingWorkflowRunID = "wrun-pinned"
 	out, err := NewOrchestrator(runtime).Run(context.Background(), exec)
@@ -44,10 +44,17 @@ func TestOrchestratorReconcilesExactExistingWorkflowRun(t *testing.T) {
 }
 
 func TestOrchestratorUsesRuntimeVerifiedAggregateNode(t *testing.T) {
-	runtime := &recordingDreamRuntime{result: workflow.RunResult{RunID: "wrun", Status: workflow.RunSucceeded, AggregateNodeID: "aggregate", Outputs: map[string]map[string]any{"aggregate": validDreamWorkflowOutput(), "spoof": validDreamWorkflowOutput()}}}
+	runtime := &recordingDreamRuntime{result: workflow.RunResult{RunID: "wrun", Status: workflow.RunSucceeded, AggregateNodeID: "aggregate", Outputs: map[string]map[string]any{"aggregate": validDreamWorkflowOutput(), "trace": {"trace_id": "trace-1"}, "spoof": validDreamWorkflowOutput()}}}
 	out, err := NewOrchestrator(runtime).Run(context.Background(), validDreamExecution())
 	if err != nil || out.Output.Display != "display" {
 		t.Fatalf("out=%+v err=%v", out, err)
+	}
+}
+
+func TestOrchestratorRejectsSucceededOutputWithoutMandatoryTrace(t *testing.T) {
+	runtime := &recordingDreamRuntime{result: workflow.RunResult{RunID: "wrun", Status: workflow.RunSucceeded, AggregateNodeID: "aggregate", Outputs: map[string]map[string]any{"aggregate": validDreamWorkflowOutput()}}}
+	if _, err := NewOrchestrator(runtime).Run(context.Background(), validDreamExecution()); err == nil || !strings.Contains(err.Error(), "trace") {
+		t.Fatalf("missing trace accepted: %v", err)
 	}
 }
 
@@ -68,10 +75,14 @@ func validDreamWorkflowOutput() map[string]any {
 	}
 }
 
+func validDreamWorkflowOutputs() map[string]map[string]any {
+	return map[string]map[string]any{"aggregate": validDreamWorkflowOutput(), "trace": {"trace_id": "trace-1"}}
+}
+
 func TestOrchestratorRunsExactlyPinnedPublishedWorkflow(t *testing.T) {
 	runtime := &recordingDreamRuntime{result: workflow.RunResult{
 		RunID: "wrun-1", Status: workflow.RunSucceeded,
-		Outputs: map[string]map[string]any{"aggregate": validDreamWorkflowOutput()}, AggregateNodeID: "aggregate",
+		Outputs: validDreamWorkflowOutputs(), AggregateNodeID: "aggregate",
 	}}
 	orchestrator := NewOrchestrator(runtime)
 	start := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)

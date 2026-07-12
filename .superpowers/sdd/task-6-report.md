@@ -97,7 +97,7 @@ ok internal/app
 
 ## Baseline Test Investigation
 
-`TestDreamJob` fails at `dream_job_test.go:649` even on a newly created database. Systematic comparison used two isolated fresh databases:
+`TestDreamJob` fails at the existing "next tick" assertion (`dream_job_test.go:649` at the Task 6 base; line 651 after adding the mandatory trace fixture) even on a newly created database. Systematic comparison used two isolated fresh databases:
 
 - current Task 6 worktree: FAIL `next tick n=0 err=<nil>`;
 - detached clean `e0c4485b87679674f32adbc8f65eabd48a5956b3`: identical FAIL at the same line.
@@ -108,3 +108,50 @@ Root cause is in the baseline test sequence: it deliberately changes the latest 
 
 - PostgreSQL and object storage cannot share one physical transaction. The design guarantees fail-closed visibility: object storage is staged first and all database-visible state is one transaction. A database failure can leave an orphaned, unreferenced object that lifecycle cleanup should eventually collect.
 - The current AgentNexus public contract exposes Step Grant issuance through `ReadEvidence` rather than a separate grant-validation method. Binding is enforced by passing the verified ticket, enterprise, resource URI and evidence pointer to that call, then requiring its non-empty grant ID in the mandatory audit append.
+
+## Independent Review Fixes
+
+The first independent review rejected four security/durability gaps. All four were addressed with RED regressions before implementation:
+
+1. Every overview/list/detail/action route now requires its exact coarse scope and a resource-bound AgentNexus authorization. Authorization uses the frozen `LocateEvidence` contract with the verified ticket, enterprise, canonical escaped organization resource URI, and action query intent. A denial, transport failure, or non-identical returned URI fails closed. List authorization occurs before the database query; detail/actions authorize the organization bound to the enterprise-scoped persisted run. Cross-organization read/list/annotation/rerun/evidence tests prove denial before mutation, dispatch, grant read, or enumeration.
+2. Migration `000007_dream_output_immutability.sql` rejects UPDATE and DELETE on `dream_summaries`, `dream_evidence_pointers`, and `dream_run_annotations`. The existing migration 000005 unique `(enterprise_id, run_id, layer)` constraint rejects replacement summary layers. Fresh PostgreSQL tests prove legitimate initial inserts, all six mutation denials, replacement denial, and clean 000007 rollback that removes all three triggers.
+3. Evidence access now treats an empty `audit_ref_id` as mandatory audit failure and returns no evidence content.
+4. Dream policy publication now requires exactly one reachable `trace.append` downstream of the sole `dream.aggregate`. The orchestrator also requires exactly one non-empty trace result for every succeeded execution, protecting already-published workflows. The real hierarchy integration injects trace persistence failure and proves the Dream run fails with zero exposed summaries.
+
+Review-fix RED evidence:
+
+```text
+internal/app: undefined dreamOrgResourceURI
+internal/dream: missing trace accepted
+internal/dream policy: missing/unreachable trace accepted
+real PostgreSQL v6: mutable dream_evidence_pointers update accepted
+```
+
+Review-fix GREEN evidence on fresh PostgreSQL 17 and fixed-digest MinIO:
+
+```text
+go test ./tests/integration -run '^(TestDreamHierarchy|TestDreamOutputImmutabilityPostgres)$' -count=1 -v
+PASS
+
+go test ./tests/integration -run '^TestDreamMigrationDownContracts$/000007_safe$' -count=1
+PASS
+
+go test ./...
+PASS
+
+go vet ./...
+PASS
+
+cd sdk/go && go test ./...
+PASS (6 packages)
+```
+
+Post-review sqlc/OpenAPI regeneration remained byte-stable (`5f282702bb03ef11d7184d19c80927b47f919764` before and after), and `git diff --check` passed.
+
+Post-review Linux race verification also passed:
+
+```text
+golang:1.26-bookworm go test -race ./internal/dream ./internal/app
+ok internal/dream
+ok internal/app
+```

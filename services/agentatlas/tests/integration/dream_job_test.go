@@ -25,6 +25,7 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/storage"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/tasks"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/trace"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/workflow"
 )
 
@@ -97,8 +98,9 @@ func TestDreamDirectSuccessLeaseRecovery(t *testing.T) {
 	}
 	wfID, err := wfSvc.CreateDraft(ctx, entID, "Direct Dream", "admin", workflow.Definition{
 		WorkflowID: newID("direct_wf"), Kind: sdkworkflow.KindDream,
-		Nodes: []sdkworkflow.Node{{ID: "aggregate", Type: sdkworkflow.NodeDreamAggregate}},
-		Edges: []sdkworkflow.Edge{}, RiskLevel: sdkworkflow.RiskLow,
+		Nodes:     []sdkworkflow.Node{{ID: "aggregate", Type: sdkworkflow.NodeDreamAggregate}, {ID: "trace", Type: sdkworkflow.NodeTraceAppend}},
+		Edges:     []sdkworkflow.Edge{{From: "aggregate", To: "trace"}},
+		RiskLevel: sdkworkflow.RiskLow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +132,7 @@ func TestDreamDirectSuccessLeaseRecovery(t *testing.T) {
 	taskRunner := tasks.NewRunner(bus)
 	taskRunner.AllowEnqueue(dream.JobTypeDream)
 	synth := dream.NewSynthesizer(nil)
-	wfRuntime := workflow.NewRuntime(q, wfSvc, workflow.NewRegistryWithServices(workflow.Executors{Dream: synth.AggregateWorkflowInput}))
+	wfRuntime := workflow.NewRuntime(q, wfSvc, workflow.NewRegistryWithServices(workflow.Executors{Dream: synth.AggregateWorkflowInput, Traces: trace.NewService(q)}))
 	consumer := dream.NewRunner(q, nil, dream.NewPolicyService(q), taskRunner, dream.NewOrchestrator(wfRuntime))
 	wfRuntime.SetDreamLifecycleHook(consumer.WorkflowLifecycle)
 	result, err := dream.NewOrchestrator(wfRuntime).Run(ctx, dream.DreamExecution{
@@ -345,7 +347,7 @@ func TestDreamJob(t *testing.T) {
 	dreamWorkflowID := newID("wf_dream")
 	_, err = wfSvc.CreateDraft(ctx, entID, "Published Dream", "integration", workflow.Definition{
 		WorkflowID: dreamWorkflowID, Kind: sdkworkflow.KindDream, RiskLevel: sdkworkflow.RiskLow,
-		Nodes: []sdkworkflow.Node{{ID: "confirm", Type: sdkworkflow.NodeHumanConfirm}, {ID: "aggregate", Type: sdkworkflow.NodeDreamAggregate}}, Edges: []sdkworkflow.Edge{{From: "confirm", To: "aggregate"}},
+		Nodes: []sdkworkflow.Node{{ID: "confirm", Type: sdkworkflow.NodeHumanConfirm}, {ID: "aggregate", Type: sdkworkflow.NodeDreamAggregate}, {ID: "trace", Type: sdkworkflow.NodeTraceAppend}}, Edges: []sdkworkflow.Edge{{From: "confirm", To: "aggregate"}, {From: "aggregate", To: "trace"}},
 	})
 	if err != nil {
 		t.Fatalf("Dream workflow: %v", err)
@@ -377,7 +379,7 @@ func TestDreamJob(t *testing.T) {
 	// scheduler tick dispatches; MemBus executes synchronously
 	runner := tasks.NewRunner(tasks.NewMemBus())
 	synth := dream.NewSynthesizer(nil)
-	wfRuntime := workflow.NewRuntime(q, wfSvc, workflow.NewRegistryWithServices(workflow.Executors{Dream: synth.AggregateWorkflowInput}))
+	wfRuntime := workflow.NewRuntime(q, wfSvc, workflow.NewRegistryWithServices(workflow.Executors{Dream: synth.AggregateWorkflowInput, Traces: trace.NewService(q)}))
 	dreamRunner := dream.NewRunner(q, objects, policySvc, runner, dream.NewOrchestrator(wfRuntime))
 	wfRuntime.SetDreamLifecycleHook(dreamRunner.WorkflowLifecycle)
 	if err := dreamRunner.RegisterJobHandler(); err != nil {

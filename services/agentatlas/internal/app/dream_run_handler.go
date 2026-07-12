@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
@@ -35,9 +36,17 @@ type dreamRunHandler struct {
 }
 
 func (h *dreamRunHandler) detail(w http.ResponseWriter, r *http.Request) {
+	actor, _ := actorFrom(r.Context())
+	if !hasScope(actor.Ticket.Scopes, "dream:read") {
+		writeError(w, http.StatusForbidden, "forbidden", "dream:read is required")
+		return
+	}
 	view, err := h.load(r, chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "dream_run_not_found", "Dream run not found")
+		return
+	}
+	if !h.authorizeOrg(w, r, "dream:read", view.OrgUnitID) {
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
@@ -54,6 +63,9 @@ func (h *dreamRunHandler) list(w http.ResponseWriter, r *http.Request) {
 	org := strings.TrimSpace(r.URL.Query().Get("org_unit_id"))
 	if org == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "org_unit_id is required")
+		return
+	}
+	if !h.authorizeOrg(w, r, "dream:read", org) {
 		return
 	}
 	runs, err := h.store.ListDreamRunsByOrg(r.Context(), db.ListDreamRunsByOrgParams{EnterpriseID: actor.Ticket.EnterpriseID, OrgUnitID: org, ResultLimit: maxDreamRunList + 1})
@@ -96,8 +108,12 @@ func (h *dreamRunHandler) annotate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden", "dream:annotate is required")
 		return
 	}
-	if _, err := h.load(r, chi.URLParam(r, "id")); err != nil {
+	view, err := h.load(r, chi.URLParam(r, "id"))
+	if err != nil {
 		writeError(w, http.StatusNotFound, "dream_run_not_found", "Dream run not found")
+		return
+	}
+	if !h.authorizeOrg(w, r, "dream:annotate", view.OrgUnitID) {
 		return
 	}
 	var req struct {
@@ -132,6 +148,14 @@ func (h *dreamRunHandler) rerunRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden", "dream:rerun is required")
 		return
 	}
+	view, err := h.load(r, chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "dream_run_not_found", "Dream run not found")
+		return
+	}
+	if !h.authorizeOrg(w, r, "dream:rerun", view.OrgUnitID) {
+		return
+	}
 	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	if key == "" || len(key) > 256 {
 		writeError(w, http.StatusBadRequest, "bad_request", "bounded Idempotency-Key is required")
@@ -156,6 +180,9 @@ func (h *dreamRunHandler) evidenceAccess(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusNotFound, "dream_evidence_not_found", "Dream evidence not found")
 		return
 	}
+	if !h.authorizeOrg(w, r, "dream:evidence:read", view.OrgUnitID) {
+		return
+	}
 	loc, err := h.nexus.LocateEvidence(r.Context(), nexus.LocateEvidenceRequest{TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, EvidencePointerID: view.EvidencePointerID, QueryIntent: "dream evidence drill-down"})
 	if err != nil {
 		h.writeNexusEvidenceError(w, err)
@@ -175,7 +202,42 @@ func (h *dreamRunHandler) evidenceAccess(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "audit_failed", err.Error())
 		return
 	}
+	if strings.TrimSpace(audit.AuditRefID) == "" {
+		writeError(w, http.StatusInternalServerError, "audit_failed", "AgentNexus returned no durable audit reference")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"grant_id": read.GrantID, "audit_ref_id": audit.AuditRefID, "content_type": read.ContentType, "sanitized_detail": read.SanitizedExcerpt, "content_hash": read.ContentHash})
+}
+
+func dreamOrgResourceURI(enterpriseID, orgUnitID string) string {
+	return "agentatlas://dream/enterprises/" + url.PathEscape(enterpriseID) + "/org-units/" + url.PathEscape(orgUnitID)
+}
+
+func (h *dreamRunHandler) authorizeOrg(w http.ResponseWriter, r *http.Request, action, orgUnitID string) bool {
+	actor, ok := actorFrom(r.Context())
+	if !ok || !hasScope(actor.Ticket.Scopes, action) {
+		writeError(w, http.StatusForbidden, "forbidden", action+" is required")
+		return false
+	}
+	if h.nexus == nil || actor.Ticket.EnterpriseID == "" || strings.TrimSpace(orgUnitID) == "" {
+		writeError(w, http.StatusServiceUnavailable, "authorization_unavailable", "AgentNexus organization authorization unavailable")
+		return false
+	}
+	resourceURI := dreamOrgResourceURI(actor.Ticket.EnterpriseID, orgUnitID)
+	located, err := h.nexus.LocateEvidence(r.Context(), nexus.LocateEvidenceRequest{TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, ResourceURI: resourceURI, QueryIntent: action})
+	if errors.Is(err, nexusclient.ErrDenied) {
+		writeError(w, http.StatusForbidden, "forbidden", "AgentNexus denied organization access")
+		return false
+	}
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "authorization_failed", err.Error())
+		return false
+	}
+	if located.ResourceURI != resourceURI {
+		writeError(w, http.StatusForbidden, "forbidden", "AgentNexus organization binding mismatch")
+		return false
+	}
+	return true
 }
 
 func (h *dreamRunHandler) writeNexusEvidenceError(w http.ResponseWriter, err error) {

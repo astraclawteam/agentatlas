@@ -438,6 +438,19 @@ func TestDreamMigrationDownContracts(t *testing.T) {
 	if dsn == "" {
 		t.Skip("set ATLAS_TEST_POSTGRES_DSN (production-standard postgres from deploy/compose)")
 	}
+	t.Run("000007 safe", func(t *testing.T) {
+		ctx, db := openDreamMigrationDB(t, dsn, 7)
+		if err := goose.DownToContext(ctx, db, "migrations", 6); err != nil {
+			t.Fatal(err)
+		}
+		var triggerCount int
+		if err := db.QueryRowContext(ctx, `select count(*) from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname=current_schema() and tgname in ('dream_summaries_immutable','dream_evidence_pointers_immutable','dream_run_annotations_immutable') and not tgisinternal`).Scan(&triggerCount); err != nil {
+			t.Fatal(err)
+		}
+		if triggerCount != 0 {
+			t.Fatalf("000007 down retained %d immutable triggers", triggerCount)
+		}
+	})
 
 	t.Run("000003 safe", func(t *testing.T) {
 		ctx, db := openDreamMigrationDB(t, dsn, 3)

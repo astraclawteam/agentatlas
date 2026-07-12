@@ -374,7 +374,7 @@ func TestAgentAtlasMVP(t *testing.T) {
 	dreamWorkflowID := "legacy-direct-dream"
 	if _, err := wfSvc.CreateDraft(ctx, enterpriseID, "Published Dream", "admin", workflow.Definition{
 		WorkflowID: dreamWorkflowID, Kind: sdkworkflow.KindDream, RiskLevel: sdkworkflow.RiskLow,
-		Nodes: []sdkworkflow.Node{{ID: "aggregate", Type: sdkworkflow.NodeDreamAggregate}}, Edges: []sdkworkflow.Edge{},
+		Nodes: []sdkworkflow.Node{{ID: "aggregate", Type: sdkworkflow.NodeDreamAggregate}, {ID: "trace", Type: sdkworkflow.NodeTraceAppend}}, Edges: []sdkworkflow.Edge{{From: "aggregate", To: "trace"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +400,7 @@ func TestAgentAtlasMVP(t *testing.T) {
 		t.Fatal(err)
 	}
 	synth := dream.NewSynthesizer(nil)
-	dreamWorkflowRuntime := workflow.NewRuntime(q, wfSvc, workflow.NewRegistryWithServices(workflow.Executors{Dream: synth.AggregateWorkflowInput}))
+	dreamWorkflowRuntime := workflow.NewRuntime(q, wfSvc, workflow.NewRegistryWithServices(workflow.Executors{Dream: synth.AggregateWorkflowInput, Traces: trace.NewService(q)}))
 	dreamRunner := dream.NewRunner(q, objects, policySvc, runner, dream.NewOrchestrator(dreamWorkflowRuntime))
 	if err := dreamRunner.RegisterJobHandler(); err != nil {
 		t.Fatal(err)

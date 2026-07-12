@@ -62,6 +62,7 @@ type DreamExecution struct {
 
 type ExecutionResult struct {
 	WorkflowRunID string
+	TraceID       string
 	Status        string
 	Output        DreamOutput
 	Input         WorkflowInput
@@ -137,12 +138,34 @@ func (o *Orchestrator) Run(ctx context.Context, execution DreamExecution) (Execu
 	if result.AggregateNodeID == "" {
 		return out, fmt.Errorf("Dream workflow has no verified aggregate node")
 	}
+	traceID, err := requiredDreamTrace(result.Outputs)
+	if err != nil {
+		return out, err
+	}
 	dreamOut, err := decodeDreamOutput(result.Outputs, result.AggregateNodeID)
 	if err != nil {
 		return out, err
 	}
 	out.Output = dreamOut
+	out.TraceID = traceID
 	return out, nil
+}
+
+func requiredDreamTrace(outputs map[string]map[string]any) (string, error) {
+	var ids []string
+	for _, output := range outputs {
+		if raw, exists := output["trace_id"]; exists {
+			id, ok := raw.(string)
+			if !ok || strings.TrimSpace(id) == "" {
+				return "", fmt.Errorf("Dream workflow returned an invalid mandatory trace reference")
+			}
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) != 1 {
+		return "", fmt.Errorf("Dream workflow requires exactly one successful trace.append result")
+	}
+	return ids[0], nil
 }
 
 func decodeWorkflowInput(input map[string]any) (WorkflowInput, error) {

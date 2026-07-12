@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"testing"
 	"time"
@@ -24,6 +25,12 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/workflow"
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+type failingDreamTraceStore struct{ *db.Queries }
+
+func (f failingDreamTraceStore) CreateAnswerTrace(context.Context, db.CreateAnswerTraceParams) (db.AnswerTrace, error) {
+	return db.AnswerTrace{}, fmt.Errorf("injected mandatory trace failure")
+}
 
 func TestDreamHierarchy(t *testing.T) {
 	dsn, endpoint := os.Getenv("ATLAS_TEST_POSTGRES_DSN"), os.Getenv("ATLAS_TEST_OBJECT_ENDPOINT")
@@ -168,9 +175,40 @@ func TestDreamHierarchy(t *testing.T) {
 		}
 	}
 
+	failedRun := newID("run-parent-trace-fail")
+	if _, err := q.CreateDreamRun(ctx, db.CreateDreamRunParams{ID: failedRun, PolicyID: policyID, Version: 1, EnterpriseID: ent, Status: "pending", WindowStart: ts(windowStart), WindowEnd: ts(windowEnd), OrgUnitID: "department:parent", PolicyVersion: 1, WorkflowID: wfID, WorkflowVersion: 1, Timezone: "UTC", InputSnapshot: []byte(`{"source_counts":[{"source_type":"child_dream_summary","count":0}],"sanitized_input_ids":[]}`), VisibilitySnapshot: []byte(`{"visibility_level":"managers","org_unit_ids":["department:parent"],"masked_field_count":0}`), ModelRoute: "workflow/" + wfID, ModelVersion: "v1", Attempt: 1, Coverage: coverageRaw, MissingInputs: []byte(`[]`), IdempotencyKey: failedRun, OrgVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	failingTasks := tasks.NewRunner(tasks.NewMemBus())
+	failingRuntime := workflow.NewRuntime(q, wfSvc, workflow.NewRegistryWithServices(workflow.Executors{Dream: aggregate, Traces: trace.NewService(failingDreamTraceStore{Queries: q})}))
+	failingRunner := dream.NewRunner(q, objects, policySvc, failingTasks, dream.NewOrchestrator(failingRuntime))
+	failingRuntime.SetDreamLifecycleHook(failingRunner.WorkflowLifecycle)
+	if err := failingRunner.RegisterJobHandler(); err != nil {
+		t.Fatal(err)
+	}
+	if err := workflow.NewRunJobHandler(failingRuntime, q, failingTasks).RegisterJobHandler(); err != nil {
+		t.Fatal(err)
+	}
+	if err := failingTasks.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := failingTasks.Enqueue(ctx, dream.JobTypeDream, failedRun); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := q.GetDreamRun(ctx, failedRun)
+	if err != nil || failed.Status != "failed" {
+		t.Fatalf("trace failure run=%+v err=%v", failed, err)
+	}
+	var exposed int
+	if err := pool.QueryRow(ctx, `select count(*) from dream_summaries where run_id=$1`, failedRun).Scan(&exposed); err != nil || exposed != 0 {
+		t.Fatalf("trace failure exposed summaries=%d err=%v", exposed, err)
+	}
+
 	nx := nexusclient.NewMock()
 	nx.Tickets["no-evidence"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: ent, ActorUserID: "manager", Scopes: []string{"dream:read"}}
 	nx.Tickets["bound-evidence"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: ent, ActorUserID: "manager", Scopes: []string{"dream:evidence:read"}}
+	orgURI := "agentatlas://dream/enterprises/" + url.PathEscape(ent) + "/org-units/" + url.PathEscape("department:parent")
+	nx.Locations[orgURI] = nexus.LocateEvidenceResponse{ResourceURI: orgURI, SourceSystem: "agentatlas"}
 	nx.Locations[view.EvidencePointerID.String] = nexus.LocateEvidenceResponse{ResourceURI: "s3://sealed/" + parentRun, SourceSystem: "object-storage"}
 	nx.Reads["s3://sealed/"+parentRun] = nexus.ReadEvidenceResponse{GrantID: "grant-hierarchy", ContentType: "text/markdown", SanitizedExcerpt: "sanitized parent detail", ContentHash: "sha256:detail"}
 	router := app.NewAgentRouter(app.AgentRouterDeps{Nexus: nx, Store: q})
