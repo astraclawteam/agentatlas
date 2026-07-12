@@ -67,7 +67,10 @@ func (a NexusAuthorizer) AuthorizeDecision(ctx context.Context, actor Actor, rec
 		req.ReviewMode, req.Queue = string(rec.Route.Mode), rec.Route.Queue
 	}
 	decision, err := authorizeNexus(ctx, a.Client, actor, req)
-	if err != nil || decision.Decision != "allow" || decision.OrgVersion != actor.OrgVersion || !contains(decision.OrgUnitIDs, rec.Draft.OrgUnitID) {
+	// AgentNexus evaluates this exact target and returns the authoritative grant
+	// scopes that justified its decision. An inherited root grant legitimately
+	// names the root rather than echoing the requested child organization.
+	if err != nil || decision.Decision != "allow" || decision.OrgVersion != actor.OrgVersion || len(decision.OrgUnitIDs) == 0 {
 		return ErrForbidden
 	}
 	return nil

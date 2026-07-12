@@ -72,6 +72,15 @@ func TestAdminQueueDecisionBindsModeQueueAndAuditsTransition(t *testing.T) {
 	}
 }
 
+func TestAdminQueueDecisionAcceptsAuthoritativeInheritedRootScope(t *testing.T) {
+	client := &recordingBrowserNexus{decisionOrgUnitIDs: []string{"company_root"}}
+	rec := Record{Draft: model.ChangeDraft{ChangeID: "chg-admin", EnterpriseID: "ent", OrgUnitID: "team_research", ResourceType: model.ResourceWorkflow, ResourceID: "wf", RequesterUserID: "editor", Revision: 1}, Route: model.ReviewRoute{Mode: model.ReviewAdminQueue, Queue: "enterprise_knowledge_admin", RiskLevel: model.RiskHigh}}
+	actor := Actor{EnterpriseID: "ent", UserID: "root-admin", UpstreamAccessToken: "browser-token", OrgVersion: 8, OrgUnitIDs: []string{"company_root"}, Permissions: []string{"approve_high_risk"}}
+	if err := (NexusAuthorizer{Client: client}).AuthorizeDecision(context.Background(), actor, rec, DecisionInput{Decision: "approve"}); err != nil {
+		t.Fatalf("authoritative inherited root decision rejected: %v", err)
+	}
+}
+
 type fakeBrowserNexus struct{ route nexus.ApprovalRoute }
 
 func (f fakeBrowserNexus) AuthorizeBrowserOperation(context.Context, string, nexus.BrowserAuthorizationRequest) (nexus.BrowserAuthorizationDecision, error) {
@@ -99,12 +108,17 @@ type recordingBrowserNexus struct {
 	route                              nexus.ApprovalRoute
 	ticketCalls, bearerCalls           int
 	ticketRouteCalls, ticketAuditCalls int
+	decisionOrgUnitIDs                 []string
 }
 
 func (f *recordingBrowserNexus) AuthorizeBrowserOperation(_ context.Context, _ string, req nexus.BrowserAuthorizationRequest) (nexus.BrowserAuthorizationDecision, error) {
 	f.request = req
 	f.bearerCalls++
-	return nexus.BrowserAuthorizationDecision{Decision: "allow", OrgVersion: req.OrgVersion, OrgUnitIDs: []string{req.OrgUnitID}}, nil
+	orgs := f.decisionOrgUnitIDs
+	if len(orgs) == 0 {
+		orgs = []string{req.OrgUnitID}
+	}
+	return nexus.BrowserAuthorizationDecision{Decision: "allow", OrgVersion: req.OrgVersion, OrgUnitIDs: orgs}, nil
 }
 func (f *recordingBrowserNexus) AuthorizeTicketOperation(_ context.Context, _ string, req nexus.BrowserAuthorizationRequest) (nexus.BrowserAuthorizationDecision, error) {
 	f.request = req
