@@ -98,11 +98,26 @@ func TestOrgSpaceEventAtomicityPostgres(t *testing.T) {
 		if _, _, err := service.EnsureSpaceFromEvent(ctx, v1); err != nil {
 			t.Fatal(err)
 		}
+		blocker, err := pool.Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer blocker.Release()
+		const triggerLockKey int64 = 734892137
+		if _, err := blocker.Exec(ctx, `select pg_advisory_lock($1)`, triggerLockKey); err != nil {
+			t.Fatal(err)
+		}
+		lockHeld := true
+		defer func() {
+			if lockHeld {
+				_, _ = blocker.Exec(ctx, `select pg_advisory_unlock($1)`, triggerLockKey)
+			}
+		}()
 		if _, err := pool.Exec(ctx, `
 			create or replace function block_atomic_v2_binding() returns trigger language plpgsql as $$
 			begin
 				if new.scope_id = 'concurrent-child' and new.parent_scope_id = 'parent-v2' then
-					perform pg_sleep(0.5);
+					perform pg_advisory_xact_lock(734892137);
 				end if;
 				return new;
 			end $$;
@@ -122,9 +137,15 @@ func TestOrgSpaceEventAtomicityPostgres(t *testing.T) {
 		v3 := atomicOrgEvent(enterpriseID, 3, nexus.ScopeDepartment, "concurrent-child", nexus.ScopeCompany, "parent-v3",
 			[]nexus.OrgMember{{UserID: "v3-member", DisplayName: "v3"}})
 		errCh := make(chan error, 2)
+		baselineWaiters := postgresLockWaiters(t, ctx, pool)
 		go func() { _, _, err := service.EnsureSpaceFromEvent(ctx, v2); errCh <- err }()
-		time.Sleep(100 * time.Millisecond)
+		waitForPostgresLockWaiters(t, ctx, pool, baselineWaiters+1)
 		go func() { _, _, err := service.EnsureSpaceFromEvent(ctx, v3); errCh <- err }()
+		waitForPostgresLockWaiters(t, ctx, pool, baselineWaiters+2)
+		if _, err := blocker.Exec(ctx, `select pg_advisory_unlock($1)`, triggerLockKey); err != nil {
+			t.Fatal(err)
+		}
+		lockHeld = false
 		for i := 0; i < 2; i++ {
 			if err := <-errCh; err != nil {
 				t.Fatal(err)
@@ -136,6 +157,39 @@ func TestOrgSpaceEventAtomicityPostgres(t *testing.T) {
 		}
 		assertPostgresOrgState(t, ctx, pool, enterpriseID, "department", "concurrent-child", 3, "company", "parent-v3", []string{"v3-member"}, 3)
 	})
+}
+
+func waitForPostgresLockWaiters(t *testing.T, ctx context.Context, pool interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got := postgresLockWaiters(t, ctx, pool)
+		if got >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("PostgreSQL lock waiters=%d want at least %d", got, want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func postgresLockWaiters(t *testing.T, ctx context.Context, pool interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}) int {
+	t.Helper()
+	var got int
+	if err := pool.QueryRow(ctx, `
+		select count(*)
+		from pg_stat_activity
+		where datname = current_database()
+		  and wait_event_type = 'Lock'
+	`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	return got
 }
 
 func atomicOrgEvent(enterpriseID string, version int64, kind nexus.OrgScopeKind, id string, parentKind nexus.OrgScopeKind, parentID string, members []nexus.OrgMember) nexus.OrgEvent {
