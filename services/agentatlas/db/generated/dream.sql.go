@@ -1931,6 +1931,60 @@ func (q *Queries) ListDreamInputsForRun(ctx context.Context, runID string) ([]Dr
 	return items, nil
 }
 
+const listDreamPolicyLifecyclesByOrgBounded = `-- name: ListDreamPolicyLifecyclesByOrgBounded :many
+SELECT id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, pending_action, review_state, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id FROM dream_policies
+WHERE enterprise_id=$1 AND org_scope=$2
+ORDER BY updated_at DESC, id
+LIMIT $3
+`
+
+type ListDreamPolicyLifecyclesByOrgBoundedParams struct {
+	EnterpriseID string `json:"enterprise_id"`
+	OrgScope     string `json:"org_scope"`
+	ResultLimit  int32  `json:"result_limit"`
+}
+
+func (q *Queries) ListDreamPolicyLifecyclesByOrgBounded(ctx context.Context, arg ListDreamPolicyLifecyclesByOrgBoundedParams) ([]DreamPolicy, error) {
+	rows, err := q.db.Query(ctx, listDreamPolicyLifecyclesByOrgBounded, arg.EnterpriseID, arg.OrgScope, arg.ResultLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DreamPolicy
+	for rows.Next() {
+		var i DreamPolicy
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnterpriseID,
+			&i.OrgScope,
+			&i.Status,
+			&i.Draft,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Revision,
+			&i.RequesterUserID,
+			&i.PermissionMode,
+			&i.PendingAction,
+			&i.ReviewState,
+			&i.RiskLevel,
+			&i.RiskReasons,
+			&i.ReviewMode,
+			&i.ReviewerUserID,
+			&i.ReviewOrgPath,
+			&i.ReviewQueue,
+			&i.Decision,
+			&i.AuditRefID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDreamRunsByOrg = `-- name: ListDreamRunsByOrg :many
 SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at, org_version, operation_kind, audit_ref_id
 FROM dream_runs

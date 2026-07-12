@@ -73,7 +73,7 @@ describe("ConsoleShell", () => {
   it("restores the requested route and renders the four product surfaces", async () => {
     render(<ConsoleShell initialPath="/dream/timeline?window=week" />);
 
-    expect(await screen.findByRole("heading", { name: "企业梦境" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "梦境时间线" })).toBeVisible();
     const navigation = screen.getByRole("navigation", { name: "主要工作区" });
     for (const label of ["企业知识", "企业梦境", "做事流程", "回答依据"]) {
       expect(withinNavigation(navigation, label)).toBeVisible();

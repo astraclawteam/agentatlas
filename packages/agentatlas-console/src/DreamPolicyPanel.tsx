@@ -1,159 +1,17 @@
-// 梦境策略面板：真连 atlas-agent 控制面（GET/POST /v1/dream-policies）。
-// 票据取自头部的全局票据（api.getTicket）；控件复用 claw-runtime-ui 原语。
-import { useCallback, useEffect, useState } from "react";
-import { LegacyButton as ClawButton, LegacyInput as ClawInput } from "./app/runtime-ui-adapters";
-import { createDreamPolicy, getTicket, listDreamPolicies } from "./api";
+import { DreamHeader, DreamSubnav } from "./features/dream/DreamOverviewPage";
+import { DreamPolicyWizard } from "./features/dream/DreamPolicyWizard";
+import { backfillDreamPolicy, checkDreamPolicy, decideDreamPolicy, disableDreamPolicy, publishDreamPolicy, submitDreamPolicyReview, type BasicDreamPolicy, type DreamPolicyLifecycle } from "./api/dream";
+import { useState } from "react";
+import "./features/dream/dream.css";
 
-interface PublishedPolicy {
-  dream_policy_id: string;
-  org_scope: string;
-  status: string;
-  policy?: {
-    schedule?: string;
-    visibility_level?: string;
-    output_space_id?: string;
-    masking_rules?: string[];
-    risk_signal_rules?: string[];
-  };
+export function DreamPolicyPanel({ organizations = [], advancedAllowed = false, advancedMode = false, currentUserID = "", onSubmit }: { organizations?: Array<{ id: string; name: string }>; advancedAllowed?: boolean; advancedMode?: boolean; currentUserID?: string; onSubmit?: (value: BasicDreamPolicy) => DreamPolicyLifecycle | void | Promise<DreamPolicyLifecycle | void> }) {
+  const [policy, setPolicy] = useState<DreamPolicyLifecycle | null>(null); const [error, setError] = useState("");
+  const run = async (task: () => Promise<DreamPolicyLifecycle | void>) => { setError(""); try { const value = await task(); if (value) setPolicy(value); } catch (reason) { setError(reason instanceof Error ? reason.message : "操作没有完成"); } };
+  return <main className="dream-page"><DreamHeader title="梦境工作流" description="用简单选择告诉系统整理哪个组织、使用哪些记录，以及什么时候需要负责人确认。" /><DreamSubnav current="workflow" /><p className="dream-state"><strong>这里的设置只影响之后的新运行</strong><span>历史梦境结果和已发布工作流不会被改写。</span></p><DreamPolicyWizard organizations={organizations} advancedAllowed={advancedAllowed} advancedMode={advancedMode} onSubmit={(value) => run(async () => await onSubmit?.(value))} />{policy ? <DreamPolicyLifecycleControls policy={policy} currentUserID={currentUserID} advancedMode={advancedMode} onSubmitReview={() => run(async () => { await checkDreamPolicy(policy.dream_policy_id, policy.revision); return submitDreamPolicyReview(policy.dream_policy_id, policy.revision, "publish"); })} onDecide={(decision) => run(() => decideDreamPolicy(policy.dream_policy_id, policy.revision, decision))} onPublish={() => run(() => publishDreamPolicy(policy.dream_policy_id, policy.revision))} onDisable={() => run(async () => submitDreamPolicyReview(policy.dream_policy_id, policy.revision, "disable"))} onFinalizeDisable={() => run(() => disableDreamPolicy(policy.dream_policy_id, policy.revision))} onBackfill={(start, end) => run(async () => { await backfillDreamPolicy(policy.dream_policy_id, start, end); })} /> : null}{error ? <p className="dream-state" role="alert"><strong>操作没有完成</strong><span>{error}</span><span>下一步：检查当前状态和权限后重试。</span></p> : null}</main>;
 }
 
-const field: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 4 };
-const labelStyle: React.CSSProperties = { fontSize: 12, color: "var(--claw-text-secondary)", fontFamily: "var(--claw-font)" };
-
-export function DreamPolicyPanel() {
-  const [policies, setPolicies] = useState<PublishedPolicy[]>([]);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({
-    org_scope: "", schedule: "0 22 * * *", output_space_id: "",
-    visibility_level: "members", evidence_retention: "pointer_plus_display_summary",
-    masking_rules: "1[3-9]\\d{9}", risk_signal_rules: "风险[:：]\\S+",
-  });
-
-  const refresh = useCallback(async () => {
-    if (!getTicket()) return;
-    setError("");
-    try {
-      const body = await listDreamPolicies();
-      setPolicies(body.dream_policies ?? []);
-    } catch (e) {
-      setError(`加载策略失败：${(e as Error).message}`);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      await createDreamPolicy({
-        org_scope: form.org_scope,
-        schedule: form.schedule,
-        input_sources: ["work_briefs"],
-        visibility_level: form.visibility_level,
-        masking_rules: form.masking_rules.split("\n").map((s) => s.trim()).filter(Boolean),
-        risk_signal_rules: form.risk_signal_rules.split("\n").map((s) => s.trim()).filter(Boolean),
-        evidence_retention: form.evidence_retention,
-        output_space_id: form.output_space_id,
-      });
-      await refresh();
-    } catch (err) {
-      setError(`创建策略失败：${(err as Error).message}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div style={{ display: "flex", gap: 24, padding: 24, height: "100%", overflow: "auto", boxSizing: "border-box", fontFamily: "var(--claw-font)" }}>
-      <form onSubmit={submit} style={{
-        width: 340, flexShrink: 0, display: "flex", flexDirection: "column", gap: 12,
-        padding: 16, borderRadius: "var(--claw-radius-md)", border: "1px solid var(--claw-border)",
-        background: "var(--claw-surface-solid)", boxShadow: "var(--claw-shadow-1)", height: "fit-content",
-      }}>
-        <h2 style={{ margin: 0, fontSize: 15, color: "var(--claw-text)" }}>新建汇总策略</h2>
-        <div style={{ fontSize: 12, color: "var(--claw-text-muted)" }}>
-          也可以直接对右侧 Agent 说：“研发一部每晚汇总项目风险，不要暴露个人电话”。
-        </div>
-        <ClawInput label="汇总谁（组织范围）" required value={form.org_scope}
-          onChange={(e) => setForm({ ...form, org_scope: e.target.value })} placeholder="project_group:pg_mes" />
-        <ClawInput label="汇总结果放进哪个空间" required value={form.output_space_id}
-          onChange={(e) => setForm({ ...form, output_space_id: e.target.value })} placeholder="spc_…（在“组织知识地图”里能看到）" />
-        <ClawInput label="每天什么时候跑（cron，0 22 * * * = 每晚 22 点）" value={form.schedule}
-          onChange={(e) => setForm({ ...form, schedule: e.target.value })} />
-        <div style={field}>
-          <label style={labelStyle} htmlFor="dp-vis">谁能看到汇总</label>
-          <select id="dp-vis" value={form.visibility_level}
-            onChange={(e) => setForm({ ...form, visibility_level: e.target.value })}
-            style={{
-              padding: "7px 10px", fontSize: 13, borderRadius: "var(--claw-radius-sm)",
-              border: "1px solid var(--claw-border-strong)", background: "var(--claw-surface-solid)",
-              color: "var(--claw-text)", fontFamily: "var(--claw-font)",
-            }}>
-            <option value="members">成员可见</option>
-            <option value="managers">管理者可见</option>
-            <option value="company_sanitized">公司可见（默认脱敏）</option>
-          </select>
-        </div>
-        <div style={field}>
-          <label style={labelStyle} htmlFor="dp-mask">哪些内容要打码（正则，每行一条；默认打码手机号）</label>
-          <textarea id="dp-mask" rows={2} value={form.masking_rules}
-            onChange={(e) => setForm({ ...form, masking_rules: e.target.value })}
-            style={{
-              padding: "7px 10px", fontSize: 13, borderRadius: "var(--claw-radius-sm)",
-              border: "1px solid var(--claw-border-strong)", background: "var(--claw-surface-solid)",
-              color: "var(--claw-text)", fontFamily: "var(--claw-font)", resize: "vertical",
-            }} />
-        </div>
-        <div style={field}>
-          <label style={labelStyle} htmlFor="dp-risk">什么算风险信号（正则，每行一条）</label>
-          <textarea id="dp-risk" rows={2} value={form.risk_signal_rules}
-            onChange={(e) => setForm({ ...form, risk_signal_rules: e.target.value })}
-            style={{
-              padding: "7px 10px", fontSize: 13, borderRadius: "var(--claw-radius-sm)",
-              border: "1px solid var(--claw-border-strong)", background: "var(--claw-surface-solid)",
-              color: "var(--claw-text)", fontFamily: "var(--claw-font)", resize: "vertical",
-            }} />
-        </div>
-        <ClawButton type="submit" disabled={busy || !getTicket()}>
-          {busy ? "创建中…" : "创建并发布策略"}
-        </ClawButton>
-        {error ? <div role="alert" style={{ fontSize: 12, color: "var(--claw-danger)" }}>{error}</div> : null}
-        {!getTicket() ? <div style={{ fontSize: 12, color: "var(--claw-text-muted)" }}>先在右上角粘贴管理员票据。</div> : null}
-      </form>
-
-      <section style={{ flex: 1, minWidth: 0 }}>
-        <h2 style={{ margin: "0 0 12px", fontSize: 15, color: "var(--claw-text)" }}>已发布策略（{policies.length}）</h2>
-        {policies.length === 0 ? (
-          <div style={{ color: "var(--claw-text-muted)", fontSize: 13 }}>
-            还没有策略。左边建一条，或对右侧 Agent 说一句 —— 发布后每晚自动汇总。
-          </div>
-        ) : (
-          <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-            {policies.map((p) => (
-              <li key={p.dream_policy_id} style={{
-                padding: 14, borderRadius: "var(--claw-radius-md)", border: "1px solid var(--claw-border)",
-                background: "var(--claw-surface-solid)", boxShadow: "var(--claw-shadow-1)",
-              }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                  <strong style={{ fontSize: 13, color: "var(--claw-text)" }}>{p.org_scope}</strong>
-                  <span style={{ fontSize: 12, color: "var(--claw-success)" }}>{p.status}</span>
-                </div>
-                <div style={{ marginTop: 6, fontSize: 12, color: "var(--claw-text-secondary)", display: "flex", gap: 14, flexWrap: "wrap" }}>
-                  <span>调度 {p.policy?.schedule ?? "—"}</span>
-                  <span>可见 {p.policy?.visibility_level ?? "—"}</span>
-                  <span>输出空间 {p.policy?.output_space_id ?? "—"}</span>
-                  <span>打码 {p.policy?.masking_rules?.length ?? 0} 条</span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-    </div>
-  );
+export function DreamPolicyLifecycleControls({ policy, currentUserID, advancedMode = false, onSubmitReview, onDecide, onPublish, onDisable, onFinalizeDisable, onBackfill }: { policy: DreamPolicyLifecycle; currentUserID: string; advancedMode?: boolean; onSubmitReview: () => void; onDecide: (decision: "approve" | "reject") => void; onPublish: () => void; onDisable?: () => void; onFinalizeDisable?: () => void; onBackfill?: (start: string, end: string) => void }) {
+  const isReviewer = policy.review_mode === "upward_review" && policy.reviewer_user_id === currentUserID && policy.requester_user_id !== currentUserID;
+  const [backfillStart, setBackfillStart] = useState(""); const [backfillEnd, setBackfillEnd] = useState("");
+  return <section className="dream-advanced" aria-label="梦境工作流发布状态"><h2>检查与发布</h2>{policy.status === "draft" ? <><p>草稿已保存，尚未影响后续运行。系统会先检查风险，再按组织架构安排确认。</p><div className="dream-actions"><button className="dream-primary" onClick={onSubmitReview}>检查并提交复核</button></div></> : null}{policy.status === "review_pending" ? <>{policy.review_mode === "upward_review" ? <p>已提交给上级负责人复核</p> : policy.review_mode === "enterprise_knowledge_admin_queue" ? <p>已进入企业知识管理员待分配队列</p> : <p>等待发起人确认这项低风险变更</p>}{isReviewer || policy.review_mode === "single_confirmation" && policy.requester_user_id === currentUserID ? <div className="dream-actions"><button className="dream-secondary" onClick={() => onDecide("reject")}>驳回</button><button className="dream-primary" onClick={() => onDecide("approve")}>批准发布</button></div> : null}</> : null}{policy.status === "approved" && policy.pending_action === "publish" ? <><p>复核已通过。最后发布后才会影响新的梦境运行。</p><div className="dream-actions"><button className="dream-primary" onClick={onPublish}>发布新版本</button></div></> : null}{policy.status === "published" ? <><p>已发布第 {policy.version} 版，后续运行会使用这个固定版本。</p>{advancedMode ? <><div className="dream-wizard-grid"><label className="dream-field">补跑开始时间<input aria-label="补跑开始时间" type="datetime-local" value={backfillStart} onChange={(event) => setBackfillStart(event.target.value)} /></label><label className="dream-field">补跑结束时间<input aria-label="补跑结束时间" type="datetime-local" value={backfillEnd} onChange={(event) => setBackfillEnd(event.target.value)} /></label></div><div className="dream-actions">{onDisable ? <button className="dream-secondary" onClick={onDisable}>申请停用</button> : null}{onBackfill ? <button className="dream-secondary" disabled={!backfillStart || !backfillEnd} onClick={() => onBackfill(new Date(backfillStart).toISOString(), new Date(backfillEnd).toISOString())}>补跑所选时间段</button> : null}</div></> : null}</> : null}{policy.status === "approved" && policy.pending_action === "disable" ? <><p>停用复核已通过。完成停用后不会再创建新的自动运行。</p>{onFinalizeDisable ? <div className="dream-actions"><button className="dream-primary" onClick={onFinalizeDisable}>完成停用</button></div> : null}</> : null}{policy.status === "disabled" ? <p>这条工作流已停用，不会再创建新的自动运行。</p> : null}</section>;
 }

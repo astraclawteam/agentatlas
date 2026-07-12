@@ -247,6 +247,12 @@ SELECT * FROM dream_policies WHERE enterprise_id = $1 AND status = 'published' O
 -- name: ListPublishedDreamPoliciesBounded :many
 SELECT * FROM dream_policies WHERE enterprise_id=sqlc.arg(enterprise_id) AND status='published' ORDER BY id LIMIT sqlc.arg(result_limit);
 
+-- name: ListDreamPolicyLifecyclesByOrgBounded :many
+SELECT * FROM dream_policies
+WHERE enterprise_id=sqlc.arg(enterprise_id) AND org_scope=sqlc.arg(org_scope)
+ORDER BY updated_at DESC, id
+LIMIT sqlc.arg(result_limit);
+
 -- name: CreateDreamRun :one
 WITH eligible AS (
   SELECT true AS allowed

@@ -144,6 +144,10 @@ type policyLifecycleStore interface {
 	GetDreamPolicyTransitionAuditByOperation(context.Context, db.GetDreamPolicyTransitionAuditByOperationParams) (db.DreamPolicyTransitionAudit, error)
 }
 
+type policyLifecycleLister interface {
+	ListDreamPolicyLifecyclesByOrgBounded(context.Context, db.ListDreamPolicyLifecyclesByOrgBoundedParams) ([]db.DreamPolicy, error)
+}
+
 type LifecycleView struct {
 	ID              string                    `json:"dream_policy_id"`
 	Status          string                    `json:"status"`
@@ -766,6 +770,35 @@ func (s *PolicyService) ListPublishedBounded(ctx context.Context, enterpriseID s
 		out = append(out, PublishedPolicy{ID: row.ID, OrgScope: row.OrgScope, Status: row.Status, Policy: p})
 	}
 	return out, nil
+}
+
+func (s *PolicyService) ListLifecycleByOrgBounded(ctx context.Context, enterpriseID, orgUnitID string, limit int32) ([]LifecycleView, error) {
+	if enterpriseID == "" || orgUnitID == "" || limit < 1 || limit > 1001 {
+		return nil, fmt.Errorf("invalid bounded Dream policy lifecycle list")
+	}
+	lister, ok := s.store.(policyLifecycleLister)
+	if !ok {
+		return nil, fmt.Errorf("policy store does not support lifecycle listing")
+	}
+	rows, err := lister.ListDreamPolicyLifecyclesByOrgBounded(ctx, db.ListDreamPolicyLifecyclesByOrgBoundedParams{EnterpriseID: enterpriseID, OrgScope: orgUnitID, ResultLimit: limit})
+	if err != nil {
+		return nil, err
+	}
+	views := make([]LifecycleView, 0, len(rows))
+	for _, row := range rows {
+		version := int32(0)
+		if row.Status == "published" {
+			if latest, err := s.store.GetLatestDreamPolicyVersion(ctx, row.ID); err == nil {
+				version = latest.Version
+			}
+		}
+		view, err := lifecycleView(row, version)
+		if err != nil {
+			return nil, err
+		}
+		views = append(views, view)
+	}
+	return views, nil
 }
 
 // PublishedPolicy pairs a policy row with its decoded definition.

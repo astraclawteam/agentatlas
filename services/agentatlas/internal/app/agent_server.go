@@ -157,6 +157,15 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 			knowledgeStore = deps.Store
 		}
 		knowledge := &browserKnowledgeHandler{orgs: orgStore, store: knowledgeStore, authorizer: deps.BrowserAuthorizer}
+		var browserDreamEvidence browserDreamEvidenceClient
+		if candidate, ok := deps.BrowserAuthorizer.(browserDreamEvidenceClient); ok {
+			browserDreamEvidence = candidate
+		}
+		var browserBackfill dreamBackfiller
+		if candidate, ok := deps.DreamRerun.(dreamBackfiller); ok {
+			browserBackfill = candidate
+		}
+		browserDream := &browserDreamHandler{store: dreamRuns, authorizer: deps.BrowserAuthorizer, evidence: browserDreamEvidence, rerun: deps.DreamRerun, backfill: browserBackfill, operations: deps.Dreams}
 		if deps.Changes != nil {
 			knowledge.changes = deps.Changes
 		}
@@ -177,6 +186,26 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 		r.Get("/auth/callback", browser.callback)
 		r.Get("/api/session", browser.session)
 		r.With(browser.sessionGuard).Get("/api/knowledge", knowledge.list)
+		r.Route("/api/dream", func(r chi.Router) {
+			r.Use(browser.sessionGuard)
+			r.Get("/runs", browserDream.list)
+			r.Get("/runs/{id}", browserDream.detail)
+			r.Get("/policies", browserDream.listPolicies)
+			r.Group(func(r chi.Router) {
+				r.Use(sameOriginCSRF)
+				r.Post("/runs/{id}/annotations", browserDream.annotate)
+				r.Post("/runs/{id}/reruns", browserDream.rerunRun)
+				r.Post("/runs/{id}/evidence-access", browserDream.evidenceAccess)
+				r.Post("/policies", browserDream.createPolicy)
+				r.Put("/policies/{id}", browserDream.updatePolicy)
+				r.Post("/policies/{id}/check", browserDream.checkPolicy)
+				r.Post("/policies/{id}/review", browserDream.reviewPolicy)
+				r.Post("/policies/{id}/decisions", browserDream.decidePolicy)
+				r.Post("/policies/{id}/publish", browserDream.publishPolicy)
+				r.Post("/policies/{id}/disable", browserDream.disablePolicy)
+				r.Post("/policies/{id}/backfills", browserDream.backfillPolicy)
+			})
+		})
 		r.With(browser.sessionGuard, sameOriginCSRF).Post("/auth/logout", browser.logout)
 		r.Route("/api/legacy", func(r chi.Router) {
 			r.Use(browser.sessionGuard)

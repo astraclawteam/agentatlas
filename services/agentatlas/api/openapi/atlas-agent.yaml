@@ -45,6 +45,132 @@ paths:
         '403': {description: The selected organization is not authorized.}
         '404': {$ref: '#/components/responses/NotFound'}
         '503': {description: Authorization or safely bounded knowledge data is unavailable.}
+  /api/dream/runs:
+    get:
+      security: [{AtlasSession: []}]
+      operationId: listBrowserDreamRuns
+      description: Lists immutable Dream runs after exact browser-session organization authorization by AgentNexus.
+      parameters:
+        - {name: org_unit_id, in: query, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: window, in: query, schema: {type: string, format: date}}
+      responses:
+        '200': {description: Bounded immutable Dream runs, content: {application/json: {schema: {$ref: '#/components/schemas/DreamRunList'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: Browser session or AgentNexus denied the exact organization.}
+        '503': {description: Authorization or bounded Dream data is unavailable.}
+  /api/dream/runs/{id}:
+    get:
+      security: [{AtlasSession: []}]
+      operationId: getBrowserDreamRun
+      parameters: [{name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}]
+      responses:
+        '200': {description: Immutable Dream run, content: {application/json: {schema: {$ref: '#/components/schemas/DreamRunView'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: Browser session or AgentNexus denied the exact run organization.}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/dream/runs/{id}/annotations:
+    post:
+      security: [{AtlasSession: []}]
+      operationId: annotateBrowserDreamRun
+      description: Appends an idempotent governed annotation; immutable Dream output is never edited.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 256}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, required: [action], properties: {action: {type: string, enum: [confirm, reject, mark_incorrect, comment]}, comment: {type: string, maxLength: 4000}}}}}}
+      responses: {'201': {description: Annotation appended.}, '403': {description: Exact annotation authorization denied.}, '409': {description: Idempotency conflict.}}
+  /api/dream/runs/{id}/reruns:
+    post:
+      security: [{AtlasSession: []}]
+      operationId: rerunBrowserDreamRun
+      description: Creates an idempotent immutable rerun pinned to the original run window and versions.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 256}}
+      responses: {'202': {description: Rerun scheduled.}, '403': {description: Exact rerun authorization denied.}, '409': {description: Idempotency conflict.}}
+  /api/dream/runs/{id}/evidence-access:
+    post:
+      security: [{AtlasSession: []}]
+      operationId: accessBrowserDreamEvidence
+      description: Requests a resource-bound AgentNexus Step Grant, appends mandatory audit, then returns sanitized detail without raw pointer, grant, or audit identifiers.
+      parameters: [{name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}]
+      responses:
+        '200': {description: Sanitized audited evidence detail, content: {application/json: {schema: {type: object, additionalProperties: false, required: [content_type, sanitized_detail, content_hash], properties: {content_type: {type: string}, sanitized_detail: {type: string, maxLength: 100000}, content_hash: {type: string}}}}}}
+        '403': {description: Step Grant or exact organization authorization denied.}
+        '503': {description: Authorization, Step Grant, evidence read, or mandatory audit unavailable.}
+  /api/dream/policies:
+    get:
+      security: [{AtlasSession: []}]
+      operationId: listBrowserDreamPolicies
+      parameters: [{name: org_unit_id, in: query, required: true, schema: {type: string, minLength: 1, maxLength: 128}}]
+      responses: {'200': {description: Bounded draft, review, published, and disabled policy lifecycle views for one exactly authorized organization.}, '403': {description: Exact policy read authorization denied.}}
+    post:
+      security: [{AtlasSession: []}]
+      operationId: createBrowserDreamPolicyDraft
+      description: Creates an audited governed draft only; this route never publishes.
+      parameters: [{name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 256}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/DreamPolicyDefinition'}}}}
+      responses: {'201': {description: Governed Dream policy draft created.}, '403': {description: Exact edit or suggestion authorization denied.}, '409': {description: Idempotency conflict.}, '422': {description: Public policy definition invalid.}}
+  /api/dream/policies/{id}:
+    put:
+      security: [{AtlasSession: []}]
+      operationId: updateBrowserDreamPolicyDraft
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [revision, policy], properties: {revision: {type: integer, minimum: 0}, policy: {$ref: '#/components/schemas/DreamPolicyDefinition'}}}}}}
+      responses: {'200': {description: Draft updated without publication.}, '403': {description: Exact edit authorization denied.}, '409': {description: Revision or idempotency conflict.}}
+  /api/dream/policies/{id}/check:
+    post:
+      security: [{AtlasSession: []}]
+      operationId: checkBrowserDreamPolicyRisk
+      parameters: [{name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [revision], properties: {revision: {type: integer, minimum: 0}}}}}}
+      responses: {'200': {description: Deterministic risk and changed fields.}, '403': {description: Exact edit authorization denied.}, '409': {description: Stale revision.}}
+  /api/dream/policies/{id}/review:
+    post:
+      security: [{AtlasSession: []}]
+      operationId: submitBrowserDreamPolicyReview
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [revision, action], properties: {revision: {type: integer, minimum: 0}, action: {type: string, enum: [publish, disable]}}}}}}
+      responses: {'200': {description: AgentNexus-bound single-confirmation, upward-review, or admin-queue route recorded.}, '403': {description: Requester, organization, or self-review rule denied.}, '409': {description: Invalid lifecycle state or revision.}}
+  /api/dream/policies/{id}/decisions:
+    post:
+      security: [{AtlasSession: []}]
+      operationId: decideBrowserDreamPolicy
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [revision, decision], properties: {revision: {type: integer, minimum: 0}, decision: {type: string, enum: [approve, reject]}, comment: {type: string, maxLength: 4000}}}}}}
+      responses: {'200': {description: Assigned decision recorded; publication still separate.}, '403': {description: Wrong reviewer, self-review, permission, or organization denied.}, '409': {description: Invalid lifecycle state or revision.}}
+  /api/dream/policies/{id}/publish:
+    post:
+      security: [{AtlasSession: []}]
+      operationId: publishBrowserDreamPolicy
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [revision], properties: {revision: {type: integer, minimum: 0}}}}}}
+      responses: {'200': {description: Approved policy version published atomically.}, '403': {description: Exact edit authorization denied.}, '409': {description: Approved decision, valid workflow, revision, or idempotency requirement failed.}}
+  /api/dream/policies/{id}/disable:
+    post:
+      security: [{AtlasSession: []}]
+      operationId: disableBrowserDreamPolicy
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [revision], properties: {revision: {type: integer, minimum: 0}}}}}}
+      responses: {'200': {description: Approved high-risk disable completed.}, '403': {description: Exact edit authorization denied.}, '409': {description: Approved disable decision or lifecycle requirement failed.}}
+  /api/dream/policies/{id}/backfills:
+    post:
+      security: [{AtlasSession: []}]
+      operationId: backfillBrowserDreamPolicy
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [window_start, window_end], properties: {window_start: {type: string, format: date-time}, window_end: {type: string, format: date-time}, rerun_of_run_id: {type: string, maxLength: 128}}}}}}
+      responses: {'202': {description: Bounded audited backfill accepted.}, '403': {description: Exact edit authorization denied.}, '409': {description: Window, lineage, overlap, or idempotency conflict.}}
   /auth/logout:
     post:
       security: [{AtlasSession: []}]

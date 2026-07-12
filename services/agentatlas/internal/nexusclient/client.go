@@ -268,6 +268,18 @@ func (c *HTTPClient) AppendAuditEvidenceWithBearer(ctx context.Context, accessTo
 	err := c.bearerPost(ctx, "/v1/audit/evidence", accessToken, input.IdempotencyKey, input, &out, nil)
 	return out, err
 }
+
+func (c *HTTPClient) LocateEvidenceWithBearer(ctx context.Context, accessToken string, input nexus.LocateEvidenceRequest) (nexus.LocateEvidenceResponse, error) {
+	var out nexus.LocateEvidenceResponse
+	err := c.bearerPost(ctx, "/v1/evidence/locate", accessToken, "", input, &out, nil)
+	return out, err
+}
+
+func (c *HTTPClient) ReadEvidenceWithBearer(ctx context.Context, accessToken string, input nexus.ReadEvidenceRequest) (nexus.ReadEvidenceResponse, error) {
+	var out nexus.ReadEvidenceResponse
+	err := c.bearerPost(ctx, "/v1/evidence/read", accessToken, "", input, &out, nil)
+	return out, err
+}
 func (c *HTTPClient) bearerPost(ctx context.Context, path, accessToken, idempotency string, in, out any, headers map[string]string) error {
 	if len(accessToken) < 16 {
 		return fmt.Errorf("nexus %s: missing BFF credential", path)

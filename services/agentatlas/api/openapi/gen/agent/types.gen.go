@@ -1004,6 +1004,66 @@ func (e VisibilitySnapshotSummaryVisibilityLevel) Valid() bool {
 	}
 }
 
+// Defines values for DecideBrowserDreamPolicyJSONBodyDecision.
+const (
+	DecideBrowserDreamPolicyJSONBodyDecisionApprove DecideBrowserDreamPolicyJSONBodyDecision = "approve"
+	DecideBrowserDreamPolicyJSONBodyDecisionReject  DecideBrowserDreamPolicyJSONBodyDecision = "reject"
+)
+
+// Valid indicates whether the value is a known member of the DecideBrowserDreamPolicyJSONBodyDecision enum.
+func (e DecideBrowserDreamPolicyJSONBodyDecision) Valid() bool {
+	switch e {
+	case DecideBrowserDreamPolicyJSONBodyDecisionApprove:
+		return true
+	case DecideBrowserDreamPolicyJSONBodyDecisionReject:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SubmitBrowserDreamPolicyReviewJSONBodyAction.
+const (
+	SubmitBrowserDreamPolicyReviewJSONBodyActionDisable SubmitBrowserDreamPolicyReviewJSONBodyAction = "disable"
+	SubmitBrowserDreamPolicyReviewJSONBodyActionPublish SubmitBrowserDreamPolicyReviewJSONBodyAction = "publish"
+)
+
+// Valid indicates whether the value is a known member of the SubmitBrowserDreamPolicyReviewJSONBodyAction enum.
+func (e SubmitBrowserDreamPolicyReviewJSONBodyAction) Valid() bool {
+	switch e {
+	case SubmitBrowserDreamPolicyReviewJSONBodyActionDisable:
+		return true
+	case SubmitBrowserDreamPolicyReviewJSONBodyActionPublish:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AnnotateBrowserDreamRunJSONBodyAction.
+const (
+	AnnotateBrowserDreamRunJSONBodyActionComment       AnnotateBrowserDreamRunJSONBodyAction = "comment"
+	AnnotateBrowserDreamRunJSONBodyActionConfirm       AnnotateBrowserDreamRunJSONBodyAction = "confirm"
+	AnnotateBrowserDreamRunJSONBodyActionMarkIncorrect AnnotateBrowserDreamRunJSONBodyAction = "mark_incorrect"
+	AnnotateBrowserDreamRunJSONBodyActionReject        AnnotateBrowserDreamRunJSONBodyAction = "reject"
+)
+
+// Valid indicates whether the value is a known member of the AnnotateBrowserDreamRunJSONBodyAction enum.
+func (e AnnotateBrowserDreamRunJSONBodyAction) Valid() bool {
+	switch e {
+	case AnnotateBrowserDreamRunJSONBodyActionComment:
+		return true
+	case AnnotateBrowserDreamRunJSONBodyActionConfirm:
+		return true
+	case AnnotateBrowserDreamRunJSONBodyActionMarkIncorrect:
+		return true
+	case AnnotateBrowserDreamRunJSONBodyActionReject:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PostAgentRunConfirmationJSONBodyDecision.
 const (
 	PostAgentRunConfirmationJSONBodyDecisionApprove PostAgentRunConfirmationJSONBodyDecision = "approve"
@@ -1108,16 +1168,16 @@ func (e DecideDreamPolicyJSONBodyDecision) Valid() bool {
 
 // Defines values for SubmitDreamPolicyReviewJSONBodyAction.
 const (
-	Disable SubmitDreamPolicyReviewJSONBodyAction = "disable"
-	Publish SubmitDreamPolicyReviewJSONBodyAction = "publish"
+	SubmitDreamPolicyReviewJSONBodyActionDisable SubmitDreamPolicyReviewJSONBodyAction = "disable"
+	SubmitDreamPolicyReviewJSONBodyActionPublish SubmitDreamPolicyReviewJSONBodyAction = "publish"
 )
 
 // Valid indicates whether the value is a known member of the SubmitDreamPolicyReviewJSONBodyAction enum.
 func (e SubmitDreamPolicyReviewJSONBodyAction) Valid() bool {
 	switch e {
-	case Disable:
+	case SubmitDreamPolicyReviewJSONBodyActionDisable:
 		return true
-	case Publish:
+	case SubmitDreamPolicyReviewJSONBodyActionPublish:
 		return true
 	default:
 		return false
@@ -1672,6 +1732,118 @@ type PublishGovernedChangeParams struct {
 	IdempotencyKey string `json:"Idempotency-Key"`
 }
 
+// ListBrowserDreamPoliciesParams defines parameters for ListBrowserDreamPolicies.
+type ListBrowserDreamPoliciesParams struct {
+	OrgUnitId string `form:"org_unit_id" json:"org_unit_id"`
+}
+
+// CreateBrowserDreamPolicyDraftParams defines parameters for CreateBrowserDreamPolicyDraft.
+type CreateBrowserDreamPolicyDraftParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
+// UpdateBrowserDreamPolicyDraftJSONBody defines parameters for UpdateBrowserDreamPolicyDraft.
+type UpdateBrowserDreamPolicyDraftJSONBody struct {
+	Policy   DreamPolicyDefinition `json:"policy"`
+	Revision int                   `json:"revision"`
+}
+
+// UpdateBrowserDreamPolicyDraftParams defines parameters for UpdateBrowserDreamPolicyDraft.
+type UpdateBrowserDreamPolicyDraftParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
+// BackfillBrowserDreamPolicyJSONBody defines parameters for BackfillBrowserDreamPolicy.
+type BackfillBrowserDreamPolicyJSONBody struct {
+	RerunOfRunId *string   `json:"rerun_of_run_id,omitempty"`
+	WindowEnd    time.Time `json:"window_end"`
+	WindowStart  time.Time `json:"window_start"`
+}
+
+// BackfillBrowserDreamPolicyParams defines parameters for BackfillBrowserDreamPolicy.
+type BackfillBrowserDreamPolicyParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
+// CheckBrowserDreamPolicyRiskJSONBody defines parameters for CheckBrowserDreamPolicyRisk.
+type CheckBrowserDreamPolicyRiskJSONBody struct {
+	Revision int `json:"revision"`
+}
+
+// DecideBrowserDreamPolicyJSONBody defines parameters for DecideBrowserDreamPolicy.
+type DecideBrowserDreamPolicyJSONBody struct {
+	Comment  *string                                  `json:"comment,omitempty"`
+	Decision DecideBrowserDreamPolicyJSONBodyDecision `json:"decision"`
+	Revision int                                      `json:"revision"`
+}
+
+// DecideBrowserDreamPolicyParams defines parameters for DecideBrowserDreamPolicy.
+type DecideBrowserDreamPolicyParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
+// DecideBrowserDreamPolicyJSONBodyDecision defines parameters for DecideBrowserDreamPolicy.
+type DecideBrowserDreamPolicyJSONBodyDecision string
+
+// DisableBrowserDreamPolicyJSONBody defines parameters for DisableBrowserDreamPolicy.
+type DisableBrowserDreamPolicyJSONBody struct {
+	Revision int `json:"revision"`
+}
+
+// DisableBrowserDreamPolicyParams defines parameters for DisableBrowserDreamPolicy.
+type DisableBrowserDreamPolicyParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
+// PublishBrowserDreamPolicyJSONBody defines parameters for PublishBrowserDreamPolicy.
+type PublishBrowserDreamPolicyJSONBody struct {
+	Revision int `json:"revision"`
+}
+
+// PublishBrowserDreamPolicyParams defines parameters for PublishBrowserDreamPolicy.
+type PublishBrowserDreamPolicyParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
+// SubmitBrowserDreamPolicyReviewJSONBody defines parameters for SubmitBrowserDreamPolicyReview.
+type SubmitBrowserDreamPolicyReviewJSONBody struct {
+	Action   SubmitBrowserDreamPolicyReviewJSONBodyAction `json:"action"`
+	Revision int                                          `json:"revision"`
+}
+
+// SubmitBrowserDreamPolicyReviewParams defines parameters for SubmitBrowserDreamPolicyReview.
+type SubmitBrowserDreamPolicyReviewParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
+// SubmitBrowserDreamPolicyReviewJSONBodyAction defines parameters for SubmitBrowserDreamPolicyReview.
+type SubmitBrowserDreamPolicyReviewJSONBodyAction string
+
+// ListBrowserDreamRunsParams defines parameters for ListBrowserDreamRuns.
+type ListBrowserDreamRunsParams struct {
+	OrgUnitId string              `form:"org_unit_id" json:"org_unit_id"`
+	Window    *openapi_types.Date `form:"window,omitempty" json:"window,omitempty"`
+}
+
+// AnnotateBrowserDreamRunJSONBody defines parameters for AnnotateBrowserDreamRun.
+type AnnotateBrowserDreamRunJSONBody struct {
+	Action  AnnotateBrowserDreamRunJSONBodyAction `json:"action"`
+	Comment *string                               `json:"comment,omitempty"`
+}
+
+// AnnotateBrowserDreamRunParams defines parameters for AnnotateBrowserDreamRun.
+type AnnotateBrowserDreamRunParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
+// AnnotateBrowserDreamRunJSONBodyAction defines parameters for AnnotateBrowserDreamRun.
+type AnnotateBrowserDreamRunJSONBodyAction string
+
+// RerunBrowserDreamRunParams defines parameters for RerunBrowserDreamRun.
+type RerunBrowserDreamRunParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
 // ListBrowserKnowledgeHomeParams defines parameters for ListBrowserKnowledgeHome.
 type ListBrowserKnowledgeHomeParams struct {
 	OrgUnitId string  `form:"org_unit_id" json:"org_unit_id"`
@@ -1861,6 +2033,33 @@ type UpdateGovernedChangeJSONRequestBody = UpdateChangeInput
 
 // DecideGovernedChangeJSONRequestBody defines body for DecideGovernedChange for application/json ContentType.
 type DecideGovernedChangeJSONRequestBody = ChangeDecisionInput
+
+// CreateBrowserDreamPolicyDraftJSONRequestBody defines body for CreateBrowserDreamPolicyDraft for application/json ContentType.
+type CreateBrowserDreamPolicyDraftJSONRequestBody = DreamPolicyDefinition
+
+// UpdateBrowserDreamPolicyDraftJSONRequestBody defines body for UpdateBrowserDreamPolicyDraft for application/json ContentType.
+type UpdateBrowserDreamPolicyDraftJSONRequestBody UpdateBrowserDreamPolicyDraftJSONBody
+
+// BackfillBrowserDreamPolicyJSONRequestBody defines body for BackfillBrowserDreamPolicy for application/json ContentType.
+type BackfillBrowserDreamPolicyJSONRequestBody BackfillBrowserDreamPolicyJSONBody
+
+// CheckBrowserDreamPolicyRiskJSONRequestBody defines body for CheckBrowserDreamPolicyRisk for application/json ContentType.
+type CheckBrowserDreamPolicyRiskJSONRequestBody CheckBrowserDreamPolicyRiskJSONBody
+
+// DecideBrowserDreamPolicyJSONRequestBody defines body for DecideBrowserDreamPolicy for application/json ContentType.
+type DecideBrowserDreamPolicyJSONRequestBody DecideBrowserDreamPolicyJSONBody
+
+// DisableBrowserDreamPolicyJSONRequestBody defines body for DisableBrowserDreamPolicy for application/json ContentType.
+type DisableBrowserDreamPolicyJSONRequestBody DisableBrowserDreamPolicyJSONBody
+
+// PublishBrowserDreamPolicyJSONRequestBody defines body for PublishBrowserDreamPolicy for application/json ContentType.
+type PublishBrowserDreamPolicyJSONRequestBody PublishBrowserDreamPolicyJSONBody
+
+// SubmitBrowserDreamPolicyReviewJSONRequestBody defines body for SubmitBrowserDreamPolicyReview for application/json ContentType.
+type SubmitBrowserDreamPolicyReviewJSONRequestBody SubmitBrowserDreamPolicyReviewJSONBody
+
+// AnnotateBrowserDreamRunJSONRequestBody defines body for AnnotateBrowserDreamRun for application/json ContentType.
+type AnnotateBrowserDreamRunJSONRequestBody AnnotateBrowserDreamRunJSONBody
 
 // UploadLegacyAssistantAttachmentsMultipartRequestBody defines body for UploadLegacyAssistantAttachments for multipart/form-data ContentType.
 type UploadLegacyAssistantAttachmentsMultipartRequestBody UploadLegacyAssistantAttachmentsMultipartBody
