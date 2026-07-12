@@ -79,6 +79,78 @@ func (q *Queries) InsertTimelineNode(ctx context.Context, arg InsertTimelineNode
 	return i, err
 }
 
+const listBrowserKnowledgeItems = `-- name: ListBrowserKnowledgeItems :many
+SELECT sops.id, sops.title AS summary_text, 'sop'::text AS source_type, sops.updated_at AS node_time, spaces.name AS scope_name
+FROM sops
+JOIN knowledge_spaces AS spaces
+  ON spaces.enterprise_id = sops.enterprise_id
+ AND spaces.id = $2
+ AND spaces.org_scope = sops.org_scope
+WHERE sops.enterprise_id = $3
+  AND sops.org_scope = $4
+  AND ($5::text = '' OR sops.title ILIKE '%' || $5::text || '%')
+UNION ALL
+SELECT outlines.id, outlines.title AS summary_text, 'method_outline'::text AS source_type, outlines.updated_at AS node_time, spaces.name AS scope_name
+FROM method_outlines AS outlines
+JOIN knowledge_spaces AS spaces
+  ON spaces.enterprise_id = outlines.enterprise_id
+ AND spaces.id = $2
+ AND spaces.org_scope = outlines.org_scope
+WHERE outlines.enterprise_id = $3
+  AND outlines.org_scope = $4
+  AND ($5::text = '' OR outlines.title ILIKE '%' || $5::text || '%')
+ORDER BY node_time DESC, id
+LIMIT $1
+`
+
+type ListBrowserKnowledgeItemsParams struct {
+	ResultLimit  int32  `json:"result_limit"`
+	SpaceID      string `json:"space_id"`
+	EnterpriseID string `json:"enterprise_id"`
+	OrgScope     string `json:"org_scope"`
+	SearchQuery  string `json:"search_query"`
+}
+
+type ListBrowserKnowledgeItemsRow struct {
+	ID          string             `json:"id"`
+	SummaryText string             `json:"summary_text"`
+	SourceType  string             `json:"source_type"`
+	NodeTime    pgtype.Timestamptz `json:"node_time"`
+	ScopeName   string             `json:"scope_name"`
+}
+
+func (q *Queries) ListBrowserKnowledgeItems(ctx context.Context, arg ListBrowserKnowledgeItemsParams) ([]ListBrowserKnowledgeItemsRow, error) {
+	rows, err := q.db.Query(ctx, listBrowserKnowledgeItems,
+		arg.ResultLimit,
+		arg.SpaceID,
+		arg.EnterpriseID,
+		arg.OrgScope,
+		arg.SearchQuery,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListBrowserKnowledgeItemsRow
+	for rows.Next() {
+		var i ListBrowserKnowledgeItemsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SummaryText,
+			&i.SourceType,
+			&i.NodeTime,
+			&i.ScopeName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDreamTimelineNodes = `-- name: ListDreamTimelineNodes :many
 SELECT id, enterprise_id, space_id, org_scope, node_time, source_type, summary_text, tags, evidence_pointer_id, created_at FROM timeline_nodes
 WHERE enterprise_id = $1

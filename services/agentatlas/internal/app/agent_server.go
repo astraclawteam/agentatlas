@@ -21,21 +21,22 @@ import (
 // plane (api/openapi/atlas-agent.yaml): Knowledge Agent runs, workflow
 // draft/publish, dream policies, confirmations.
 type AgentRouterDeps struct {
-	Nexus             nexus.Client
-	Agent             *agent.Runner
-	Workflows         *workflow.Service
-	Runtime           *workflow.Runtime
-	Dreams            *dream.PolicyService
-	DreamRuns         dreamRunStore
-	DreamRerun        dreamRerunner
-	Store             *db.Queries
-	Outlines          MethodOutlineStore // optional; defaults to Store
-	Runner            *tasks.Runner
-	Metrics           *observability.Metrics  // optional; enables /metrics + latency histograms
-	BrowserSessions   *browsersession.Service // optional; enables Console BFF routes
-	BrowserOrgStore   browserSessionOrgStore  // optional; defaults to Store
-	BrowserAuthorizer nexus.BrowserBFFClient  // optional; required by advanced legacy BFF routes
-	Changes           *governance.Service     // optional; enables governed maintenance routes
+	Nexus                 nexus.Client
+	Agent                 *agent.Runner
+	Workflows             *workflow.Service
+	Runtime               *workflow.Runtime
+	Dreams                *dream.PolicyService
+	DreamRuns             dreamRunStore
+	DreamRerun            dreamRerunner
+	Store                 *db.Queries
+	Outlines              MethodOutlineStore // optional; defaults to Store
+	Runner                *tasks.Runner
+	Metrics               *observability.Metrics  // optional; enables /metrics + latency histograms
+	BrowserSessions       *browsersession.Service // optional; enables Console BFF routes
+	BrowserOrgStore       browserSessionOrgStore  // optional; defaults to Store
+	BrowserKnowledgeStore browserKnowledgeStore   // optional; defaults to Store
+	BrowserAuthorizer     nexus.BrowserBFFClient  // optional; required by advanced legacy BFF routes
+	Changes               *governance.Service     // optional; enables governed maintenance routes
 }
 
 type dreamBackfiller interface {
@@ -151,6 +152,11 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 			orgStore = deps.Store
 		}
 		browser := &browserSessionHandler{sessions: deps.BrowserSessions, orgs: orgStore}
+		knowledgeStore := deps.BrowserKnowledgeStore
+		if knowledgeStore == nil && deps.Store != nil {
+			knowledgeStore = deps.Store
+		}
+		knowledge := &browserKnowledgeHandler{orgs: orgStore, store: knowledgeStore, authorizer: deps.BrowserAuthorizer, changes: deps.Changes}
 		var legacyWorkflows legacyWorkflowLister
 		if deps.Workflows != nil {
 			legacyWorkflows = deps.Workflows
@@ -167,6 +173,7 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 		r.Get("/auth/login", browser.login)
 		r.Get("/auth/callback", browser.callback)
 		r.Get("/api/session", browser.session)
+		r.With(browser.sessionGuard).Get("/api/knowledge", knowledge.list)
 		r.With(browser.sessionGuard, sameOriginCSRF).Post("/auth/logout", browser.logout)
 		r.Route("/api/legacy", func(r chi.Router) {
 			r.Use(browser.sessionGuard)

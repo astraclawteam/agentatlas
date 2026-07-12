@@ -66,7 +66,15 @@ export function KnowledgeMap({ spaces, links = [], onSelect }: KnowledgeMapProps
   }
 
   return (
-    <div style={{ height: "100%", minHeight: 420 }} data-testid="knowledge-map">
+    <section
+      className="knowledge-map-readonly"
+      data-testid="knowledge-map"
+      aria-label="只读组织知识图"
+      aria-describedby="knowledge-map-description"
+    >
+      <p id="knowledge-map-description" className="knowledge-map-description">
+        这里仅用于查看组织知识之间的关系；修改内容请返回企业知识列表。
+      </p>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -82,6 +90,6 @@ export function KnowledgeMap({ spaces, links = [], onSelect }: KnowledgeMapProps
       >
         <Background gap={24} />
       </ReactFlow>
-    </div>
+    </section>
   );
 }

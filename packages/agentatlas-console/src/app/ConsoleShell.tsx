@@ -41,6 +41,7 @@ function AuthenticatedShell() {
   const navigate = useNavigate();
   const location = useLocation();
   const isAssistantRoute = location.pathname === "/assistant";
+  const knowledgeRoute = location.pathname === "/knowledge" || location.pathname.startsWith("/knowledge/");
 
   const openAssistant = () => {
     if (typeof window.matchMedia === "function" && window.matchMedia("(max-width: 900px)").matches) {
@@ -103,11 +104,7 @@ function AuthenticatedShell() {
         data-testid="console-content-layout"
         data-assistant-open={assistantOpen ? "true" : "false"}
       >
-        <OrgScopeNavigation
-          orgTree={session.org_tree}
-          orgUnitIds={session.org_unit_ids}
-          advancedMode={advancedMode}
-        />
+        {knowledgeRoute ? null : <OrgScopeNavigation orgTree={session.org_tree} orgUnitIds={session.org_unit_ids} advancedMode={advancedMode} />}
         <main className="console-main">
           <ConsoleRoutes />
         </main>

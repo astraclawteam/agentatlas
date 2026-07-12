@@ -33,7 +33,19 @@ function sessionResponse(session = managerSession) {
 
 describe("ConsoleShell", () => {
   beforeEach(() => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sessionResponse()));
+    vi.stubGlobal("fetch", vi.fn(async (input) => {
+      const url = String(input);
+      if (url === "/api/session") return sessionResponse();
+      if (url.startsWith("/api/knowledge?")) {
+        return new Response(JSON.stringify({
+          organization: { name: "\u7814\u53d1\u4e00\u90e8" },
+          status: { running: true, freshness_label: "today" },
+          counts: { recent_changes: 0, reviews: 0 },
+          items: [],
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(null, { status: 404 });
+    }));
   });
 
   afterEach(() => {

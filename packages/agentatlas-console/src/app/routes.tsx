@@ -3,6 +3,7 @@ import { BookOpenCheck, LibraryBig, MoonStar, Workflow } from "lucide-react";
 import { Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
 
 import { LegacyRouteAdapter, type LegacySurface } from "../features/legacy/LegacyRouteAdapter";
+import { KnowledgeHome } from "../features/knowledge/KnowledgeHome";
 
 export const consoleSurfaces = [
   { path: "/knowledge", label: "企业知识", icon: LibraryBig },
@@ -73,7 +74,8 @@ export function ConsoleRoutes() {
   return (
     <Routes>
       <Route path="/" element={<Navigate to="/knowledge" replace />} />
-      <Route path="/knowledge/*" element={<RouteAdapter surface="knowledge" />} />
+      <Route path="/knowledge" element={<KnowledgeHome />} />
+      <Route path="/knowledge/:orgUnitID/*" element={<KnowledgeHome />} />
       <Route path="/dream/*" element={<RouteAdapter surface="dream" />} />
       <Route path="/workflows/*" element={<RouteAdapter surface="workflows" />} />
       <Route path="/evidence/*" element={<RouteAdapter surface="evidence" />} />

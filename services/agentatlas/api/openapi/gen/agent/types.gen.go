@@ -62,6 +62,30 @@ func (e AgentRunStatus) Valid() bool {
 	}
 }
 
+// Defines values for BrowserKnowledgeItemTypeLabel.
+const (
+	Empty BrowserKnowledgeItemTypeLabel = "资料"
+	N1    BrowserKnowledgeItemTypeLabel = "知识摘要"
+	N2    BrowserKnowledgeItemTypeLabel = "知识说明"
+	SOP   BrowserKnowledgeItemTypeLabel = "SOP"
+)
+
+// Valid indicates whether the value is a known member of the BrowserKnowledgeItemTypeLabel enum.
+func (e BrowserKnowledgeItemTypeLabel) Valid() bool {
+	switch e {
+	case Empty:
+		return true
+	case N1:
+		return true
+	case N2:
+		return true
+	case SOP:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChangeDraftAction.
 const (
 	ChangeDraftActionCreate  ChangeDraftAction = "create"
@@ -1097,6 +1121,35 @@ type AgentRunPendingConfirmationRiskLevel string
 // AgentRunStatus defines model for AgentRun.Status.
 type AgentRunStatus string
 
+// BrowserKnowledgeHome defines model for BrowserKnowledgeHome.
+type BrowserKnowledgeHome struct {
+	Counts struct {
+		RecentChanges int `json:"recent_changes"`
+		Reviews       int `json:"reviews"`
+	} `json:"counts"`
+	Items        []BrowserKnowledgeItem `json:"items"`
+	Organization struct {
+		Name string `json:"name"`
+	} `json:"organization"`
+	Status struct {
+		FreshnessLabel string `json:"freshness_label"`
+		Running        bool   `json:"running"`
+	} `json:"status"`
+}
+
+// BrowserKnowledgeItem defines model for BrowserKnowledgeItem.
+type BrowserKnowledgeItem struct {
+	// Key Opaque navigation key; never presented as user-facing copy.
+	Key          string                        `json:"key"`
+	ScopeLabel   string                        `json:"scope_label"`
+	Title        string                        `json:"title"`
+	TypeLabel    BrowserKnowledgeItemTypeLabel `json:"type_label"`
+	UpdatedLabel string                        `json:"updated_label"`
+}
+
+// BrowserKnowledgeItemTypeLabel defines model for BrowserKnowledgeItem.TypeLabel.
+type BrowserKnowledgeItemTypeLabel string
+
 // BrowserOrgScopeNode defines model for BrowserOrgScopeNode.
 type BrowserOrgScopeNode struct {
 	Children   []BrowserOrgScopeNode `json:"children"`
@@ -1502,6 +1555,12 @@ type ListGovernedChangesParams struct {
 // PublishGovernedChangeParams defines parameters for PublishGovernedChange.
 type PublishGovernedChangeParams struct {
 	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
+// ListBrowserKnowledgeHomeParams defines parameters for ListBrowserKnowledgeHome.
+type ListBrowserKnowledgeHomeParams struct {
+	OrgUnitId string  `form:"org_unit_id" json:"org_unit_id"`
+	Query     *string `form:"query,omitempty" json:"query,omitempty"`
 }
 
 // UploadLegacyAssistantAttachmentsMultipartBody defines parameters for UploadLegacyAssistantAttachments.

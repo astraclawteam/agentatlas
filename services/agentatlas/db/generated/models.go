@@ -104,6 +104,8 @@ type AtlasBrowserLogoutOperation struct {
 	Attempts                      int32              `json:"attempts"`
 	CreatedAt                     pgtype.Timestamptz `json:"created_at"`
 	LastAttemptAt                 pgtype.Timestamptz `json:"last_attempt_at"`
+	QuarantinedAt                 pgtype.Timestamptz `json:"quarantined_at"`
+	QuarantineReason              pgtype.Text        `json:"quarantine_reason"`
 }
 
 type AtlasBrowserSession struct {
@@ -140,6 +142,33 @@ type AtlasDocument struct {
 	ObjectKey    string             `json:"object_key"`
 	Confidence   float32            `json:"confidence"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type ChangeDecisionAudit struct {
+	ID             string             `json:"id"`
+	EnterpriseID   string             `json:"enterprise_id"`
+	OperationID    string             `json:"operation_id"`
+	ChangeID       string             `json:"change_id"`
+	ChangeRevision int32              `json:"change_revision"`
+	ActorUserID    string             `json:"actor_user_id"`
+	Decision       string             `json:"decision"`
+	AuditRefID     string             `json:"audit_ref_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type ChangeDecisionOperation struct {
+	ID             string             `json:"id"`
+	EnterpriseID   string             `json:"enterprise_id"`
+	IdempotencyKey string             `json:"idempotency_key"`
+	ChangeID       string             `json:"change_id"`
+	ChangeRevision int32              `json:"change_revision"`
+	ActorUserID    string             `json:"actor_user_id"`
+	Decision       string             `json:"decision"`
+	RequestHash    string             `json:"request_hash"`
+	Status         string             `json:"status"`
+	AuditRefID     pgtype.Text        `json:"audit_ref_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
 }
 
 type ChangeDraft struct {

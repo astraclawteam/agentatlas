@@ -106,11 +106,23 @@
 
 .console-layout {
   display: grid;
-  grid-template-columns: minmax(180px, 224px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   min-height: calc(100vh - 72px);
 }
 
 .console-layout[data-assistant-open="true"] {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 384px);
+}
+
+.console-layout > .console-org-nav + .console-main {
+  grid-column: 2;
+}
+
+.console-layout:has(> .console-org-nav) {
+  grid-template-columns: minmax(180px, 224px) minmax(0, 1fr);
+}
+
+.console-layout[data-assistant-open="true"]:has(> .console-org-nav) {
   grid-template-columns: minmax(180px, 224px) minmax(0, 1fr) minmax(320px, 384px);
 }
 
@@ -159,6 +171,8 @@
   min-width: 0;
   padding: 36px clamp(24px, 4vw, 64px);
 }
+
+.knowledge-workspace { margin: -36px clamp(-64px, -4vw, -24px); }
 
 .console-route-intro {
   max-width: 760px;

@@ -30,6 +30,20 @@ paths:
       security: [{AtlasSession: []}]
       operationId: getAtlasBrowserSession
       responses: {'200': {description: Browser identity and sealed scope snapshot, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserSessionView'}}}}, '401': {$ref: '#/components/responses/Unauthorized'}}
+  /api/knowledge:
+    get:
+      security: [{AtlasSession: []}]
+      operationId: listBrowserKnowledgeHome
+      description: Lists human-readable knowledge content after exact organization authorization by AgentNexus.
+      parameters:
+        - {name: org_unit_id, in: query, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: query, in: query, schema: {type: string, maxLength: 200}}
+      responses:
+        '200': {description: Bounded knowledge workspace for one authorized organization, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserKnowledgeHome'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: The selected organization is not authorized.}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {description: Authorization or safely bounded knowledge data is unavailable.}
   /auth/logout:
     post:
       security: [{AtlasSession: []}]
@@ -644,6 +658,45 @@ components:
         name: {type: string, minLength: 1}
         selectable: {type: boolean}
         children: {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/BrowserOrgScopeNode'}}
+    BrowserKnowledgeHome:
+      type: object
+      additionalProperties: false
+      required: [organization, status, counts, items]
+      properties:
+        organization:
+          type: object
+          additionalProperties: false
+          required: [name]
+          properties:
+            name: {type: string, minLength: 1, maxLength: 256}
+        status:
+          type: object
+          additionalProperties: false
+          required: [running, freshness_label]
+          properties:
+            running: {type: boolean}
+            freshness_label: {type: string, minLength: 1, maxLength: 64}
+        counts:
+          type: object
+          additionalProperties: false
+          required: [recent_changes, reviews]
+          properties:
+            recent_changes: {type: integer, minimum: 0, maximum: 100}
+            reviews: {type: integer, minimum: 0, maximum: 100}
+        items:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/BrowserKnowledgeItem'}
+    BrowserKnowledgeItem:
+      type: object
+      additionalProperties: false
+      required: [key, title, type_label, updated_label, scope_label]
+      properties:
+        key: {type: string, minLength: 1, maxLength: 256, description: Opaque navigation key; never presented as user-facing copy.}
+        title: {type: string, minLength: 1, maxLength: 10000}
+        type_label: {type: string, enum: [SOP, 资料, 知识摘要, 知识说明]}
+        updated_label: {type: string, minLength: 1, maxLength: 64}
+        scope_label: {type: string, minLength: 1, maxLength: 256}
     SuggestionInput:
       type: object
       additionalProperties: false
