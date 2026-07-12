@@ -10,9 +10,168 @@ import (
 	"testing"
 	"time"
 
+	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
+	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/browsersession"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/governance"
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+func TestBrowserSessionEnrichesAuthorizedOrganizationTreeWithoutGrantingAncestors(t *testing.T) {
+	now := time.Date(2026, 7, 12, 10, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	oidc := &fakeAtlasOIDC{profile: browsersession.Identity{EnterpriseID: "ent-1", UserID: "user-1", DisplayName: "User One", OrgVersion: 7, OrgUnitIDs: []string{"dept-rd"}, Permissions: []string{"knowledge:read"}}}
+	sessions, err := browsersession.New(browsersession.Config{Issuer: "https://nexus.example", ClientID: "agentatlas", ClientSecret: "secret", RedirectURI: "https://atlas.example/auth/callback"}, browsersession.NewMemoryStore(clock), oidc, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orgs := &fakeBrowserOrgStore{
+		enterprise: db.Enterprise{ID: "ent-1", Name: "示例企业"},
+		spaces: []db.KnowledgeSpace{
+			{ID: "space-company", EnterpriseID: "ent-1", Kind: "company", Name: "全公司", OrgScope: "company:root", OrgVersion: 4},
+			{ID: "space-rd", EnterpriseID: "ent-1", Kind: "department", Name: "研发一部", OrgScope: "department:dept-rd", OrgVersion: 7},
+		},
+		bindings: []db.OrgScopeBinding{
+			{EnterpriseID: "ent-1", SpaceID: "space-company", ScopeKind: "company", ScopeID: "root"},
+			{EnterpriseID: "ent-1", SpaceID: "space-rd", ScopeKind: "department", ScopeID: "dept-rd", ParentScopeKind: pgtype.Text{String: "company", Valid: true}, ParentScopeID: pgtype.Text{String: "root", Valid: true}},
+		},
+	}
+	router := NewAgentRouter(AgentRouterDeps{Nexus: adminMock(), BrowserSessions: sessions, BrowserOrgStore: orgs})
+
+	login := httptest.NewRequest(http.MethodGet, "https://atlas.example/auth/login?return_to=%2Fknowledge", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, login)
+	if rr.Code != http.StatusFound || oidc.last.State == "" {
+		t.Fatalf("login=%d state=%q body=%s", rr.Code, oidc.last.State, rr.Body.String())
+	}
+	callback := httptest.NewRequest(http.MethodGet, "https://atlas.example/auth/callback?state="+oidc.last.State+"&code=one-use", nil)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, callback)
+	if rr.Code != http.StatusFound || len(rr.Result().Cookies()) == 0 {
+		t.Fatalf("callback=%d body=%s", rr.Code, rr.Body.String())
+	}
+	cookie := rr.Result().Cookies()[0]
+
+	me := httptest.NewRequest(http.MethodGet, "https://atlas.example/api/session", nil)
+	me.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, me)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("session=%d %s", rr.Code, rr.Body.String())
+	}
+	var body struct {
+		EnterpriseName string `json:"enterprise_name"`
+		OrgTree        []struct {
+			ID         string `json:"id"`
+			Name       string `json:"name"`
+			Selectable bool   `json:"selectable"`
+			Children   []struct {
+				ID, Name   string
+				Selectable bool `json:"selectable"`
+			} `json:"children"`
+		} `json:"org_tree"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.EnterpriseName != "示例企业" || len(body.OrgTree) != 1 || body.OrgTree[0].Name != "全公司" || body.OrgTree[0].Selectable || len(body.OrgTree[0].Children) != 1 || body.OrgTree[0].Children[0].Name != "研发一部" || !body.OrgTree[0].Children[0].Selectable {
+		t.Fatalf("unexpected organization presentation: %+v", body)
+	}
+}
+
+func TestAdvancedLegacyRoutesAreSessionGuardedAuthorizedAndFailClosed(t *testing.T) {
+	for _, path := range []string{"knowledge", "dream", "workflows", "evidence", "assistant"} {
+		t.Run(path, func(t *testing.T) {
+			router, cookie, authorizer := legacyTestRouter(t, true)
+			req := httptest.NewRequest(http.MethodGet, "https://atlas.example/api/legacy/"+path, nil)
+			req.AddCookie(cookie)
+			rr := httptest.NewRecorder()
+			router.ServeHTTP(rr, req)
+			if rr.Code != http.StatusServiceUnavailable {
+				t.Fatalf("legacy %s status=%d body=%s", path, rr.Code, rr.Body.String())
+			}
+			if authorizer.calls != 1 || authorizer.last.Action != path+".read" {
+				t.Fatalf("legacy %s authorization=%+v calls=%d", path, authorizer.last, authorizer.calls)
+			}
+		})
+	}
+
+	router, cookie, authorizer := legacyTestRouter(t, true)
+	upload := httptest.NewRequest(http.MethodPost, "https://atlas.example/api/legacy/assistant/attachments", strings.NewReader("--bounded"))
+	upload.Header.Set("Origin", "https://atlas.example")
+	upload.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, upload)
+	if rr.Code != http.StatusServiceUnavailable || authorizer.last.Action != "assistant.upload" {
+		t.Fatalf("legacy upload status=%d auth=%+v body=%s", rr.Code, authorizer.last, rr.Body.String())
+	}
+
+	deniedRouter, deniedCookie, deniedAuthorizer := legacyTestRouter(t, false)
+	denied := httptest.NewRequest(http.MethodGet, "https://atlas.example/api/legacy/knowledge", nil)
+	denied.AddCookie(deniedCookie)
+	rr = httptest.NewRecorder()
+	deniedRouter.ServeHTTP(rr, denied)
+	if rr.Code != http.StatusForbidden || deniedAuthorizer.calls != 0 {
+		t.Fatalf("non-advanced legacy status=%d auth calls=%d", rr.Code, deniedAuthorizer.calls)
+	}
+}
+
+func legacyTestRouter(t *testing.T, advanced bool) (*chi.Mux, *http.Cookie, *fakeBrowserAuthorizer) {
+	t.Helper()
+	now := time.Date(2026, 7, 12, 10, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	oidc := &fakeAtlasOIDC{profile: browsersession.Identity{EnterpriseID: "ent-1", UserID: "user-1", DisplayName: "User One", OrgVersion: 7, OrgUnitIDs: []string{"dept-rd"}, Permissions: []string{"knowledge:read"}, AdvancedModeAllowed: advanced}}
+	sessions, err := browsersession.New(browsersession.Config{Issuer: "https://nexus.example", ClientID: "agentatlas", ClientSecret: "secret", RedirectURI: "https://atlas.example/auth/callback"}, browsersession.NewMemoryStore(clock), oidc, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizer := &fakeBrowserAuthorizer{}
+	router := NewAgentRouter(AgentRouterDeps{Nexus: adminMock(), BrowserSessions: sessions, BrowserAuthorizer: authorizer})
+	login := httptest.NewRequest(http.MethodGet, "https://atlas.example/auth/login?return_to=%2Fknowledge", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, login)
+	callback := httptest.NewRequest(http.MethodGet, "https://atlas.example/auth/callback?state="+oidc.last.State+"&code=one-use", nil)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, callback)
+	if rr.Code != http.StatusFound || len(rr.Result().Cookies()) == 0 {
+		t.Fatalf("callback=%d %s", rr.Code, rr.Body.String())
+	}
+	return router, rr.Result().Cookies()[0], authorizer
+}
+
+type fakeBrowserAuthorizer struct {
+	calls int
+	last  nexus.BrowserAuthorizationRequest
+}
+
+func (f *fakeBrowserAuthorizer) AuthorizeBrowserOperation(_ context.Context, _ string, req nexus.BrowserAuthorizationRequest) (nexus.BrowserAuthorizationDecision, error) {
+	f.calls++
+	f.last = req
+	return nexus.BrowserAuthorizationDecision{Decision: "allow", OrgVersion: req.OrgVersion, OrgUnitIDs: []string{req.OrgUnitID}}, nil
+}
+func (*fakeBrowserAuthorizer) ResolveApprovalRouteWithBearer(context.Context, string, nexus.ApprovalResolveRequest) (nexus.ApprovalRoute, error) {
+	return nexus.ApprovalRoute{}, nil
+}
+func (*fakeBrowserAuthorizer) AppendAuditEvidenceWithBearer(context.Context, string, nexus.AppendAuditEvidenceRequest) (nexus.AppendAuditEvidenceResponse, error) {
+	return nexus.AppendAuditEvidenceResponse{}, nil
+}
+
+type fakeBrowserOrgStore struct {
+	enterprise db.Enterprise
+	spaces     []db.KnowledgeSpace
+	bindings   []db.OrgScopeBinding
+}
+
+func (f *fakeBrowserOrgStore) GetEnterprise(context.Context, string) (db.Enterprise, error) {
+	return f.enterprise, nil
+}
+func (f *fakeBrowserOrgStore) ListBrowserKnowledgeSpacesByEnterprise(context.Context, string) ([]db.KnowledgeSpace, error) {
+	return f.spaces, nil
+}
+func (f *fakeBrowserOrgStore) ListOrgScopeBindingsByEnterprise(context.Context, string) ([]db.OrgScopeBinding, error) {
+	return f.bindings, nil
+}
 
 func TestBrowserSessionRoutesUseSecureCookieAndCSRF(t *testing.T) {
 	now := time.Date(2026, 7, 12, 10, 0, 0, 0, time.UTC)

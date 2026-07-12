@@ -4,6 +4,8 @@
 *.out
 bin/
 dist/
+test-results/
+playwright-report/
 
 # Frontend
 node_modules/

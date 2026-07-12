@@ -45,6 +45,12 @@
   text-decoration: none;
 }
 
+.console-org-context {
+  cursor: default;
+  font-weight: 500;
+  opacity: .72;
+}
+
 .console-nav-link {
   min-height: 44px;
   padding: 0 14px;
@@ -167,6 +173,29 @@
   margin-top: 28px;
   padding: 18px 20px;
   border-radius: var(--radius-card);
+}
+
+.console-legacy-items {
+  display: grid;
+  gap: 10px;
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.console-legacy-items li,
+.console-legacy-upload {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-radius: var(--radius-card);
+}
+
+.console-legacy-upload label {
+  display: grid;
+  gap: 8px;
 }
 
 .console-assistant-dock {

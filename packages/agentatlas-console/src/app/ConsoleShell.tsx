@@ -132,13 +132,13 @@ function OrgScopeNavigation({
   orgTree,
   orgUnitIds,
 }: {
-  orgTree?: OrgScopeNode[];
+  orgTree: OrgScopeNode[];
   orgUnitIds: string[];
 }) {
   const allowed = new Set(orgUnitIds);
-  const nodes = orgTree?.length
+  const nodes = orgTree.length
     ? filterAuthorizedNodes(orgTree, allowed)
-    : orgUnitIds.map((id) => ({ id, name: id, children: [] }));
+    : orgUnitIds.map((id) => ({ id, name: "未命名组织", selectable: false, children: [] }));
 
   return (
     <nav className="console-org-nav" aria-label="知识范围">
@@ -153,10 +153,17 @@ function OrgScopeList({ nodes }: { nodes: OrgScopeNode[] }) {
     <ul className="console-org-list">
       {nodes.map((node) => (
         <li key={node.id}>
-          <NavLink className="console-org-link" to={`/knowledge/${encodeURIComponent(node.id)}`}>
-            <Building2 aria-hidden size={16} strokeWidth={1.8} />
-            {node.name}
-          </NavLink>
+          {node.selectable ? (
+            <NavLink className="console-org-link" to={`/knowledge/${encodeURIComponent(node.id)}`}>
+              <Building2 aria-hidden size={16} strokeWidth={1.8} />
+              {node.name || "未命名组织"}
+            </NavLink>
+          ) : (
+            <span className="console-org-link console-org-context" aria-label={`${node.name || "未命名组织"}（层级）`}>
+              <Building2 aria-hidden size={16} strokeWidth={1.8} />
+              {node.name || "未命名组织"}
+            </span>
+          )}
           {node.children?.length ? <OrgScopeList nodes={node.children} /> : null}
         </li>
       ))}
@@ -168,6 +175,6 @@ function filterAuthorizedNodes(nodes: OrgScopeNode[], allowed: Set<string>): Org
   return nodes.flatMap((node) => {
     const children = filterAuthorizedNodes(node.children ?? [], allowed);
     if (!allowed.has(node.id) && children.length === 0) return [];
-    return [{ ...node, children }];
+    return [{ ...node, selectable: node.selectable && allowed.has(node.id), children }];
   });
 }

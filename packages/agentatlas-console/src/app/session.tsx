@@ -5,18 +5,19 @@ import { api, SessionRedirect } from "../api/client";
 export interface OrgScopeNode {
   id: string;
   name: string;
+  selectable: boolean;
   children?: OrgScopeNode[];
 }
 
 export interface Session {
   authenticated: boolean;
   enterprise_id: string;
-  enterprise_name?: string;
+  enterprise_name: string;
   enterprise_user_id: string;
   display_name: string;
   org_version: number;
   org_unit_ids: string[];
-  org_tree?: OrgScopeNode[];
+  org_tree: OrgScopeNode[];
   permissions: string[];
   advanced_mode_allowed?: boolean;
   idle_expires_at?: string;

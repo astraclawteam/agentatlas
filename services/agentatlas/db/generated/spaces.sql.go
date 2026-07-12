@@ -154,6 +154,42 @@ func (q *Queries) InsertKnowledgeSpaceVersion(ctx context.Context, arg InsertKno
 	return err
 }
 
+const listBrowserKnowledgeSpacesByEnterprise = `-- name: ListBrowserKnowledgeSpacesByEnterprise :many
+SELECT id, enterprise_id, kind, name, org_scope, org_version, created_at, updated_at FROM knowledge_spaces
+WHERE enterprise_id = $1
+ORDER BY kind, name
+LIMIT 1001
+`
+
+func (q *Queries) ListBrowserKnowledgeSpacesByEnterprise(ctx context.Context, enterpriseID string) ([]KnowledgeSpace, error) {
+	rows, err := q.db.Query(ctx, listBrowserKnowledgeSpacesByEnterprise, enterpriseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []KnowledgeSpace
+	for rows.Next() {
+		var i KnowledgeSpace
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnterpriseID,
+			&i.Kind,
+			&i.Name,
+			&i.OrgScope,
+			&i.OrgVersion,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDreamSpaceMembers = `-- name: ListDreamSpaceMembers :many
 SELECT space_id, user_id, display_name, org_version, updated_at FROM space_membership_cache
 WHERE space_id = $1
@@ -238,6 +274,41 @@ func (q *Queries) ListKnowledgeSpacesByEnterprise(ctx context.Context, enterpris
 			&i.OrgVersion,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOrgScopeBindingsByEnterprise = `-- name: ListOrgScopeBindingsByEnterprise :many
+SELECT id, enterprise_id, space_id, scope_kind, scope_id, parent_scope_id, parent_scope_kind FROM org_scope_bindings
+WHERE enterprise_id = $1
+ORDER BY scope_kind, scope_id
+LIMIT 1001
+`
+
+func (q *Queries) ListOrgScopeBindingsByEnterprise(ctx context.Context, enterpriseID string) ([]OrgScopeBinding, error) {
+	rows, err := q.db.Query(ctx, listOrgScopeBindingsByEnterprise, enterpriseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OrgScopeBinding
+	for rows.Next() {
+		var i OrgScopeBinding
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnterpriseID,
+			&i.SpaceID,
+			&i.ScopeKind,
+			&i.ScopeID,
+			&i.ParentScopeID,
+			&i.ParentScopeKind,
 		); err != nil {
 			return nil, err
 		}

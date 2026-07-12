@@ -4,14 +4,31 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
+	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/browsersession"
 )
 
 type browserActorKey struct{}
-type browserSessionHandler struct{ sessions *browsersession.Service }
+type browserSessionOrgStore interface {
+	GetEnterprise(context.Context, string) (db.Enterprise, error)
+	ListBrowserKnowledgeSpacesByEnterprise(context.Context, string) ([]db.KnowledgeSpace, error)
+	ListOrgScopeBindingsByEnterprise(context.Context, string) ([]db.OrgScopeBinding, error)
+}
+type browserSessionHandler struct {
+	sessions *browsersession.Service
+	orgs     browserSessionOrgStore
+}
+
+type browserOrgNode struct {
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	Selectable bool              `json:"selectable"`
+	Children   []*browserOrgNode `json:"children"`
+}
 
 func (h *browserSessionHandler) login(w http.ResponseWriter, r *http.Request) {
 	if h.sessions == nil {
@@ -84,8 +101,145 @@ func browserActorFrom(ctx context.Context) (browsersession.Session, bool) {
 func (h *browserSessionHandler) session(w http.ResponseWriter, r *http.Request) {
 	h.sessionGuard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s, _ := browserActorFrom(r.Context())
-		writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "enterprise_id": s.EnterpriseID, "enterprise_user_id": s.UserID, "display_name": s.DisplayName, "org_version": s.OrgVersion, "org_unit_ids": s.OrgUnitIDs, "permissions": s.Permissions, "advanced_mode_allowed": s.AdvancedModeAllowed, "idle_expires_at": s.IdleExpiresAt, "absolute_expires_at": s.AbsoluteExpiresAt})
+		enterpriseName, orgTree := h.organizationPresentation(r.Context(), s)
+		writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "enterprise_id": s.EnterpriseID, "enterprise_name": enterpriseName, "enterprise_user_id": s.UserID, "display_name": s.DisplayName, "org_version": s.OrgVersion, "org_unit_ids": s.OrgUnitIDs, "org_tree": orgTree, "permissions": s.Permissions, "advanced_mode_allowed": s.AdvancedModeAllowed, "idle_expires_at": s.IdleExpiresAt, "absolute_expires_at": s.AbsoluteExpiresAt})
 	})).ServeHTTP(w, r)
+}
+
+func (h *browserSessionHandler) organizationPresentation(ctx context.Context, session browsersession.Session) (string, []*browserOrgNode) {
+	unknown := func() []*browserOrgNode {
+		out := make([]*browserOrgNode, 0, len(session.OrgUnitIDs))
+		for _, id := range session.OrgUnitIDs {
+			out = append(out, &browserOrgNode{ID: id, Name: "未命名组织", Selectable: false, Children: []*browserOrgNode{}})
+		}
+		return out
+	}
+	if h.orgs == nil || len(session.OrgUnitIDs) > 1000 || session.OrgVersion < 1 {
+		return "未命名企业", unknown()
+	}
+	enterprise, err := h.orgs.GetEnterprise(ctx, session.EnterpriseID)
+	if err != nil {
+		return "未命名企业", unknown()
+	}
+	enterpriseName := strings.TrimSpace(enterprise.Name)
+	if enterpriseName == "" || enterpriseName == session.EnterpriseID {
+		enterpriseName = "未命名企业"
+	}
+	spaces, err := h.orgs.ListBrowserKnowledgeSpacesByEnterprise(ctx, session.EnterpriseID)
+	if err != nil || len(spaces) > 1000 {
+		return enterpriseName, unknown()
+	}
+	bindings, err := h.orgs.ListOrgScopeBindingsByEnterprise(ctx, session.EnterpriseID)
+	if err != nil || len(bindings) > 1000 {
+		return enterpriseName, unknown()
+	}
+
+	spaceByID := make(map[string]db.KnowledgeSpace, len(spaces))
+	spaceByScope := make(map[string]db.KnowledgeSpace, len(spaces))
+	for _, space := range spaces {
+		if space.EnterpriseID == session.EnterpriseID && space.OrgVersion <= session.OrgVersion {
+			spaceByID[space.ID] = space
+			spaceByScope[space.OrgScope] = space
+		}
+	}
+	bindingByScope := make(map[string]db.OrgScopeBinding, len(bindings))
+	candidatesByID := make(map[string][]string)
+	for _, binding := range bindings {
+		if binding.EnterpriseID != session.EnterpriseID {
+			continue
+		}
+		if _, ok := spaceByID[binding.SpaceID]; !ok {
+			continue
+		}
+		key := binding.ScopeKind + ":" + binding.ScopeID
+		bindingByScope[key] = binding
+		candidatesByID[binding.ScopeID] = append(candidatesByID[binding.ScopeID], key)
+	}
+
+	authorizedScope := make(map[string]string, len(session.OrgUnitIDs))
+	unknownIDs := make([]string, 0)
+	for _, sealedID := range session.OrgUnitIDs {
+		resolved := ""
+		if _, ok := spaceByScope[sealedID]; ok {
+			resolved = sealedID
+		} else if candidates := candidatesByID[sealedID]; len(candidates) == 1 {
+			resolved = candidates[0]
+		}
+		if resolved == "" {
+			unknownIDs = append(unknownIDs, sealedID)
+			continue
+		}
+		authorizedScope[resolved] = sealedID
+	}
+
+	type presentationNode struct {
+		node   *browserOrgNode
+		parent string
+	}
+	nodes := make(map[string]*presentationNode)
+	ensure := func(scope string) *presentationNode {
+		if existing := nodes[scope]; existing != nil {
+			return existing
+		}
+		space := spaceByScope[scope]
+		name := strings.TrimSpace(space.Name)
+		selectableID, selectable := authorizedScope[scope]
+		if name == "" {
+			name, selectable = "未命名组织", false
+		}
+		id := scope
+		if selectable {
+			id = selectableID
+		}
+		created := &presentationNode{node: &browserOrgNode{ID: id, Name: name, Selectable: selectable, Children: []*browserOrgNode{}}}
+		nodes[scope] = created
+		return created
+	}
+	for scope := range authorizedScope {
+		current := scope
+		seen := map[string]bool{}
+		for depth := 0; current != "" && depth < 32 && !seen[current]; depth++ {
+			seen[current] = true
+			entry := ensure(current)
+			binding, ok := bindingByScope[current]
+			if !ok || !binding.ParentScopeKind.Valid || !binding.ParentScopeID.Valid {
+				break
+			}
+			parent := binding.ParentScopeKind.String + ":" + binding.ParentScopeID.String
+			if _, ok := spaceByScope[parent]; !ok {
+				break
+			}
+			entry.parent = parent
+			ensure(parent)
+			current = parent
+		}
+	}
+	for scope, entry := range nodes {
+		if entry.parent != "" {
+			parent := nodes[entry.parent]
+			if parent != nil {
+				parent.node.Children = append(parent.node.Children, nodes[scope].node)
+			}
+		}
+	}
+	roots := make([]*browserOrgNode, 0)
+	for _, entry := range nodes {
+		if entry.parent == "" {
+			roots = append(roots, entry.node)
+		}
+	}
+	for _, id := range unknownIDs {
+		roots = append(roots, &browserOrgNode{ID: id, Name: "未命名组织", Selectable: false, Children: []*browserOrgNode{}})
+	}
+	var sortTree func([]*browserOrgNode)
+	sortTree = func(items []*browserOrgNode) {
+		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+		for _, item := range items {
+			sortTree(item.Children)
+		}
+	}
+	sortTree(roots)
+	return enterpriseName, roots
 }
 func (h *browserSessionHandler) logout(w http.ResponseWriter, r *http.Request) {
 	if h.sessions == nil {

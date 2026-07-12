@@ -1,6 +1,8 @@
 import { DockedPanel } from "@xiaozhiclaw/runtime-ui";
 import { BookOpenCheck, LibraryBig, MoonStar, Workflow } from "lucide-react";
-import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
+
+import { LegacyRouteAdapter, type LegacySurface } from "../features/legacy/LegacyRouteAdapter";
 
 export const consoleSurfaces = [
   { path: "/knowledge", label: "企业知识", icon: LibraryBig },
@@ -76,7 +78,16 @@ export function ConsoleRoutes() {
       <Route path="/workflows/*" element={<RouteAdapter surface="workflows" />} />
       <Route path="/evidence/*" element={<RouteAdapter surface="evidence" />} />
       <Route path="/assistant" element={<AssistantRoute />} />
+      <Route path="/advanced/legacy/:surface" element={<LegacySurfaceRoute />} />
       <Route path="*" element={<Navigate to="/knowledge" replace />} />
     </Routes>
   );
+}
+
+function LegacySurfaceRoute() {
+  const { surface } = useParams();
+  if (!surface || !["knowledge", "dream", "workflows", "evidence", "assistant"].includes(surface)) {
+    return <Navigate to="/knowledge" replace />;
+  }
+  return <LegacyRouteAdapter surface={surface as LegacySurface} />;
 }

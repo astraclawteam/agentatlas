@@ -32,6 +32,18 @@ SELECT pg_advisory_xact_lock(hashtextextended(
 -- name: ListKnowledgeSpacesByEnterprise :many
 SELECT * FROM knowledge_spaces WHERE enterprise_id = $1 ORDER BY kind, name;
 
+-- name: ListBrowserKnowledgeSpacesByEnterprise :many
+SELECT * FROM knowledge_spaces
+WHERE enterprise_id = $1
+ORDER BY kind, name
+LIMIT 1001;
+
+-- name: ListOrgScopeBindingsByEnterprise :many
+SELECT * FROM org_scope_bindings
+WHERE enterprise_id = $1
+ORDER BY scope_kind, scope_id
+LIMIT 1001;
+
 -- name: UpdateKnowledgeSpaceIfNewer :execrows
 UPDATE knowledge_spaces
 SET name = $3, org_version = $4, updated_at = now()

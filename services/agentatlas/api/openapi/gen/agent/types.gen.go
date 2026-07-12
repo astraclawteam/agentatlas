@@ -1097,18 +1097,28 @@ type AgentRunPendingConfirmationRiskLevel string
 // AgentRunStatus defines model for AgentRun.Status.
 type AgentRunStatus string
 
+// BrowserOrgScopeNode defines model for BrowserOrgScopeNode.
+type BrowserOrgScopeNode struct {
+	Children   []BrowserOrgScopeNode `json:"children"`
+	Id         string                `json:"id"`
+	Name       string                `json:"name"`
+	Selectable bool                  `json:"selectable"`
+}
+
 // BrowserSessionView defines model for BrowserSessionView.
 type BrowserSessionView struct {
-	AbsoluteExpiresAt   *time.Time `json:"absolute_expires_at,omitempty"`
-	AdvancedModeAllowed *bool      `json:"advanced_mode_allowed,omitempty"`
-	Authenticated       bool       `json:"authenticated"`
-	DisplayName         string     `json:"display_name"`
-	EnterpriseId        string     `json:"enterprise_id"`
-	EnterpriseUserId    string     `json:"enterprise_user_id"`
-	IdleExpiresAt       *time.Time `json:"idle_expires_at,omitempty"`
-	OrgUnitIds          []string   `json:"org_unit_ids"`
-	OrgVersion          int64      `json:"org_version"`
-	Permissions         []string   `json:"permissions"`
+	AbsoluteExpiresAt   *time.Time            `json:"absolute_expires_at,omitempty"`
+	AdvancedModeAllowed *bool                 `json:"advanced_mode_allowed,omitempty"`
+	Authenticated       bool                  `json:"authenticated"`
+	DisplayName         string                `json:"display_name"`
+	EnterpriseId        string                `json:"enterprise_id"`
+	EnterpriseName      string                `json:"enterprise_name"`
+	EnterpriseUserId    string                `json:"enterprise_user_id"`
+	IdleExpiresAt       *time.Time            `json:"idle_expires_at,omitempty"`
+	OrgTree             []BrowserOrgScopeNode `json:"org_tree"`
+	OrgUnitIds          []string              `json:"org_unit_ids"`
+	OrgVersion          int64                 `json:"org_version"`
+	Permissions         []string              `json:"permissions"`
 }
 
 // ChangeDraft defines model for ChangeDraft.
@@ -1462,6 +1472,15 @@ type WorkflowRef struct {
 	Version int    `json:"version"`
 }
 
+// LegacyItems defines model for LegacyItems.
+type LegacyItems struct {
+	Items []struct {
+		Detail *string `json:"detail,omitempty"`
+		Id     string  `json:"id"`
+		Label  string  `json:"label"`
+	} `json:"items"`
+}
+
 // NotFound defines model for NotFound.
 type NotFound = Error
 
@@ -1483,6 +1502,11 @@ type ListGovernedChangesParams struct {
 // PublishGovernedChangeParams defines parameters for PublishGovernedChange.
 type PublishGovernedChangeParams struct {
 	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
+// UploadLegacyAssistantAttachmentsMultipartBody defines parameters for UploadLegacyAssistantAttachments.
+type UploadLegacyAssistantAttachmentsMultipartBody struct {
+	Files []openapi_types.File `json:"files"`
 }
 
 // CompleteAtlasBrowserLoginParams defines parameters for CompleteAtlasBrowserLogin.
@@ -1657,6 +1681,9 @@ type CreateGovernedChangeDraftJSONRequestBody = SuggestionInput
 
 // SuggestGovernedChangeJSONRequestBody defines body for SuggestGovernedChange for application/json ContentType.
 type SuggestGovernedChangeJSONRequestBody = SuggestionInput
+
+// UploadLegacyAssistantAttachmentsMultipartRequestBody defines body for UploadLegacyAssistantAttachments for multipart/form-data ContentType.
+type UploadLegacyAssistantAttachmentsMultipartRequestBody UploadLegacyAssistantAttachmentsMultipartBody
 
 // CreateAgentRunJSONRequestBody defines body for CreateAgentRun for application/json ContentType.
 type CreateAgentRunJSONRequestBody CreateAgentRunJSONBody

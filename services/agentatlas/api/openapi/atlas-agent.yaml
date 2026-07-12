@@ -35,6 +35,45 @@ paths:
       security: [{AtlasSession: []}]
       operationId: logoutAtlasBrowserSession
       responses: {'204': {description: Atlas and AgentNexus sessions revoked.}}
+  /api/legacy/knowledge:
+    get:
+      security: [{AtlasSession: []}]
+      operationId: listLegacyKnowledge
+      responses: {'200': {$ref: '#/components/responses/LegacyItems'}, '403': {description: Advanced maintenance or organization authorization denied.}, '503': {description: Safe compatibility adapter unavailable.}}
+  /api/legacy/dream:
+    get:
+      security: [{AtlasSession: []}]
+      operationId: listLegacyDream
+      responses: {'200': {$ref: '#/components/responses/LegacyItems'}, '403': {description: Advanced maintenance or organization authorization denied.}, '503': {description: Safe compatibility adapter unavailable.}}
+  /api/legacy/workflows:
+    get:
+      security: [{AtlasSession: []}]
+      operationId: listLegacyWorkflows
+      responses: {'200': {$ref: '#/components/responses/LegacyItems'}, '403': {description: Advanced maintenance or organization authorization denied.}, '503': {description: Safe compatibility adapter unavailable.}}
+  /api/legacy/evidence:
+    get:
+      security: [{AtlasSession: []}]
+      operationId: listLegacyEvidence
+      responses: {'200': {$ref: '#/components/responses/LegacyItems'}, '403': {description: Advanced maintenance or organization authorization denied.}, '503': {description: Safe compatibility adapter unavailable.}}
+  /api/legacy/assistant:
+    get:
+      security: [{AtlasSession: []}]
+      operationId: getLegacyAssistant
+      responses: {'200': {$ref: '#/components/responses/LegacyItems'}, '403': {description: Advanced maintenance or organization authorization denied.}, '503': {description: Safe compatibility adapter unavailable.}}
+  /api/legacy/assistant/attachments:
+    post:
+      security: [{AtlasSession: []}]
+      operationId: uploadLegacyAssistantAttachments
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [files]
+              properties:
+                files: {type: array, maxItems: 20, items: {type: string, format: binary}}
+      responses: {'200': {description: Attachments accepted by the secure adapter.}, '403': {description: Advanced maintenance or organization authorization denied.}, '503': {description: Safe attachment adapter unavailable; no file is consumed.}}
   /api/changes/suggestions:
     post:
       security: [{AtlasSession: []}]
@@ -548,6 +587,26 @@ components:
       in: cookie
       name: atlas_session
   responses:
+    LegacyItems:
+      description: Bounded legacy items visible in the authorized organization scope.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [items]
+            properties:
+              items:
+                type: array
+                maxItems: 100
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [id, label]
+                  properties:
+                    id: {type: string}
+                    label: {type: string}
+                    detail: {type: string}
     Unauthorized:
       description: Missing or invalid ticket (fail closed)
       content:
@@ -562,18 +621,29 @@ components:
     BrowserSessionView:
       type: object
       additionalProperties: false
-      required: [authenticated, enterprise_id, enterprise_user_id, display_name, org_version, org_unit_ids, permissions]
+      required: [authenticated, enterprise_id, enterprise_name, enterprise_user_id, display_name, org_version, org_unit_ids, org_tree, permissions]
       properties:
         authenticated: {type: boolean}
         enterprise_id: {type: string}
+        enterprise_name: {type: string, minLength: 1}
         enterprise_user_id: {type: string}
         display_name: {type: string}
         org_version: {type: integer, format: int64}
         org_unit_ids: {type: array, maxItems: 1000, items: {type: string}}
+        org_tree: {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/BrowserOrgScopeNode'}}
         permissions: {type: array, maxItems: 100, items: {type: string}}
         advanced_mode_allowed: {type: boolean}
         idle_expires_at: {type: string, format: date-time}
         absolute_expires_at: {type: string, format: date-time}
+    BrowserOrgScopeNode:
+      type: object
+      additionalProperties: false
+      required: [id, name, selectable, children]
+      properties:
+        id: {type: string}
+        name: {type: string, minLength: 1}
+        selectable: {type: boolean}
+        children: {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/BrowserOrgScopeNode'}}
     SuggestionInput:
       type: object
       additionalProperties: false

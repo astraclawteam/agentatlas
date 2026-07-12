@@ -21,19 +21,21 @@ import (
 // plane (api/openapi/atlas-agent.yaml): Knowledge Agent runs, workflow
 // draft/publish, dream policies, confirmations.
 type AgentRouterDeps struct {
-	Nexus           nexus.Client
-	Agent           *agent.Runner
-	Workflows       *workflow.Service
-	Runtime         *workflow.Runtime
-	Dreams          *dream.PolicyService
-	DreamRuns       dreamRunStore
-	DreamRerun      dreamRerunner
-	Store           *db.Queries
-	Outlines        MethodOutlineStore // optional; defaults to Store
-	Runner          *tasks.Runner
-	Metrics         *observability.Metrics  // optional; enables /metrics + latency histograms
-	BrowserSessions *browsersession.Service // optional; enables Console BFF routes
-	Changes         *governance.Service     // optional; enables governed maintenance routes
+	Nexus             nexus.Client
+	Agent             *agent.Runner
+	Workflows         *workflow.Service
+	Runtime           *workflow.Runtime
+	Dreams            *dream.PolicyService
+	DreamRuns         dreamRunStore
+	DreamRerun        dreamRerunner
+	Store             *db.Queries
+	Outlines          MethodOutlineStore // optional; defaults to Store
+	Runner            *tasks.Runner
+	Metrics           *observability.Metrics  // optional; enables /metrics + latency histograms
+	BrowserSessions   *browsersession.Service // optional; enables Console BFF routes
+	BrowserOrgStore   browserSessionOrgStore  // optional; defaults to Store
+	BrowserAuthorizer nexus.BrowserBFFClient  // optional; required by advanced legacy BFF routes
+	Changes           *governance.Service     // optional; enables governed maintenance routes
 }
 
 type dreamBackfiller interface {
@@ -144,11 +146,35 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 	}
 	mo := &methodOutlineHandler{deps: deps, store: outlineStore}
 	{
-		browser := &browserSessionHandler{sessions: deps.BrowserSessions}
+		orgStore := deps.BrowserOrgStore
+		if orgStore == nil && deps.Store != nil {
+			orgStore = deps.Store
+		}
+		browser := &browserSessionHandler{sessions: deps.BrowserSessions, orgs: orgStore}
+		var legacyWorkflows legacyWorkflowLister
+		if deps.Workflows != nil {
+			legacyWorkflows = deps.Workflows
+		}
+		var legacyDreams legacyDreamLister
+		if deps.Dreams != nil {
+			legacyDreams = deps.Dreams
+		}
+		var legacyTraces legacyTraceStore
+		if deps.Store != nil {
+			legacyTraces = deps.Store
+		}
+		legacy := &legacyBrowserHandler{authorizer: deps.BrowserAuthorizer, orgs: orgStore, workflows: legacyWorkflows, dreams: legacyDreams, traces: legacyTraces}
 		r.Get("/auth/login", browser.login)
 		r.Get("/auth/callback", browser.callback)
 		r.Get("/api/session", browser.session)
 		r.With(browser.sessionGuard, sameOriginCSRF).Post("/auth/logout", browser.logout)
+		r.Route("/api/legacy", func(r chi.Router) {
+			r.Use(browser.sessionGuard)
+			for _, surface := range []string{"knowledge", "dream", "workflows", "evidence", "assistant"} {
+				r.Get("/"+surface, legacy.read(surface))
+			}
+			r.With(sameOriginCSRF).Post("/assistant/attachments", legacy.uploadAttachments)
+		})
 		{
 			changes := &changeHandler{service: deps.Changes}
 			r.Route("/api/changes", func(r chi.Router) {
