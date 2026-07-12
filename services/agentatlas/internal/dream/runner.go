@@ -34,6 +34,10 @@ type RunnerStore interface {
 	RecordDreamWorkflowLifecycleFailure(ctx context.Context, arg db.RecordDreamWorkflowLifecycleFailureParams) error
 	CompleteDreamWorkflowLifecycle(ctx context.Context, id int64) error
 	ReserveDreamOutputHash(ctx context.Context, arg db.ReserveDreamOutputHashParams) (db.DreamRun, error)
+	ReserveDreamOutputHashOwned(ctx context.Context, arg db.ReserveDreamOutputHashOwnedParams) (db.DreamRun, error)
+	FenceDreamExecutionOwner(ctx context.Context, arg db.FenceDreamExecutionOwnerParams) (string, error)
+	CompleteDreamRunOwned(ctx context.Context, arg db.CompleteDreamRunOwnedParams) (int64, error)
+	RecoverExpiredUnboundDreamRuns(ctx context.Context, resultLimit int32) ([]string, error)
 	ClaimDreamRunLease(ctx context.Context, arg db.ClaimDreamRunLeaseParams) (int64, error)
 	RenewDreamRunLease(ctx context.Context, arg db.RenewDreamRunLeaseParams) (int64, error)
 	RecoverExpiredDreamRunAfterWorkflow(ctx context.Context, arg db.RecoverExpiredDreamRunAfterWorkflowParams) (db.DreamRun, error)
@@ -99,9 +103,13 @@ func (r *Runner) RegisterJobHandler() error {
 			if r.metrics != nil {
 				r.metrics.DreamRuns.WithLabelValues(status).Inc()
 			}
-			_, err := r.store.UpdateDreamRunStatus(ctx, db.UpdateDreamRunStatusParams{
+			rows, err := r.store.CompleteDreamRunOwned(ctx, db.CompleteDreamRunOwnedParams{
 				ID: runID, Status: status, Error: msg,
+				ExecutionOwner: pgtype.Text{String: r.executionOwner, Valid: true},
 			})
+			if err == nil && rows != 1 {
+				return fmt.Errorf("Dream %s execution ownership lost before terminal completion", runID)
+			}
 			return err
 		},
 	})
@@ -262,7 +270,10 @@ func (r *Runner) execute(ctx context.Context, runID string) error {
 	}
 	sum := sha256.Sum256(hashPayload)
 	outputHash := "sha256:" + hex.EncodeToString(sum[:])
-	if _, err := r.store.ReserveDreamOutputHash(ctx, db.ReserveDreamOutputHashParams{EnterpriseID: run.EnterpriseID, RunID: run.ID, OutputHash: pgtype.Text{String: outputHash, Valid: true}}); err != nil {
+	if _, err := r.store.ReserveDreamOutputHashOwned(ctx, db.ReserveDreamOutputHashOwnedParams{
+		EnterpriseID: run.EnterpriseID, RunID: run.ID, OutputHash: pgtype.Text{String: outputHash, Valid: true},
+		ExecutionOwner: pgtype.Text{String: r.executionOwner, Valid: true},
+	}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("Dream output conflicts with reserved committed output")
 		}
@@ -361,7 +372,14 @@ func (r *Runner) execute(ctx context.Context, runID string) error {
 	if !ok {
 		return fmt.Errorf("Dream output persistence requires PostgreSQL transaction store")
 	}
-	return txStore.InTransaction(ctx, func(q *db.Queries) error { return persist(q) })
+	return txStore.InTransaction(ctx, func(q *db.Queries) error {
+		if _, err := q.FenceDreamExecutionOwner(ctx, db.FenceDreamExecutionOwnerParams{
+			ID: run.ID, ExecutionOwner: pgtype.Text{String: r.executionOwner, Valid: true},
+		}); err != nil {
+			return fmt.Errorf("Dream output ownership fence: %w", err)
+		}
+		return persist(q)
+	})
 }
 
 func validateRunPolicySnapshot(run db.DreamRun, policyEnterprise string, policy Policy) error {
@@ -456,6 +474,22 @@ func (r *Runner) ReconcileWorkflowLifecycle(ctx context.Context) error {
 				ID: event.ID, LastError: truncateRunes(completionErr.Error(), 1000),
 			})
 			failures = append(failures, errors.Join(completionErr, recorded))
+		}
+	}
+	return errors.Join(failures...)
+}
+
+// RecoverExpiredExecutions republishes Dream claims that expired before a
+// workflow was bound. Bound runs are recovered at the workflow layer.
+func (r *Runner) RecoverExpiredExecutions(ctx context.Context) error {
+	ids, err := r.store.RecoverExpiredUnboundDreamRuns(ctx, 100)
+	if err != nil {
+		return fmt.Errorf("recover expired unbound Dream runs: %w", err)
+	}
+	var failures []error
+	for _, id := range ids {
+		if err := r.tasks.Enqueue(ctx, JobTypeDream, id); err != nil {
+			failures = append(failures, fmt.Errorf("redispatch recovered Dream %s: %w", id, err))
 		}
 	}
 	return errors.Join(failures...)

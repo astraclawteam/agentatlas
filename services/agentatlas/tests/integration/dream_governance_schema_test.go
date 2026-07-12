@@ -132,6 +132,7 @@ values('outbox-dream','outbox-policy',1,'outbox-ent','running',now()-interval '1
 		ID: "outbox-run", WorkflowID: pgtype.Text{String: "outbox-wf", Valid: true}, Version: pgtype.Int4{Int32: 1, Valid: true}, EnterpriseID: "outbox-ent",
 		Status: "running", Input: []byte(`{}`), Output: state, DreamRunID: "outbox-dream",
 		PolicyID: "outbox-policy", PolicyVersion: 1, OrgUnitID: "department:outbox",
+		ExecutionOwner: pgtype.Text{String: "initial-workflow-owner", Valid: true},
 	})
 	if err != nil || created.ID != "outbox-run" {
 		t.Fatalf("atomic create/bind: run=%+v err=%v", created, err)
@@ -140,12 +141,14 @@ values('outbox-dream','outbox-policy',1,'outbox-ent','running',now()-interval '1
 		ID: "forged-run", WorkflowID: pgtype.Text{String: "outbox-wf", Valid: true}, Version: pgtype.Int4{Int32: 1, Valid: true}, EnterpriseID: "outbox-ent",
 		Status: "running", Input: []byte(`{}`), Output: state, DreamRunID: "outbox-dream",
 		PolicyID: "forged-policy", PolicyVersion: 1, OrgUnitID: "department:outbox",
+		ExecutionOwner: pgtype.Text{String: "initial-workflow-owner", Valid: true},
 	}); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("forged bound context created workflow run: %v", err)
 	}
 	if _, err := queries.TransitionDreamWorkflowRun(ctx, db.TransitionDreamWorkflowRunParams{
 		ID: "outbox-run", EnterpriseID: "outbox-ent", Status: "failed", RunOutput: state,
 		LifecycleError: strings.Repeat("x", 1001), NodeID: "aggregate", EventStatus: "failed", EventDetail: []byte(`{}`),
+		ExpectedStatus: "running", ExpectedRevision: 0, ExpectedOwner: pgtype.Text{String: "initial-workflow-owner", Valid: true},
 	}); err == nil {
 		t.Fatal("outbox constraint failure did not roll back workflow transition")
 	}
@@ -163,6 +166,7 @@ values('outbox-dream','outbox-policy',1,'outbox-ent','running',now()-interval '1
 			if _, err := queries.TransitionDreamWorkflowRun(ctx, db.TransitionDreamWorkflowRunParams{
 				ID: "outbox-run", EnterpriseID: "outbox-ent", Status: transition.runStatus, RunOutput: state,
 				NodeID: "boundary", EventStatus: transition.eventStatus, EventDetail: []byte(`{`),
+				ExpectedStatus: "running", ExpectedRevision: 0, ExpectedOwner: pgtype.Text{String: "initial-workflow-owner", Valid: true},
 			}); err == nil {
 				t.Fatal("invalid audit detail did not abort transition")
 			}
@@ -185,12 +189,14 @@ values('outbox-dream','outbox-policy',1,'outbox-ent','running',now()-interval '1
 	if _, err := queries.TransitionDreamWorkflowRun(ctx, db.TransitionDreamWorkflowRunParams{
 		ID: "outbox-run", EnterpriseID: "outbox-ent", Status: "waiting_confirmation", RunOutput: state,
 		NodeID: "confirm", EventStatus: "waiting_confirmation", EventDetail: []byte(`{}`),
+		ExpectedStatus: "running", ExpectedRevision: 0, ExpectedOwner: pgtype.Text{String: "initial-workflow-owner", Valid: true},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := queries.TransitionDreamWorkflowRun(ctx, db.TransitionDreamWorkflowRunParams{
 		ID: "outbox-run", EnterpriseID: "outbox-ent", Status: "waiting_confirmation", RunOutput: state,
 		NodeID: "confirm", EventStatus: "waiting_confirmation", EventDetail: []byte(`{}`),
+		ExpectedStatus: "waiting_confirmation", ExpectedRevision: 1, ExpectedOwner: pgtype.Text{},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -211,6 +217,70 @@ values('outbox-dream','outbox-policy',1,'outbox-ent','running',now()-interval '1
 	pending, err = queries.ListPendingDreamWorkflowLifecycle(ctx, 10)
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("completed lifecycle remained pending: %+v err=%v", pending, err)
+	}
+	if _, err := conn.Exec(ctx, `update dream_runs set execution_owner='owner-b',execution_lease_expires_at=now()+interval '1 hour' where id='outbox-dream'`); err != nil {
+		t.Fatal(err)
+	}
+	if rows, err := queries.CompleteDreamRunOwned(ctx, db.CompleteDreamRunOwnedParams{
+		ID: "outbox-dream", ExecutionOwner: pgtype.Text{String: "owner-a", Valid: true}, Status: "succeeded", Error: "",
+	}); err != nil || rows != 0 {
+		t.Fatalf("stale Dream owner completed B's run: rows=%d err=%v", rows, err)
+	}
+	if _, err := queries.FenceDreamExecutionOwner(ctx, db.FenceDreamExecutionOwnerParams{
+		ID: "outbox-dream", ExecutionOwner: pgtype.Text{String: "owner-a", Valid: true},
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("stale Dream owner crossed output fence: %v", err)
+	}
+	if _, err := queries.ReserveDreamOutputHashOwned(ctx, db.ReserveDreamOutputHashOwnedParams{
+		EnterpriseID: "outbox-ent", RunID: "outbox-dream", ExecutionOwner: pgtype.Text{String: "owner-a", Valid: true},
+		OutputHash: pgtype.Text{String: "sha256:stale", Valid: true},
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("stale Dream owner reached object-write reservation: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `update workflow_runs set status='pending',execution_owner=null,execution_lease_expires_at=null where id='outbox-run'`); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := queries.ClaimWorkflowRunLease(ctx, db.ClaimWorkflowRunLeaseParams{
+		ID: "outbox-run", ExecutionOwner: pgtype.Text{String: "workflow-owner-a", Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.ClaimWorkflowRunLease(ctx, db.ClaimWorkflowRunLeaseParams{
+		ID: "outbox-run", ExecutionOwner: pgtype.Text{String: "workflow-owner-b", Valid: true},
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("second workflow owner claimed same pending run: %v", err)
+	}
+	cas := db.TransitionDreamWorkflowRunParams{
+		ID: "outbox-run", EnterpriseID: "outbox-ent", Status: "running", RunOutput: state,
+		NodeID: "aggregate", EventStatus: "succeeded", EventDetail: []byte(`{}`),
+		ExpectedStatus: "running", ExpectedRevision: claimed.StateRevision,
+		ExpectedOwner: pgtype.Text{String: "workflow-owner-a", Valid: true},
+	}
+	if _, err := queries.TransitionDreamWorkflowRun(ctx, cas); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queries.TransitionDreamWorkflowRun(ctx, cas); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("stale workflow revision executed duplicate node transition: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `update workflow_runs set status='waiting_confirmation',execution_owner=null,execution_lease_expires_at=null where id='outbox-run'`); err != nil {
+		t.Fatal(err)
+	}
+	waiting, err := queries.GetWorkflowRun(ctx, "outbox-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := db.TransitionDreamWorkflowRunParams{
+		ID: "outbox-run", EnterpriseID: "outbox-ent", Status: "pending", RunOutput: state,
+		NodeID: "confirm", EventStatus: "succeeded", EventDetail: []byte(`{"decision":"approve"}`),
+		ExpectedStatus: "waiting_confirmation", ExpectedRevision: waiting.StateRevision, ExpectedOwner: pgtype.Text{},
+	}
+	if _, err := queries.TransitionDreamWorkflowRun(ctx, decision); err != nil {
+		t.Fatal(err)
+	}
+	decision.Status, decision.EventStatus, decision.EventDetail = "cancelled", "failed", []byte(`{"decision":"reject"}`)
+	if _, err := queries.TransitionDreamWorkflowRun(ctx, decision); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("approve/reject race overwrote winning decision: %v", err)
 	}
 }
 

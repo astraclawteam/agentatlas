@@ -189,6 +189,10 @@ func (stubDreamStore) UpdateDreamRunStatus(context.Context, db.UpdateDreamRunSta
 	return 1, nil
 }
 
+func (stubDreamStore) CompleteDreamRunOwned(context.Context, db.CompleteDreamRunOwnedParams) (int64, error) {
+	return 1, nil
+}
+
 func TestDreamRunsMetricAndSpanFire(t *testing.T) {
 	rec := spanRecorder(t)
 	m := observability.NewMetrics()

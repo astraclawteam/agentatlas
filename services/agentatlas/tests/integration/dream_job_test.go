@@ -32,11 +32,24 @@ func (failingPublishBus) Publish(context.Context, string, string) error {
 	return fmt.Errorf("injected publish failure")
 }
 
-type countingPublishBus struct{ publishes int }
+type countingPublishBus struct {
+	publishes int
+	ids       []string
+}
 
-func (b *countingPublishBus) Publish(context.Context, string, string) error {
+func (b *countingPublishBus) Publish(_ context.Context, _, id string) error {
 	b.publishes++
+	b.ids = append(b.ids, id)
 	return nil
+}
+
+func (b *countingPublishBus) published(id string) bool {
+	for _, candidate := range b.ids {
+		if candidate == id {
+			return true
+		}
+	}
+	return false
 }
 
 type failingLifecycleStore struct{ *db.Queries }
@@ -167,6 +180,58 @@ func TestDreamDirectSuccessLeaseRecovery(t *testing.T) {
 	}
 	if recovered.Status != "pending" || !processed || restartBus.publishes != 1 {
 		t.Fatalf("direct restart recovery: run=%+v processed=%v publishes=%d", recovered, processed, restartBus.publishes)
+	}
+	prebindID := newID("expired_prebind")
+	if _, err := q.CreateDreamRun(ctx, db.CreateDreamRunParams{
+		ID: prebindID, PolicyID: policyID, Version: 1, EnterpriseID: entID, Status: "pending",
+		WindowStart: pgtype.Timestamptz{Time: start.Add(time.Hour), Valid: true}, WindowEnd: pgtype.Timestamptz{Time: start.Add(2 * time.Hour), Valid: true},
+		OrgUnitID: "department:direct", PolicyVersion: 1, WorkflowID: wfID, WorkflowVersion: 1, Timezone: "UTC",
+		InputSnapshot: []byte(`{"source_counts":[],"sanitized_input_ids":[]}`), VisibilitySnapshot: []byte(`{"visibility_level":"members","org_unit_ids":["department:direct"],"masked_field_count":0}`),
+		ModelRoute: "workflow/" + wfID, ModelVersion: "v1", Attempt: 1, Coverage: []byte(`{"expected_children":0,"completed_children":0,"input_count":0}`), MissingInputs: []byte(`[]`), IdempotencyKey: prebindID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.ClaimDreamRunLease(ctx, db.ClaimDreamRunLeaseParams{ID: prebindID, ExecutionOwner: pgtype.Text{String: "dead-prebind", Valid: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `update dream_runs set execution_lease_expires_at=now()-interval '1 second' where id=$1`, prebindID); err != nil {
+		t.Fatal(err)
+	}
+	prebindBus := &countingPublishBus{}
+	prebindTasks := tasks.NewRunner(prebindBus)
+	prebindTasks.AllowEnqueue(dream.JobTypeDream)
+	if err := dream.NewRunner(q, nil, dream.NewPolicyService(q), prebindTasks, nil).RecoverExpiredExecutions(ctx); err != nil {
+		t.Fatal(err)
+	}
+	prebind, err := q.GetDreamRun(ctx, prebindID)
+	if err != nil || prebind.Status != "pending" || prebindBus.publishes != 1 {
+		t.Fatalf("expired pre-binding Dream not recovered: run=%+v publishes=%d err=%v", prebind, prebindBus.publishes, err)
+	}
+	pendingWorkflowID := newID("expired_workflow")
+	if _, err := q.CreateWorkflowRun(ctx, db.CreateWorkflowRunParams{ID: pendingWorkflowID, WorkflowID: wfID, Version: 1, EnterpriseID: entID, Status: workflow.RunPending, Input: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.ClaimWorkflowRunLease(ctx, db.ClaimWorkflowRunLeaseParams{ID: pendingWorkflowID, ExecutionOwner: pgtype.Text{String: "dead-workflow", Valid: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `update workflow_runs set execution_lease_expires_at=now()-interval '1 second' where id=$1`, pendingWorkflowID); err != nil {
+		t.Fatal(err)
+	}
+	failingWorkflowTasks := tasks.NewRunner(failingPublishBus{})
+	failingWorkflowTasks.AllowEnqueue(workflow.JobTypeRun)
+	failingHandler := workflow.NewRunJobHandler(wfRuntime, q, failingWorkflowTasks)
+	if err := failingHandler.RecoverPendingRuns(ctx); err == nil {
+		t.Fatal("workflow recovery publish failure was discarded")
+	}
+	restartWorkflowBus := &countingPublishBus{}
+	restartWorkflowTasks := tasks.NewRunner(restartWorkflowBus)
+	restartWorkflowTasks.AllowEnqueue(workflow.JobTypeRun)
+	if err := workflow.NewRunJobHandler(wfRuntime, q, restartWorkflowTasks).RecoverPendingRuns(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recoveredWorkflow, err := q.GetWorkflowRun(ctx, pendingWorkflowID)
+	if err != nil || recoveredWorkflow.Status != workflow.RunPending || !restartWorkflowBus.published(pendingWorkflowID) {
+		t.Fatalf("expired/pending workflow recovery: run=%+v publishes=%d err=%v", recoveredWorkflow, restartWorkflowBus.publishes, err)
 	}
 }
 

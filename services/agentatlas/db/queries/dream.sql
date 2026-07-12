@@ -95,6 +95,19 @@ WHERE enterprise_id=sqlc.arg(enterprise_id) AND id=sqlc.arg(run_id)
   AND (output_hash IS NULL OR output_hash=sqlc.arg(output_hash))
 RETURNING *;
 
+-- name: ReserveDreamOutputHashOwned :one
+UPDATE dream_runs SET output_hash=sqlc.arg(output_hash)
+WHERE enterprise_id=sqlc.arg(enterprise_id) AND id=sqlc.arg(run_id)
+  AND execution_owner=sqlc.arg(execution_owner) AND execution_lease_expires_at > now()
+  AND status='running' AND (output_hash IS NULL OR output_hash=sqlc.arg(output_hash))
+RETURNING *;
+
+-- name: FenceDreamExecutionOwner :one
+SELECT id FROM dream_runs
+WHERE id=sqlc.arg(id) AND execution_owner=sqlc.arg(execution_owner)
+  AND execution_lease_expires_at > now() AND status='running'
+FOR UPDATE;
+
 -- name: ClaimDreamRun :execrows
 UPDATE dream_runs SET status = 'running' WHERE id = $1 AND status = 'pending';
 
@@ -116,6 +129,19 @@ WHERE enterprise_id=sqlc.arg(enterprise_id) AND workflow_run_id=sqlc.arg(workflo
   AND status='running' AND (execution_lease_expires_at IS NULL OR execution_lease_expires_at <= now())
 RETURNING *;
 
+-- name: RecoverExpiredUnboundDreamRuns :many
+UPDATE dream_runs
+SET status='pending', error='', execution_owner=NULL, execution_lease_expires_at=NULL
+WHERE id IN (
+    SELECT id FROM dream_runs
+    WHERE status='running' AND workflow_run_id IS NULL
+      AND (execution_lease_expires_at IS NULL OR execution_lease_expires_at <= now())
+    ORDER BY created_at
+    LIMIT sqlc.arg(result_limit)
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id;
+
 -- name: GetLatestDreamRunForPolicy :one
 SELECT * FROM dream_runs WHERE policy_id = $1 ORDER BY window_end DESC LIMIT 1;
 
@@ -126,6 +152,14 @@ SET status = $2, error = $3,
     execution_owner = CASE WHEN $2 IN ('succeeded','failed') THEN NULL ELSE execution_owner END,
     execution_lease_expires_at = CASE WHEN $2 IN ('succeeded','failed') THEN NULL ELSE execution_lease_expires_at END
 WHERE id = $1;
+
+-- name: CompleteDreamRunOwned :execrows
+UPDATE dream_runs
+SET status=sqlc.arg(status), error=sqlc.arg(error), finished_at=now(),
+    execution_owner=NULL, execution_lease_expires_at=NULL
+WHERE id=sqlc.arg(id) AND status='running'
+  AND execution_owner=sqlc.arg(execution_owner) AND execution_lease_expires_at > now()
+  AND sqlc.arg(status) IN ('succeeded','failed');
 
 -- name: InsertDreamInput :exec
 INSERT INTO dream_inputs (run_id, source_type, source_id)

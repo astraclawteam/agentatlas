@@ -15,6 +15,9 @@ END $$;
 
 ALTER TABLE workflow_runs ADD CONSTRAINT workflow_runs_enterprise_id_id_uniq UNIQUE (enterprise_id, id);
 ALTER TABLE workflow_runs ADD CONSTRAINT workflow_runs_dream_pin_uniq UNIQUE (enterprise_id, id, workflow_id, version);
+ALTER TABLE workflow_runs ADD COLUMN execution_owner text;
+ALTER TABLE workflow_runs ADD COLUMN execution_lease_expires_at timestamptz;
+ALTER TABLE workflow_runs ADD COLUMN state_revision bigint NOT NULL DEFAULT 0;
 ALTER TABLE dream_runs ADD COLUMN workflow_run_id text;
 ALTER TABLE dream_runs ADD COLUMN output_hash text;
 ALTER TABLE dream_runs ADD COLUMN execution_owner text;
@@ -48,6 +51,8 @@ CREATE INDEX dream_workflow_lifecycle_outbox_pending_idx
     ON dream_workflow_lifecycle_outbox (processed_at, id) WHERE processed_at IS NULL;
 CREATE INDEX dream_runs_execution_lease_idx
     ON dream_runs (execution_lease_expires_at) WHERE status = 'running';
+CREATE INDEX workflow_runs_execution_lease_idx
+    ON workflow_runs (execution_lease_expires_at) WHERE status = 'running';
 
 -- +goose StatementBegin
 CREATE FUNCTION protect_dream_workflow_run_binding() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -67,6 +72,7 @@ FOR EACH ROW EXECUTE FUNCTION protect_dream_workflow_run_binding();
 
 DROP TRIGGER dream_workflow_run_binding_immutable ON dream_runs;
 DROP FUNCTION protect_dream_workflow_run_binding();
+DROP INDEX workflow_runs_execution_lease_idx;
 DROP INDEX dream_runs_execution_lease_idx;
 DROP TABLE dream_workflow_lifecycle_outbox;
 ALTER TABLE dream_inputs DROP CONSTRAINT dream_inputs_run_source_uniq;
@@ -80,3 +86,6 @@ ALTER TABLE dream_runs DROP COLUMN execution_owner;
 ALTER TABLE dream_runs DROP COLUMN execution_lease_expires_at;
 ALTER TABLE workflow_runs DROP CONSTRAINT workflow_runs_dream_pin_uniq;
 ALTER TABLE workflow_runs DROP CONSTRAINT workflow_runs_enterprise_id_id_uniq;
+ALTER TABLE workflow_runs DROP COLUMN state_revision;
+ALTER TABLE workflow_runs DROP COLUMN execution_lease_expires_at;
+ALTER TABLE workflow_runs DROP COLUMN execution_owner;

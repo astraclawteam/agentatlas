@@ -234,6 +234,12 @@ func run() error {
 	if err := dreamRunner.ReconcileWorkflowLifecycle(ctx); err != nil {
 		logger.Warn("initial Dream workflow lifecycle reconciliation", zap.Error(err))
 	}
+	if err := dreamRunner.RecoverExpiredExecutions(ctx); err != nil {
+		logger.Warn("initial Dream execution recovery", zap.Error(err))
+	}
+	if err := runJobs.RecoverPendingRuns(ctx); err != nil {
+		logger.Warn("initial workflow execution recovery", zap.Error(err))
+	}
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
@@ -244,6 +250,12 @@ func run() error {
 			case <-ticker.C:
 				if err := dreamRunner.ReconcileWorkflowLifecycle(ctx); err != nil {
 					logger.Warn("Dream workflow lifecycle reconciliation", zap.Error(err))
+				}
+				if err := dreamRunner.RecoverExpiredExecutions(ctx); err != nil {
+					logger.Warn("Dream execution recovery", zap.Error(err))
+				}
+				if err := runJobs.RecoverPendingRuns(ctx); err != nil {
+					logger.Warn("workflow execution recovery", zap.Error(err))
 				}
 			}
 		}

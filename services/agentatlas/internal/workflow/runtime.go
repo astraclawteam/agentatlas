@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.opentelemetry.io/otel/attribute"
@@ -176,6 +177,8 @@ func (r *Runtime) startRun(ctx context.Context, enterpriseID, workflowID string,
 	}
 	runID := newID("run")
 	state := runState{NextIndex: 0, Outputs: map[string]map[string]any{}, Input: input, Dream: dream}
+	var executionOwner pgtype.Text
+	var stateRevision int64
 	if dream == nil {
 		if _, err := r.store.CreateWorkflowRun(ctx, db.CreateWorkflowRunParams{
 			ID: runID, WorkflowID: workflowID, Version: version,
@@ -192,17 +195,63 @@ func (r *Runtime) startRun(ctx context.Context, enterpriseID, workflowID string,
 		if err != nil {
 			return "", "", fmt.Errorf("encode initial Dream workflow state: %w", err)
 		}
-		if _, err := dreamStore.CreateBoundDreamWorkflowRun(ctx, db.CreateBoundDreamWorkflowRunParams{
+		executionOwner = pgtype.Text{String: newID("workflow-exec"), Valid: true}
+		created, err := dreamStore.CreateBoundDreamWorkflowRun(ctx, db.CreateBoundDreamWorkflowRunParams{
 			DreamRunID: dream.DreamRunID, EnterpriseID: enterpriseID, PolicyID: dream.PolicyID,
 			PolicyVersion: dream.PolicyVersion, OrgUnitID: dream.OrgUnitID,
 			WorkflowID: pgtype.Text{String: workflowID, Valid: true}, Version: pgtype.Int4{Int32: version, Valid: true},
-			ID: runID, Status: RunRunning, Input: rawInput, Output: rawState,
-		}); err != nil {
+			ID: runID, Status: RunRunning, Input: rawInput, Output: rawState, ExecutionOwner: executionOwner,
+		})
+		if err != nil {
 			return runID, RunFailed, fmt.Errorf("create and bind Dream workflow run: %w", err)
 		}
+		stateRevision = created.StateRevision
 	}
-	status, err := r.execute(ctx, runID, enterpriseID, def, order, state)
+	status, err := r.executeDirectWithLease(ctx, runID, enterpriseID, def, order, state, executionOwner, stateRevision)
 	return runID, status, err
+}
+
+func (r *Runtime) executeDirectWithLease(ctx context.Context, runID, enterpriseID string, def Definition, order []sdkworkflow.Node, state runState, owner pgtype.Text, revision int64) (string, error) {
+	if !owner.Valid {
+		return r.execute(ctx, runID, enterpriseID, def, order, state, owner, revision)
+	}
+	renewer, ok := r.store.(interface {
+		RenewWorkflowRunLease(context.Context, db.RenewWorkflowRunLeaseParams) (int64, error)
+	})
+	if !ok {
+		return "", fmt.Errorf("workflow store cannot renew direct execution lease")
+	}
+	leaseCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan struct{})
+	renewed := make(chan error, 1)
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				renewed <- nil
+				return
+			case <-leaseCtx.Done():
+				renewed <- leaseCtx.Err()
+				return
+			case <-ticker.C:
+				rows, err := renewer.RenewWorkflowRunLease(leaseCtx, db.RenewWorkflowRunLeaseParams{ID: runID, ExecutionOwner: owner})
+				if err != nil || rows != 1 {
+					if err == nil {
+						err = fmt.Errorf("workflow direct execution lease ownership lost")
+					}
+					cancel()
+					renewed <- err
+					return
+				}
+			}
+		}
+	}()
+	status, execErr := r.execute(leaseCtx, runID, enterpriseID, def, order, state, owner, revision)
+	close(done)
+	return status, errors.Join(execErr, <-renewed)
 }
 
 // Resume records the human.confirm decision for a paused run. approve=false
@@ -239,8 +288,9 @@ func (r *Runtime) Resume(ctx context.Context, runID, enterpriseID string, approv
 	confirmNode := order[state.NextIndex]
 
 	if !approve {
-		if err := r.setRunStatus(ctx, runID, RunCancelled, &state, "human confirmation rejected",
-			confirmNode.ID, NodeFailed, map[string]any{"decision": "reject", "comment": comment}); err != nil {
+		if _, err := r.setRunStatus(ctx, runID, RunCancelled, &state, "human confirmation rejected",
+			confirmNode.ID, NodeFailed, map[string]any{"decision": "reject", "comment": comment},
+			RunWaitingConfirmation, run.StateRevision, pgtype.Text{}); err != nil {
 			return "", err
 		}
 		return RunCancelled, nil
@@ -248,14 +298,14 @@ func (r *Runtime) Resume(ctx context.Context, runID, enterpriseID string, approv
 
 	state.Outputs[confirmNode.ID] = map[string]any{"approved": true}
 	state.NextIndex++
-	if err := r.setRunStatus(ctx, runID, RunPending, &state, "", confirmNode.ID, NodeSucceeded,
-		map[string]any{"decision": "approve", "comment": comment}); err != nil {
+	if _, err := r.setRunStatus(ctx, runID, RunPending, &state, "", confirmNode.ID, NodeSucceeded,
+		map[string]any{"decision": "approve", "comment": comment}, RunWaitingConfirmation, run.StateRevision, pgtype.Text{}); err != nil {
 		return "", err
 	}
 	return RunPending, nil
 }
 
-func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def Definition, order []sdkworkflow.Node, state runState) (string, error) {
+func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def Definition, order []sdkworkflow.Node, state runState, executionOwner pgtype.Text, stateRevision int64) (string, error) {
 	ctx, span := observability.Tracer("workflow").Start(ctx, "workflow.run")
 	span.SetAttributes(attribute.String("run_id", runID), attribute.String("enterprise_id", enterpriseID), attribute.String("workflow_id", def.WorkflowID))
 	defer span.End()
@@ -266,7 +316,7 @@ func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def D
 		node := order[state.NextIndex]
 
 		if node.Type == sdkworkflow.NodeHumanConfirm || node.RequiresConfirmation {
-			if err := r.setRunStatus(ctx, runID, RunWaitingConfirmation, &state, "", node.ID, NodeWaitingConfirmation, nil); err != nil {
+			if _, err := r.setRunStatus(ctx, runID, RunWaitingConfirmation, &state, "", node.ID, NodeWaitingConfirmation, nil, RunRunning, stateRevision, executionOwner); err != nil {
 				return "", err
 			}
 			return RunWaitingConfirmation, nil
@@ -281,7 +331,7 @@ func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def D
 		}
 		out, err := exec.Execute(ctx, node, runCtx)
 		if err != nil {
-			if serr := r.setRunStatus(ctx, runID, RunFailed, &state, err.Error(), node.ID, NodeFailed, map[string]any{"error": err.Error()}); serr != nil {
+			if _, serr := r.setRunStatus(ctx, runID, RunFailed, &state, err.Error(), node.ID, NodeFailed, map[string]any{"error": err.Error()}, RunRunning, stateRevision, executionOwner); serr != nil {
 				return "", errors.Join(err, serr)
 			}
 			return RunFailed, err
@@ -295,7 +345,8 @@ func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def D
 		if state.NextIndex == len(order) {
 			status = RunSucceeded
 		}
-		if err := r.setRunStatus(ctx, runID, status, &state, "", node.ID, NodeSucceeded, nil); err != nil {
+		stateRevision, err = r.setRunStatus(ctx, runID, status, &state, "", node.ID, NodeSucceeded, nil, RunRunning, stateRevision, executionOwner)
+		if err != nil {
 			return "", err
 		}
 		if status == RunSucceeded {
@@ -305,13 +356,13 @@ func (r *Runtime) execute(ctx context.Context, runID, enterpriseID string, def D
 	return "", fmt.Errorf("workflow %s has no executable nodes", def.WorkflowID)
 }
 
-func (r *Runtime) setRunStatus(ctx context.Context, runID, status string, state *runState, lifecycleError, nodeID, eventStatus string, eventDetail map[string]any) error {
+func (r *Runtime) setRunStatus(ctx context.Context, runID, status string, state *runState, lifecycleError, nodeID, eventStatus string, eventDetail map[string]any, expectedStatus string, expectedRevision int64, expectedOwner pgtype.Text) (int64, error) {
 	var raw []byte
 	if state != nil {
 		var err error
 		raw, err = json.Marshal(state)
 		if err != nil {
-			return fmt.Errorf("encode run state: %w", err)
+			return 0, fmt.Errorf("encode run state: %w", err)
 		}
 	}
 	var rows int64
@@ -319,11 +370,11 @@ func (r *Runtime) setRunStatus(ctx context.Context, runID, status string, state 
 	if state != nil && state.Dream != nil {
 		dreamStore, ok := r.store.(dreamWorkflowStore)
 		if !ok {
-			return fmt.Errorf("workflow store cannot atomically transition Dream runs")
+			return 0, fmt.Errorf("workflow store cannot atomically transition Dream runs")
 		}
 		rawDetail, detailErr := json.Marshal(eventDetail)
 		if detailErr != nil {
-			return fmt.Errorf("encode workflow event detail: %w", detailErr)
+			return 0, fmt.Errorf("encode workflow event detail: %w", detailErr)
 		}
 		if eventDetail == nil {
 			rawDetail = []byte(`{}`)
@@ -331,16 +382,17 @@ func (r *Runtime) setRunStatus(ctx context.Context, runID, status string, state 
 		rows, err = dreamStore.TransitionDreamWorkflowRun(ctx, db.TransitionDreamWorkflowRunParams{
 			LifecycleError: truncateWorkflowError(lifecycleError), Status: status, RunOutput: raw,
 			ID: runID, EnterpriseID: state.Dream.EnterpriseID, NodeID: nodeID,
-			EventStatus: eventStatus, EventDetail: rawDetail,
+			EventStatus: eventStatus, EventDetail: rawDetail, ExpectedStatus: expectedStatus,
+			ExpectedRevision: expectedRevision, ExpectedOwner: expectedOwner,
 		})
 	} else if state != nil {
 		atomicStore, ok := r.store.(atomicWorkflowStore)
 		if !ok {
-			return fmt.Errorf("workflow store cannot atomically transition run events")
+			return 0, fmt.Errorf("workflow store cannot atomically transition run events")
 		}
 		rawDetail, detailErr := json.Marshal(eventDetail)
 		if detailErr != nil {
-			return fmt.Errorf("encode workflow event detail: %w", detailErr)
+			return 0, fmt.Errorf("encode workflow event detail: %w", detailErr)
 		}
 		if eventDetail == nil {
 			rawDetail = []byte(`{}`)
@@ -348,6 +400,7 @@ func (r *Runtime) setRunStatus(ctx context.Context, runID, status string, state 
 		rows, err = atomicStore.TransitionWorkflowRunWithEvent(ctx, db.TransitionWorkflowRunWithEventParams{
 			Status: status, RunOutput: raw, ID: runID,
 			NodeID: nodeID, EventStatus: eventStatus, EventDetail: rawDetail,
+			ExpectedStatus: expectedStatus, ExpectedRevision: expectedRevision, ExpectedOwner: expectedOwner,
 		})
 	} else {
 		rows, err = r.store.UpdateWorkflowRunStatus(ctx, db.UpdateWorkflowRunStatusParams{
@@ -355,10 +408,10 @@ func (r *Runtime) setRunStatus(ctx context.Context, runID, status string, state 
 		})
 	}
 	if err != nil {
-		return fmt.Errorf("set run %s -> %s: %w", runID, status, err)
+		return 0, fmt.Errorf("set run %s -> %s: %w", runID, status, err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("run %s not found", runID)
+		return 0, fmt.Errorf("run %s transition lost ownership or revision", runID)
 	}
 	if r.metrics != nil {
 		switch status {
@@ -369,7 +422,7 @@ func (r *Runtime) setRunStatus(ctx context.Context, runID, status string, state 
 	if state != nil && state.Dream != nil && r.dreamLifecycle != nil && status != RunPending && status != RunRunning {
 		_ = r.dreamLifecycle(ctx, RunResult{RunID: runID, EnterpriseID: state.Dream.EnterpriseID, Status: status, Dream: state.Dream, Error: lifecycleError})
 	}
-	return nil
+	return rows, nil
 }
 
 func truncateWorkflowError(value string) string {

@@ -11,6 +11,39 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimWorkflowRunLease = `-- name: ClaimWorkflowRunLease :one
+UPDATE workflow_runs
+SET status='running', execution_owner=$1,
+    execution_lease_expires_at=now()+interval '2 minutes', state_revision=state_revision+1
+WHERE id=$2 AND status='pending' AND execution_owner IS NULL
+RETURNING id, workflow_id, version, enterprise_id, status, input, output, started_at, finished_at, execution_owner, execution_lease_expires_at, state_revision
+`
+
+type ClaimWorkflowRunLeaseParams struct {
+	ExecutionOwner pgtype.Text `json:"execution_owner"`
+	ID             string      `json:"id"`
+}
+
+func (q *Queries) ClaimWorkflowRunLease(ctx context.Context, arg ClaimWorkflowRunLeaseParams) (WorkflowRun, error) {
+	row := q.db.QueryRow(ctx, claimWorkflowRunLease, arg.ExecutionOwner, arg.ID)
+	var i WorkflowRun
+	err := row.Scan(
+		&i.ID,
+		&i.WorkflowID,
+		&i.Version,
+		&i.EnterpriseID,
+		&i.Status,
+		&i.Input,
+		&i.Output,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.ExecutionOwner,
+		&i.ExecutionLeaseExpiresAt,
+		&i.StateRevision,
+	)
+	return i, err
+}
+
 const createBoundDreamWorkflowRun = `-- name: CreateBoundDreamWorkflowRun :one
 WITH target AS (
     SELECT dream.id
@@ -26,11 +59,11 @@ WITH target AS (
       AND dream.workflow_run_id IS NULL
     FOR UPDATE
 ), created AS (
-    INSERT INTO workflow_runs (id, workflow_id, version, enterprise_id, status, input, output)
+    INSERT INTO workflow_runs (id, workflow_id, version, enterprise_id, status, input, output, execution_owner, execution_lease_expires_at)
     SELECT $8, $6, $7, $2,
-           $9, $10, $11
+           $9, $10, $11, $12, now()+interval '2 minutes'
     FROM target
-    RETURNING id, workflow_id, version, enterprise_id, status, input, output, started_at, finished_at
+    RETURNING id, workflow_id, version, enterprise_id, status, input, output, started_at, finished_at, execution_owner, execution_lease_expires_at, state_revision
 ), bound AS (
     UPDATE dream_runs AS dream
     SET workflow_run_id = created.id
@@ -38,33 +71,37 @@ WITH target AS (
     WHERE dream.id = target.id
     RETURNING dream.workflow_run_id
 )
-SELECT created.id, created.workflow_id, created.version, created.enterprise_id, created.status, created.input, created.output, created.started_at, created.finished_at FROM created JOIN bound ON bound.workflow_run_id = created.id
+SELECT created.id, created.workflow_id, created.version, created.enterprise_id, created.status, created.input, created.output, created.started_at, created.finished_at, created.execution_owner, created.execution_lease_expires_at, created.state_revision FROM created JOIN bound ON bound.workflow_run_id = created.id
 `
 
 type CreateBoundDreamWorkflowRunParams struct {
-	DreamRunID    string      `json:"dream_run_id"`
-	EnterpriseID  string      `json:"enterprise_id"`
-	PolicyID      string      `json:"policy_id"`
-	PolicyVersion int32       `json:"policy_version"`
-	OrgUnitID     string      `json:"org_unit_id"`
-	WorkflowID    pgtype.Text `json:"workflow_id"`
-	Version       pgtype.Int4 `json:"version"`
-	ID            string      `json:"id"`
-	Status        string      `json:"status"`
-	Input         []byte      `json:"input"`
-	Output        []byte      `json:"output"`
+	DreamRunID     string      `json:"dream_run_id"`
+	EnterpriseID   string      `json:"enterprise_id"`
+	PolicyID       string      `json:"policy_id"`
+	PolicyVersion  int32       `json:"policy_version"`
+	OrgUnitID      string      `json:"org_unit_id"`
+	WorkflowID     pgtype.Text `json:"workflow_id"`
+	Version        pgtype.Int4 `json:"version"`
+	ID             string      `json:"id"`
+	Status         string      `json:"status"`
+	Input          []byte      `json:"input"`
+	Output         []byte      `json:"output"`
+	ExecutionOwner pgtype.Text `json:"execution_owner"`
 }
 
 type CreateBoundDreamWorkflowRunRow struct {
-	ID           string             `json:"id"`
-	WorkflowID   string             `json:"workflow_id"`
-	Version      int32              `json:"version"`
-	EnterpriseID string             `json:"enterprise_id"`
-	Status       string             `json:"status"`
-	Input        []byte             `json:"input"`
-	Output       []byte             `json:"output"`
-	StartedAt    pgtype.Timestamptz `json:"started_at"`
-	FinishedAt   pgtype.Timestamptz `json:"finished_at"`
+	ID                      string             `json:"id"`
+	WorkflowID              string             `json:"workflow_id"`
+	Version                 int32              `json:"version"`
+	EnterpriseID            string             `json:"enterprise_id"`
+	Status                  string             `json:"status"`
+	Input                   []byte             `json:"input"`
+	Output                  []byte             `json:"output"`
+	StartedAt               pgtype.Timestamptz `json:"started_at"`
+	FinishedAt              pgtype.Timestamptz `json:"finished_at"`
+	ExecutionOwner          pgtype.Text        `json:"execution_owner"`
+	ExecutionLeaseExpiresAt pgtype.Timestamptz `json:"execution_lease_expires_at"`
+	StateRevision           int64              `json:"state_revision"`
 }
 
 func (q *Queries) CreateBoundDreamWorkflowRun(ctx context.Context, arg CreateBoundDreamWorkflowRunParams) (CreateBoundDreamWorkflowRunRow, error) {
@@ -80,6 +117,7 @@ func (q *Queries) CreateBoundDreamWorkflowRun(ctx context.Context, arg CreateBou
 		arg.Status,
 		arg.Input,
 		arg.Output,
+		arg.ExecutionOwner,
 	)
 	var i CreateBoundDreamWorkflowRunRow
 	err := row.Scan(
@@ -92,6 +130,9 @@ func (q *Queries) CreateBoundDreamWorkflowRun(ctx context.Context, arg CreateBou
 		&i.Output,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.ExecutionOwner,
+		&i.ExecutionLeaseExpiresAt,
+		&i.StateRevision,
 	)
 	return i, err
 }
@@ -137,7 +178,7 @@ func (q *Queries) CreateWorkflowDraft(ctx context.Context, arg CreateWorkflowDra
 const createWorkflowRun = `-- name: CreateWorkflowRun :one
 INSERT INTO workflow_runs (id, workflow_id, version, enterprise_id, status, input)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, workflow_id, version, enterprise_id, status, input, output, started_at, finished_at
+RETURNING id, workflow_id, version, enterprise_id, status, input, output, started_at, finished_at, execution_owner, execution_lease_expires_at, state_revision
 `
 
 type CreateWorkflowRunParams struct {
@@ -169,6 +210,9 @@ func (q *Queries) CreateWorkflowRun(ctx context.Context, arg CreateWorkflowRunPa
 		&i.Output,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.ExecutionOwner,
+		&i.ExecutionLeaseExpiresAt,
+		&i.StateRevision,
 	)
 	return i, err
 }
@@ -212,7 +256,7 @@ func (q *Queries) GetWorkflow(ctx context.Context, id string) (Workflow, error) 
 }
 
 const getWorkflowRun = `-- name: GetWorkflowRun :one
-SELECT id, workflow_id, version, enterprise_id, status, input, output, started_at, finished_at FROM workflow_runs WHERE id = $1
+SELECT id, workflow_id, version, enterprise_id, status, input, output, started_at, finished_at, execution_owner, execution_lease_expires_at, state_revision FROM workflow_runs WHERE id = $1
 `
 
 func (q *Queries) GetWorkflowRun(ctx context.Context, id string) (WorkflowRun, error) {
@@ -228,6 +272,9 @@ func (q *Queries) GetWorkflowRun(ctx context.Context, id string) (WorkflowRun, e
 		&i.Output,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.ExecutionOwner,
+		&i.ExecutionLeaseExpiresAt,
+		&i.StateRevision,
 	)
 	return i, err
 }
@@ -339,6 +386,30 @@ func (q *Queries) InsertWorkflowRunEvent(ctx context.Context, arg InsertWorkflow
 	return i, err
 }
 
+const listPendingWorkflowRuns = `-- name: ListPendingWorkflowRuns :many
+SELECT id FROM workflow_runs WHERE status='pending' ORDER BY started_at LIMIT $1
+`
+
+func (q *Queries) ListPendingWorkflowRuns(ctx context.Context, resultLimit int32) ([]string, error) {
+	rows, err := q.db.Query(ctx, listPendingWorkflowRuns, resultLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWorkflowNodes = `-- name: ListWorkflowNodes :many
 SELECT workflow_id, version, node_id, node_type, name, config, requires_confirmation FROM workflow_nodes WHERE workflow_id = $1 AND version = $2 ORDER BY node_id
 `
@@ -441,23 +512,87 @@ func (q *Queries) PublishWorkflowVersion(ctx context.Context, arg PublishWorkflo
 	return i, err
 }
 
+const recoverExpiredWorkflowRuns = `-- name: RecoverExpiredWorkflowRuns :many
+WITH changed AS (
+    UPDATE workflow_runs
+    SET status='pending', execution_owner=NULL, execution_lease_expires_at=NULL,
+        state_revision=state_revision+1
+    WHERE id IN (
+        SELECT id FROM workflow_runs
+        WHERE status='running' AND (execution_lease_expires_at IS NULL OR execution_lease_expires_at <= now())
+        ORDER BY started_at LIMIT $1 FOR UPDATE SKIP LOCKED
+    )
+    RETURNING id, state_revision
+), audit AS (
+    INSERT INTO workflow_run_events(run_id,node_id,status,detail)
+    SELECT id,'','recovered',jsonb_build_object('state_revision',state_revision) FROM changed
+    RETURNING run_id
+)
+SELECT changed.id FROM changed JOIN audit ON audit.run_id=changed.id
+`
+
+func (q *Queries) RecoverExpiredWorkflowRuns(ctx context.Context, resultLimit int32) ([]string, error) {
+	rows, err := q.db.Query(ctx, recoverExpiredWorkflowRuns, resultLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const renewWorkflowRunLease = `-- name: RenewWorkflowRunLease :execrows
+UPDATE workflow_runs SET execution_lease_expires_at=now()+interval '2 minutes'
+WHERE id=$1 AND status='running' AND execution_owner=$2
+  AND execution_lease_expires_at > now()
+`
+
+type RenewWorkflowRunLeaseParams struct {
+	ID             string      `json:"id"`
+	ExecutionOwner pgtype.Text `json:"execution_owner"`
+}
+
+func (q *Queries) RenewWorkflowRunLease(ctx context.Context, arg RenewWorkflowRunLeaseParams) (int64, error) {
+	result, err := q.db.Exec(ctx, renewWorkflowRunLease, arg.ID, arg.ExecutionOwner)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const transitionDreamWorkflowRun = `-- name: TransitionDreamWorkflowRun :one
 WITH changed AS (
     UPDATE workflow_runs AS run
     SET status = $1, output = $2,
-        finished_at = CASE WHEN $1 IN ('succeeded','failed','cancelled') THEN now() ELSE run.finished_at END
+        finished_at = CASE WHEN $1 IN ('succeeded','failed','cancelled') THEN now() ELSE run.finished_at END,
+        state_revision=run.state_revision+1,
+        execution_owner=CASE WHEN $1='running' THEN run.execution_owner ELSE NULL END,
+        execution_lease_expires_at=CASE WHEN $1='running' THEN now()+interval '2 minutes' ELSE NULL END
     WHERE run.id = $3 AND run.enterprise_id = $4
-    RETURNING run.id, run.enterprise_id, run.status
+      AND run.status=$5 AND run.state_revision=$6
+      AND run.execution_owner IS NOT DISTINCT FROM $7
+      AND (run.execution_owner IS NULL OR run.execution_lease_expires_at > now())
+    RETURNING run.id, run.enterprise_id, run.status, run.state_revision
 ), audit AS (
     INSERT INTO workflow_run_events (run_id, node_id, status, detail)
-    SELECT changed.id, $5, $6, $7
+    SELECT changed.id, $8, $9, $10
     FROM changed
     RETURNING run_id
 ), lifecycle AS (
     INSERT INTO dream_workflow_lifecycle_outbox (
         enterprise_id, dream_run_id, workflow_run_id, status, lifecycle_error
     )
-    SELECT changed.enterprise_id, dream.id, changed.id, changed.status, $8
+    SELECT changed.enterprise_id, dream.id, changed.id, changed.status, $11
     FROM changed
     JOIN audit ON audit.run_id = changed.id
     JOIN dream_runs AS dream
@@ -467,18 +602,21 @@ WITH changed AS (
     SET lifecycle_error = EXCLUDED.lifecycle_error, updated_at = now()
     RETURNING workflow_run_id
 )
-SELECT count(*)::bigint FROM changed JOIN audit ON audit.run_id = changed.id
+SELECT changed.state_revision FROM changed JOIN audit ON audit.run_id = changed.id
 `
 
 type TransitionDreamWorkflowRunParams struct {
-	Status         string `json:"status"`
-	RunOutput      []byte `json:"run_output"`
-	ID             string `json:"id"`
-	EnterpriseID   string `json:"enterprise_id"`
-	NodeID         string `json:"node_id"`
-	EventStatus    string `json:"event_status"`
-	EventDetail    []byte `json:"event_detail"`
-	LifecycleError string `json:"lifecycle_error"`
+	Status           string      `json:"status"`
+	RunOutput        []byte      `json:"run_output"`
+	ID               string      `json:"id"`
+	EnterpriseID     string      `json:"enterprise_id"`
+	ExpectedStatus   string      `json:"expected_status"`
+	ExpectedRevision int64       `json:"expected_revision"`
+	ExpectedOwner    pgtype.Text `json:"expected_owner"`
+	NodeID           string      `json:"node_id"`
+	EventStatus      string      `json:"event_status"`
+	EventDetail      []byte      `json:"event_detail"`
+	LifecycleError   string      `json:"lifecycle_error"`
 }
 
 func (q *Queries) TransitionDreamWorkflowRun(ctx context.Context, arg TransitionDreamWorkflowRunParams) (int64, error) {
@@ -487,39 +625,51 @@ func (q *Queries) TransitionDreamWorkflowRun(ctx context.Context, arg Transition
 		arg.RunOutput,
 		arg.ID,
 		arg.EnterpriseID,
+		arg.ExpectedStatus,
+		arg.ExpectedRevision,
+		arg.ExpectedOwner,
 		arg.NodeID,
 		arg.EventStatus,
 		arg.EventDetail,
 		arg.LifecycleError,
 	)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
+	var state_revision int64
+	err := row.Scan(&state_revision)
+	return state_revision, err
 }
 
 const transitionWorkflowRunWithEvent = `-- name: TransitionWorkflowRunWithEvent :one
 WITH changed AS (
     UPDATE workflow_runs AS run
     SET status = $1, output = $2,
-        finished_at = CASE WHEN $1 IN ('succeeded','failed','cancelled') THEN now() ELSE run.finished_at END
-    WHERE run.id = $3
-    RETURNING run.id
+        finished_at = CASE WHEN $1 IN ('succeeded','failed','cancelled') THEN now() ELSE run.finished_at END,
+        state_revision=run.state_revision+1,
+        execution_owner=CASE WHEN $1='running' THEN run.execution_owner ELSE NULL END,
+        execution_lease_expires_at=CASE WHEN $1='running' THEN now()+interval '2 minutes' ELSE NULL END
+    WHERE run.id = $3 AND run.status=$4
+      AND run.state_revision=$5
+      AND run.execution_owner IS NOT DISTINCT FROM $6
+      AND (run.execution_owner IS NULL OR run.execution_lease_expires_at > now())
+    RETURNING run.id, run.state_revision
 ), audit AS (
     INSERT INTO workflow_run_events (run_id, node_id, status, detail)
-    SELECT changed.id, $4, $5, $6
+    SELECT changed.id, $7, $8, $9
     FROM changed
     RETURNING run_id
 )
-SELECT count(*)::bigint FROM changed JOIN audit ON audit.run_id = changed.id
+SELECT changed.state_revision FROM changed JOIN audit ON audit.run_id = changed.id
 `
 
 type TransitionWorkflowRunWithEventParams struct {
-	Status      string `json:"status"`
-	RunOutput   []byte `json:"run_output"`
-	ID          string `json:"id"`
-	NodeID      string `json:"node_id"`
-	EventStatus string `json:"event_status"`
-	EventDetail []byte `json:"event_detail"`
+	Status           string      `json:"status"`
+	RunOutput        []byte      `json:"run_output"`
+	ID               string      `json:"id"`
+	ExpectedStatus   string      `json:"expected_status"`
+	ExpectedRevision int64       `json:"expected_revision"`
+	ExpectedOwner    pgtype.Text `json:"expected_owner"`
+	NodeID           string      `json:"node_id"`
+	EventStatus      string      `json:"event_status"`
+	EventDetail      []byte      `json:"event_detail"`
 }
 
 func (q *Queries) TransitionWorkflowRunWithEvent(ctx context.Context, arg TransitionWorkflowRunWithEventParams) (int64, error) {
@@ -527,13 +677,16 @@ func (q *Queries) TransitionWorkflowRunWithEvent(ctx context.Context, arg Transi
 		arg.Status,
 		arg.RunOutput,
 		arg.ID,
+		arg.ExpectedStatus,
+		arg.ExpectedRevision,
+		arg.ExpectedOwner,
 		arg.NodeID,
 		arg.EventStatus,
 		arg.EventDetail,
 	)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
+	var state_revision int64
+	err := row.Scan(&state_revision)
+	return state_revision, err
 }
 
 const updateWorkflowDraft = `-- name: UpdateWorkflowDraft :execrows

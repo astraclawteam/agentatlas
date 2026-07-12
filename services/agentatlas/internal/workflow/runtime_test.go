@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -180,7 +181,8 @@ func (f *fakeStore) CreateBoundDreamWorkflowRun(_ context.Context, arg db.Create
 		return db.CreateBoundDreamWorkflowRunRow{}, pgx.ErrNoRows
 	}
 	run := db.WorkflowRun{ID: arg.ID, WorkflowID: arg.WorkflowID.String, Version: arg.Version.Int32,
-		EnterpriseID: arg.EnterpriseID, Status: arg.Status, Input: arg.Input, Output: arg.Output}
+		EnterpriseID: arg.EnterpriseID, Status: arg.Status, Input: arg.Input, Output: arg.Output,
+		ExecutionOwner: arg.ExecutionOwner, ExecutionLeaseExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(time.Minute), Valid: true}}
 	f.runs[arg.ID] = run
 	dream.WorkflowRunID = pgtype.Text{String: arg.ID, Valid: true}
 	f.dreamRuns[dream.ID] = dream
@@ -193,23 +195,26 @@ func (f *fakeStore) TransitionDreamWorkflowRun(_ context.Context, arg db.Transit
 		return 0, f.transitionErr
 	}
 	run, ok := f.runs[arg.ID]
-	if !ok || run.EnterpriseID != arg.EnterpriseID {
+	if !ok || run.EnterpriseID != arg.EnterpriseID || run.Status != arg.ExpectedStatus || run.StateRevision != arg.ExpectedRevision || run.ExecutionOwner != arg.ExpectedOwner {
 		return 0, nil
 	}
-	run.Status, run.Output = arg.Status, arg.RunOutput
+	run.Status, run.Output, run.StateRevision = arg.Status, arg.RunOutput, run.StateRevision+1
+	if arg.Status != RunRunning {
+		run.ExecutionOwner, run.ExecutionLeaseExpiresAt = pgtype.Text{}, pgtype.Timestamptz{}
+	}
 	f.runs[arg.ID] = run
 	f.nextEvent++
 	f.events = append(f.events, db.WorkflowRunEvent{ID: f.nextEvent, RunID: arg.ID, NodeID: arg.NodeID, Status: arg.EventStatus, Detail: arg.EventDetail})
 	for _, event := range f.outbox {
 		if event.WorkflowRunID == arg.ID && event.Status == arg.Status {
-			return 1, nil
+			return run.StateRevision, nil
 		}
 	}
 	for _, dream := range f.dreamRuns {
 		if dream.WorkflowRunID.Valid && dream.WorkflowRunID.String == arg.ID && dream.EnterpriseID == arg.EnterpriseID {
 			f.outbox = append(f.outbox, db.DreamWorkflowLifecycleOutbox{ID: int64(len(f.outbox) + 1), EnterpriseID: arg.EnterpriseID,
 				DreamRunID: dream.ID, WorkflowRunID: arg.ID, Status: arg.Status, LifecycleError: arg.LifecycleError})
-			return 1, nil
+			return run.StateRevision, nil
 		}
 	}
 	return 0, nil
@@ -220,13 +225,38 @@ func (f *fakeStore) TransitionWorkflowRunWithEvent(_ context.Context, arg db.Tra
 		return 0, f.transitionErr
 	}
 	run, ok := f.runs[arg.ID]
-	if !ok {
+	if !ok || run.Status != arg.ExpectedStatus || run.StateRevision != arg.ExpectedRevision || run.ExecutionOwner != arg.ExpectedOwner {
 		return 0, nil
 	}
-	run.Status, run.Output = arg.Status, arg.RunOutput
+	run.Status, run.Output, run.StateRevision = arg.Status, arg.RunOutput, run.StateRevision+1
+	if arg.Status != RunRunning {
+		run.ExecutionOwner, run.ExecutionLeaseExpiresAt = pgtype.Text{}, pgtype.Timestamptz{}
+	}
 	f.runs[arg.ID] = run
 	f.nextEvent++
 	f.events = append(f.events, db.WorkflowRunEvent{ID: f.nextEvent, RunID: arg.ID, NodeID: arg.NodeID, Status: arg.EventStatus, Detail: arg.EventDetail})
+	return run.StateRevision, nil
+}
+
+func (f *fakeStore) ClaimWorkflowRunLease(_ context.Context, arg db.ClaimWorkflowRunLeaseParams) (db.WorkflowRun, error) {
+	run, ok := f.runs[arg.ID]
+	if !ok || run.Status != RunPending || run.ExecutionOwner.Valid {
+		return db.WorkflowRun{}, pgx.ErrNoRows
+	}
+	run.Status, run.ExecutionOwner = RunRunning, arg.ExecutionOwner
+	run.ExecutionLeaseExpiresAt = pgtype.Timestamptz{Time: time.Now().Add(time.Minute), Valid: true}
+	run.StateRevision++
+	f.runs[arg.ID] = run
+	return run, nil
+}
+
+func (f *fakeStore) RenewWorkflowRunLease(_ context.Context, arg db.RenewWorkflowRunLeaseParams) (int64, error) {
+	run, ok := f.runs[arg.ID]
+	if !ok || run.Status != RunRunning || run.ExecutionOwner != arg.ExecutionOwner {
+		return 0, nil
+	}
+	run.ExecutionLeaseExpiresAt = pgtype.Timestamptz{Time: time.Now().Add(time.Minute), Valid: true}
+	f.runs[arg.ID] = run
 	return 1, nil
 }
 
@@ -467,7 +497,12 @@ func TestRunPausesAtHumanConfirmAndResumes(t *testing.T) {
 	if _, err := store.UpdateWorkflowRunStatus(ctx, db.UpdateWorkflowRunStatusParams{ID: runID, Status: RunRunning, Output: nil}); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	final, err := rt.ExecuteClaimed(ctx, runID)
+	owner := pgtype.Text{String: "test-workflow-owner", Valid: true}
+	claimed := store.runs[runID]
+	claimed.ExecutionOwner = owner
+	claimed.ExecutionLeaseExpiresAt = pgtype.Timestamptz{Time: time.Now().Add(time.Minute), Valid: true}
+	store.runs[runID] = claimed
+	final, err := rt.ExecuteClaimed(ctx, runID, owner)
 	if err != nil {
 		t.Fatalf("execute claimed: %v", err)
 	}

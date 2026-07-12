@@ -52,9 +52,9 @@ WITH target AS (
       AND dream.workflow_run_id IS NULL
     FOR UPDATE
 ), created AS (
-    INSERT INTO workflow_runs (id, workflow_id, version, enterprise_id, status, input, output)
+    INSERT INTO workflow_runs (id, workflow_id, version, enterprise_id, status, input, output, execution_owner, execution_lease_expires_at)
     SELECT sqlc.arg(id), sqlc.arg(workflow_id), sqlc.arg(version), sqlc.arg(enterprise_id),
-           sqlc.arg(status), sqlc.arg(input), sqlc.arg(output)
+           sqlc.arg(status), sqlc.arg(input), sqlc.arg(output), sqlc.arg(execution_owner), now()+interval '2 minutes'
     FROM target
     RETURNING *
 ), bound AS (
@@ -76,24 +76,36 @@ WHERE id = $1;
 WITH changed AS (
     UPDATE workflow_runs AS run
     SET status = sqlc.arg(status), output = sqlc.arg(run_output),
-        finished_at = CASE WHEN sqlc.arg(status) IN ('succeeded','failed','cancelled') THEN now() ELSE run.finished_at END
-    WHERE run.id = sqlc.arg(id)
-    RETURNING run.id
+        finished_at = CASE WHEN sqlc.arg(status) IN ('succeeded','failed','cancelled') THEN now() ELSE run.finished_at END,
+        state_revision=run.state_revision+1,
+        execution_owner=CASE WHEN sqlc.arg(status)='running' THEN run.execution_owner ELSE NULL END,
+        execution_lease_expires_at=CASE WHEN sqlc.arg(status)='running' THEN now()+interval '2 minutes' ELSE NULL END
+    WHERE run.id = sqlc.arg(id) AND run.status=sqlc.arg(expected_status)
+      AND run.state_revision=sqlc.arg(expected_revision)
+      AND run.execution_owner IS NOT DISTINCT FROM sqlc.narg(expected_owner)
+      AND (run.execution_owner IS NULL OR run.execution_lease_expires_at > now())
+    RETURNING run.id, run.state_revision
 ), audit AS (
     INSERT INTO workflow_run_events (run_id, node_id, status, detail)
     SELECT changed.id, sqlc.arg(node_id), sqlc.arg(event_status), sqlc.arg(event_detail)
     FROM changed
     RETURNING run_id
 )
-SELECT count(*)::bigint FROM changed JOIN audit ON audit.run_id = changed.id;
+SELECT changed.state_revision FROM changed JOIN audit ON audit.run_id = changed.id;
 
 -- name: TransitionDreamWorkflowRun :one
 WITH changed AS (
     UPDATE workflow_runs AS run
     SET status = sqlc.arg(status), output = sqlc.arg(run_output),
-        finished_at = CASE WHEN sqlc.arg(status) IN ('succeeded','failed','cancelled') THEN now() ELSE run.finished_at END
+        finished_at = CASE WHEN sqlc.arg(status) IN ('succeeded','failed','cancelled') THEN now() ELSE run.finished_at END,
+        state_revision=run.state_revision+1,
+        execution_owner=CASE WHEN sqlc.arg(status)='running' THEN run.execution_owner ELSE NULL END,
+        execution_lease_expires_at=CASE WHEN sqlc.arg(status)='running' THEN now()+interval '2 minutes' ELSE NULL END
     WHERE run.id = sqlc.arg(id) AND run.enterprise_id = sqlc.arg(enterprise_id)
-    RETURNING run.id, run.enterprise_id, run.status
+      AND run.status=sqlc.arg(expected_status) AND run.state_revision=sqlc.arg(expected_revision)
+      AND run.execution_owner IS NOT DISTINCT FROM sqlc.narg(expected_owner)
+      AND (run.execution_owner IS NULL OR run.execution_lease_expires_at > now())
+    RETURNING run.id, run.enterprise_id, run.status, run.state_revision
 ), audit AS (
     INSERT INTO workflow_run_events (run_id, node_id, status, detail)
     SELECT changed.id, sqlc.arg(node_id), sqlc.arg(event_status), sqlc.arg(event_detail)
@@ -113,7 +125,40 @@ WITH changed AS (
     SET lifecycle_error = EXCLUDED.lifecycle_error, updated_at = now()
     RETURNING workflow_run_id
 )
-SELECT count(*)::bigint FROM changed JOIN audit ON audit.run_id = changed.id;
+SELECT changed.state_revision FROM changed JOIN audit ON audit.run_id = changed.id;
+
+-- name: ClaimWorkflowRunLease :one
+UPDATE workflow_runs
+SET status='running', execution_owner=sqlc.arg(execution_owner),
+    execution_lease_expires_at=now()+interval '2 minutes', state_revision=state_revision+1
+WHERE id=sqlc.arg(id) AND status='pending' AND execution_owner IS NULL
+RETURNING *;
+
+-- name: RenewWorkflowRunLease :execrows
+UPDATE workflow_runs SET execution_lease_expires_at=now()+interval '2 minutes'
+WHERE id=sqlc.arg(id) AND status='running' AND execution_owner=sqlc.arg(execution_owner)
+  AND execution_lease_expires_at > now();
+
+-- name: RecoverExpiredWorkflowRuns :many
+WITH changed AS (
+    UPDATE workflow_runs
+    SET status='pending', execution_owner=NULL, execution_lease_expires_at=NULL,
+        state_revision=state_revision+1
+    WHERE id IN (
+        SELECT id FROM workflow_runs
+        WHERE status='running' AND (execution_lease_expires_at IS NULL OR execution_lease_expires_at <= now())
+        ORDER BY started_at LIMIT sqlc.arg(result_limit) FOR UPDATE SKIP LOCKED
+    )
+    RETURNING id, state_revision
+), audit AS (
+    INSERT INTO workflow_run_events(run_id,node_id,status,detail)
+    SELECT id,'','recovered',jsonb_build_object('state_revision',state_revision) FROM changed
+    RETURNING run_id
+)
+SELECT changed.id FROM changed JOIN audit ON audit.run_id=changed.id;
+
+-- name: ListPendingWorkflowRuns :many
+SELECT id FROM workflow_runs WHERE status='pending' ORDER BY started_at LIMIT sqlc.arg(result_limit);
 
 -- name: GetWorkflowRun :one
 SELECT * FROM workflow_runs WHERE id = $1;

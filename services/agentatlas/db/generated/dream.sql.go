@@ -92,6 +92,35 @@ func (q *Queries) ClaimDreamRunLease(ctx context.Context, arg ClaimDreamRunLease
 	return result.RowsAffected(), nil
 }
 
+const completeDreamRunOwned = `-- name: CompleteDreamRunOwned :execrows
+UPDATE dream_runs
+SET status=$1, error=$2, finished_at=now(),
+    execution_owner=NULL, execution_lease_expires_at=NULL
+WHERE id=$3 AND status='running'
+  AND execution_owner=$4 AND execution_lease_expires_at > now()
+  AND $1 IN ('succeeded','failed')
+`
+
+type CompleteDreamRunOwnedParams struct {
+	Status         string      `json:"status"`
+	Error          string      `json:"error"`
+	ID             string      `json:"id"`
+	ExecutionOwner pgtype.Text `json:"execution_owner"`
+}
+
+func (q *Queries) CompleteDreamRunOwned(ctx context.Context, arg CompleteDreamRunOwnedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, completeDreamRunOwned,
+		arg.Status,
+		arg.Error,
+		arg.ID,
+		arg.ExecutionOwner,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const completeDreamWorkflowLifecycle = `-- name: CompleteDreamWorkflowLifecycle :exec
 UPDATE dream_workflow_lifecycle_outbox
 SET processed_at = now(), last_error = '', updated_at = now()
@@ -413,6 +442,25 @@ func (q *Queries) FailDreamRunAfterWorkflow(ctx context.Context, arg FailDreamRu
 		&i.ExecutionLeaseExpiresAt,
 	)
 	return i, err
+}
+
+const fenceDreamExecutionOwner = `-- name: FenceDreamExecutionOwner :one
+SELECT id FROM dream_runs
+WHERE id=$1 AND execution_owner=$2
+  AND execution_lease_expires_at > now() AND status='running'
+FOR UPDATE
+`
+
+type FenceDreamExecutionOwnerParams struct {
+	ID             string      `json:"id"`
+	ExecutionOwner pgtype.Text `json:"execution_owner"`
+}
+
+func (q *Queries) FenceDreamExecutionOwner(ctx context.Context, arg FenceDreamExecutionOwnerParams) (string, error) {
+	row := q.db.QueryRow(ctx, fenceDreamExecutionOwner, arg.ID, arg.ExecutionOwner)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getDreamPolicy = `-- name: GetDreamPolicy :one
@@ -1538,6 +1586,40 @@ func (q *Queries) RecoverExpiredDreamRunAfterWorkflow(ctx context.Context, arg R
 	return i, err
 }
 
+const recoverExpiredUnboundDreamRuns = `-- name: RecoverExpiredUnboundDreamRuns :many
+UPDATE dream_runs
+SET status='pending', error='', execution_owner=NULL, execution_lease_expires_at=NULL
+WHERE id IN (
+    SELECT id FROM dream_runs
+    WHERE status='running' AND workflow_run_id IS NULL
+      AND (execution_lease_expires_at IS NULL OR execution_lease_expires_at <= now())
+    ORDER BY created_at
+    LIMIT $1
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id
+`
+
+func (q *Queries) RecoverExpiredUnboundDreamRuns(ctx context.Context, resultLimit int32) ([]string, error) {
+	rows, err := q.db.Query(ctx, recoverExpiredUnboundDreamRuns, resultLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const renewDreamRunLease = `-- name: RenewDreamRunLease :execrows
 UPDATE dream_runs
 SET execution_lease_expires_at=now()+interval '2 minutes'
@@ -1620,6 +1702,62 @@ type ReserveDreamOutputHashParams struct {
 
 func (q *Queries) ReserveDreamOutputHash(ctx context.Context, arg ReserveDreamOutputHashParams) (DreamRun, error) {
 	row := q.db.QueryRow(ctx, reserveDreamOutputHash, arg.OutputHash, arg.EnterpriseID, arg.RunID)
+	var i DreamRun
+	err := row.Scan(
+		&i.ID,
+		&i.PolicyID,
+		&i.Version,
+		&i.EnterpriseID,
+		&i.Status,
+		&i.WindowStart,
+		&i.WindowEnd,
+		&i.Error,
+		&i.CreatedAt,
+		&i.FinishedAt,
+		&i.OrgUnitID,
+		&i.PolicyVersion,
+		&i.WorkflowID,
+		&i.WorkflowVersion,
+		&i.Timezone,
+		&i.InputSnapshot,
+		&i.VisibilitySnapshot,
+		&i.ModelRoute,
+		&i.ModelVersion,
+		&i.Attempt,
+		&i.RerunOfRunID,
+		&i.Coverage,
+		&i.MissingInputs,
+		&i.IdempotencyKey,
+		&i.WorkflowRunID,
+		&i.OutputHash,
+		&i.ExecutionOwner,
+		&i.ExecutionLeaseExpiresAt,
+	)
+	return i, err
+}
+
+const reserveDreamOutputHashOwned = `-- name: ReserveDreamOutputHashOwned :one
+UPDATE dream_runs SET output_hash=$1
+WHERE enterprise_id=$2 AND id=$3
+  AND execution_owner=$4 AND execution_lease_expires_at > now()
+  AND status='running' AND (output_hash IS NULL OR output_hash=$1)
+RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key, workflow_run_id, output_hash, execution_owner, execution_lease_expires_at
+`
+
+type ReserveDreamOutputHashOwnedParams struct {
+	OutputHash     pgtype.Text `json:"output_hash"`
+	EnterpriseID   string      `json:"enterprise_id"`
+	RunID          string      `json:"run_id"`
+	ExecutionOwner pgtype.Text `json:"execution_owner"`
+}
+
+func (q *Queries) ReserveDreamOutputHashOwned(ctx context.Context, arg ReserveDreamOutputHashOwnedParams) (DreamRun, error) {
+	row := q.db.QueryRow(ctx, reserveDreamOutputHashOwned,
+		arg.OutputHash,
+		arg.EnterpriseID,
+		arg.RunID,
+		arg.ExecutionOwner,
+	)
 	var i DreamRun
 	err := row.Scan(
 		&i.ID,

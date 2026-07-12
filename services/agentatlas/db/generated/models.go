@@ -520,15 +520,18 @@ type WorkflowNode struct {
 }
 
 type WorkflowRun struct {
-	ID           string             `json:"id"`
-	WorkflowID   string             `json:"workflow_id"`
-	Version      int32              `json:"version"`
-	EnterpriseID string             `json:"enterprise_id"`
-	Status       string             `json:"status"`
-	Input        []byte             `json:"input"`
-	Output       []byte             `json:"output"`
-	StartedAt    pgtype.Timestamptz `json:"started_at"`
-	FinishedAt   pgtype.Timestamptz `json:"finished_at"`
+	ID                      string             `json:"id"`
+	WorkflowID              string             `json:"workflow_id"`
+	Version                 int32              `json:"version"`
+	EnterpriseID            string             `json:"enterprise_id"`
+	Status                  string             `json:"status"`
+	Input                   []byte             `json:"input"`
+	Output                  []byte             `json:"output"`
+	StartedAt               pgtype.Timestamptz `json:"started_at"`
+	FinishedAt              pgtype.Timestamptz `json:"finished_at"`
+	ExecutionOwner          pgtype.Text        `json:"execution_owner"`
+	ExecutionLeaseExpiresAt pgtype.Timestamptz `json:"execution_lease_expires_at"`
+	StateRevision           int64              `json:"state_revision"`
 }
 
 type WorkflowRunEvent struct {
