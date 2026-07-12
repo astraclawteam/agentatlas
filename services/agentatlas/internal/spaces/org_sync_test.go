@@ -2,6 +2,10 @@ package spaces
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,13 +19,19 @@ import (
 // fakeStore is an in-memory Store honoring the same uniqueness and
 // version-guard semantics as the real schema.
 type fakeStore struct {
-	enterprises map[string]db.Enterprise
-	spaces      map[string]db.KnowledgeSpace // key enterprise|org_scope
-	byID        map[string]db.KnowledgeSpace
-	versions    []db.InsertKnowledgeSpaceVersionParams
-	bindings    map[string]db.UpsertOrgScopeBindingParams // key enterprise|kind|scope_id
-	snapshots   map[string]int64                          // enterprise -> max version seen
-	members     map[string]db.UpsertSpaceMemberParams     // key space|user
+	mu                 sync.Mutex
+	applyMu            sync.Mutex
+	enterprises        map[string]db.Enterprise
+	spaces             map[string]db.KnowledgeSpace // key enterprise|org_scope
+	byID               map[string]db.KnowledgeSpace
+	versions           []db.InsertKnowledgeSpaceVersionParams
+	bindings           map[string]db.UpsertOrgScopeBindingParams // key enterprise|kind|scope_id
+	snapshots          map[string]int64                          // enterprise -> max version seen
+	members            map[string]db.UpsertSpaceMemberParams     // key space|user
+	failBindingOnce    bool
+	bindingBlockParent string
+	bindingEntered     chan struct{}
+	bindingRelease     chan struct{}
 }
 
 func newFakeStore() *fakeStore {
@@ -51,13 +61,82 @@ func (f *fakeStore) UpsertEnterprise(_ context.Context, arg db.UpsertEnterpriseP
 }
 
 func (f *fakeStore) GetKnowledgeSpaceByScope(_ context.Context, arg db.GetKnowledgeSpaceByScopeParams) (db.KnowledgeSpace, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if s, ok := f.spaces[scopeKey(arg.EnterpriseID, arg.OrgScope)]; ok {
 		return s, nil
 	}
 	return db.KnowledgeSpace{}, pgx.ErrNoRows
 }
 
+func (f *fakeStore) ApplyOrgSpaceEvent(_ context.Context, arg db.ApplyOrgSpaceEventParams) (db.ApplyOrgSpaceEventRow, error) {
+	f.applyMu.Lock()
+	defer f.applyMu.Unlock()
+
+	f.mu.Lock()
+	existing, exists := f.spaces[scopeKey(arg.EventEnterpriseID, arg.EventOrgScope)]
+	if exists && existing.OrgVersion >= arg.EventOrgVersion {
+		f.mu.Unlock()
+		return db.ApplyOrgSpaceEventRow{SpaceID: existing.ID}, nil
+	}
+	if f.failBindingOnce {
+		f.failBindingOnce = false
+		f.mu.Unlock()
+		return db.ApplyOrgSpaceEventRow{}, fmt.Errorf("injected binding failure")
+	}
+	block := f.bindingBlockParent != "" && arg.EventParentScopeID.Valid && arg.EventParentScopeID.String == f.bindingBlockParent
+	entered, release := f.bindingEntered, f.bindingRelease
+	f.mu.Unlock()
+	if block {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+	}
+
+	var members []nexus.OrgMember
+	if err := json.Unmarshal(arg.EventMemberSnapshot, &members); err != nil {
+		return db.ApplyOrgSpaceEventRow{}, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	space := existing
+	created := !exists
+	if created {
+		space = db.KnowledgeSpace{
+			ID: arg.NewSpaceID, EnterpriseID: arg.EventEnterpriseID, Kind: arg.EventScopeKind,
+			Name: arg.EventSpaceName, OrgScope: arg.EventOrgScope, OrgVersion: arg.EventOrgVersion,
+		}
+	} else {
+		space.Name, space.OrgVersion = arg.EventSpaceName, arg.EventOrgVersion
+	}
+	f.spaces[scopeKey(space.EnterpriseID, space.OrgScope)] = space
+	f.byID[space.ID] = space
+	f.bindings[arg.EventEnterpriseID+"|"+arg.EventScopeKind+"|"+arg.EventScopeID] = db.UpsertOrgScopeBindingParams{
+		EnterpriseID: arg.EventEnterpriseID, SpaceID: space.ID, ScopeKind: arg.EventScopeKind, ScopeID: arg.EventScopeID,
+		ParentScopeKind: arg.EventParentScopeKind, ParentScopeID: arg.EventParentScopeID,
+	}
+	f.versions = append(f.versions, db.InsertKnowledgeSpaceVersionParams{
+		SpaceID: space.ID, OrgVersion: arg.EventOrgVersion, Snapshot: arg.EventVersionSnapshot,
+	})
+	memberPrefix := space.ID + "|"
+	for key := range f.members {
+		if strings.HasPrefix(key, memberPrefix) {
+			delete(f.members, key)
+		}
+	}
+	for _, member := range members {
+		f.members[memberPrefix+member.UserID] = db.UpsertSpaceMemberParams{
+			SpaceID: space.ID, UserID: member.UserID, DisplayName: member.DisplayName, OrgVersion: arg.EventOrgVersion,
+		}
+	}
+	return db.ApplyOrgSpaceEventRow{SpaceID: space.ID, Accepted: true, Created: created}, nil
+}
+
 func (f *fakeStore) InsertKnowledgeSpace(_ context.Context, arg db.InsertKnowledgeSpaceParams) (db.KnowledgeSpace, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	s := db.KnowledgeSpace{
 		ID: arg.ID, EnterpriseID: arg.EnterpriseID, Kind: arg.Kind,
 		Name: arg.Name, OrgScope: arg.OrgScope, OrgVersion: arg.OrgVersion,
@@ -68,6 +147,8 @@ func (f *fakeStore) InsertKnowledgeSpace(_ context.Context, arg db.InsertKnowled
 }
 
 func (f *fakeStore) UpdateKnowledgeSpaceIfNewer(_ context.Context, arg db.UpdateKnowledgeSpaceIfNewerParams) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	s, ok := f.byID[arg.ID]
 	if !ok || s.OrgVersion >= arg.OrgVersion {
 		return 0, nil
@@ -80,11 +161,31 @@ func (f *fakeStore) UpdateKnowledgeSpaceIfNewer(_ context.Context, arg db.Update
 }
 
 func (f *fakeStore) InsertKnowledgeSpaceVersion(_ context.Context, arg db.InsertKnowledgeSpaceVersionParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.versions = append(f.versions, arg)
 	return nil
 }
 
 func (f *fakeStore) UpsertOrgScopeBinding(_ context.Context, arg db.UpsertOrgScopeBindingParams) error {
+	f.mu.Lock()
+	if f.failBindingOnce {
+		f.failBindingOnce = false
+		f.mu.Unlock()
+		return fmt.Errorf("injected binding failure")
+	}
+	block := f.bindingBlockParent != "" && arg.ParentScopeID.Valid && arg.ParentScopeID.String == f.bindingBlockParent
+	entered, release := f.bindingEntered, f.bindingRelease
+	f.mu.Unlock()
+	if block {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.bindings[arg.EnterpriseID+"|"+arg.ScopeKind+"|"+arg.ScopeID] = arg
 	return nil
 }
@@ -97,7 +198,13 @@ func (f *fakeStore) UpsertOrgSnapshot(_ context.Context, arg db.UpsertOrgSnapsho
 }
 
 func (f *fakeStore) UpsertSpaceMember(_ context.Context, arg db.UpsertSpaceMemberParams) error {
-	f.members[arg.SpaceID+"|"+arg.UserID] = arg
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := arg.SpaceID + "|" + arg.UserID
+	if existing, ok := f.members[key]; ok && existing.OrgVersion > arg.OrgVersion {
+		return nil
+	}
+	f.members[key] = arg
 	return nil
 }
 
@@ -271,5 +378,113 @@ func TestOrgSyncNewerEventReparentsExistingScope(t *testing.T) {
 	binding = store.bindings["ent_1|department|child"]
 	if binding.ParentScopeKind.String != "business_unit" || binding.ParentScopeID.String != "business-b" {
 		t.Fatalf("equal-version replay changed parent identity: %+v", binding)
+	}
+}
+
+func TestOrgSyncFailureRetryAndOrderingAreAtomic(t *testing.T) {
+	t.Run("post-space failure same-version retry", func(t *testing.T) {
+		store := newFakeStore()
+		service := NewService(store)
+		event := orgEvent(nexus.OrgDepartmentUpserted, 1, nexus.ScopeDepartment, "atomic-child", "Atomic child",
+			nexus.OrgMember{UserID: "v1-member", DisplayName: "v1"})
+		event.Scope.ParentKind, event.Scope.ParentID = nexus.ScopeCompany, "parent-v1"
+		if _, _, err := service.EnsureSpaceFromEvent(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+
+		event.OrgVersion = 2
+		event.Scope.ParentKind, event.Scope.ParentID = nexus.ScopeBusinessUnit, "parent-v2"
+		event.Members = []nexus.OrgMember{{UserID: "v2-member", DisplayName: "v2"}}
+		store.failBindingOnce = true
+		if _, _, err := service.EnsureSpaceFromEvent(context.Background(), event); err == nil {
+			t.Fatal("injected post-space failure was not returned")
+		}
+		if _, _, err := service.EnsureSpaceFromEvent(context.Background(), event); err != nil {
+			t.Fatalf("same-version retry: %v", err)
+		}
+		assertAtomicOrgState(t, store, "department:atomic-child", 2, "business_unit", "parent-v2", "v2-member")
+	})
+
+	t.Run("initial failure retry", func(t *testing.T) {
+		store := newFakeStore()
+		store.failBindingOnce = true
+		service := NewService(store)
+		event := orgEvent(nexus.OrgEmployeeUpserted, 1, nexus.ScopeEmployee, "initial-retry", "Initial retry",
+			nexus.OrgMember{UserID: "initial-member", DisplayName: "initial"})
+		event.Scope.ParentKind, event.Scope.ParentID = nexus.ScopeDepartment, "parent"
+		if _, _, err := service.EnsureSpaceFromEvent(context.Background(), event); err == nil {
+			t.Fatal("injected initial binding failure was not returned")
+		}
+		if _, _, err := service.EnsureSpaceFromEvent(context.Background(), event); err != nil {
+			t.Fatalf("initial same-version retry: %v", err)
+		}
+		assertAtomicOrgState(t, store, "employee:initial-retry", 1, "department", "parent", "initial-member")
+	})
+
+	t.Run("concurrent v2 v3", func(t *testing.T) {
+		store := newFakeStore()
+		service := NewService(store)
+		base := orgEvent(nexus.OrgDepartmentUpserted, 1, nexus.ScopeDepartment, "concurrent-child", "Concurrent child")
+		base.Scope.ParentKind, base.Scope.ParentID = nexus.ScopeCompany, "parent-v1"
+		if _, _, err := service.EnsureSpaceFromEvent(context.Background(), base); err != nil {
+			t.Fatal(err)
+		}
+
+		store.bindingBlockParent = "parent-v2"
+		store.bindingEntered = make(chan struct{}, 1)
+		store.bindingRelease = make(chan struct{})
+		v2 := base
+		v2.OrgVersion, v2.Scope.ParentKind, v2.Scope.ParentID = 2, nexus.ScopeBusinessUnit, "parent-v2"
+		v2.Members = []nexus.OrgMember{{UserID: "v2-member", DisplayName: "v2"}}
+		v3 := base
+		v3.OrgVersion, v3.Scope.ParentKind, v3.Scope.ParentID = 3, nexus.ScopeCompany, "parent-v3"
+		v3.Members = []nexus.OrgMember{{UserID: "v3-member", DisplayName: "v3"}}
+
+		v2Done := make(chan error, 1)
+		go func() { _, _, err := service.EnsureSpaceFromEvent(context.Background(), v2); v2Done <- err }()
+		<-store.bindingEntered
+		v3Done := make(chan error, 1)
+		go func() { _, _, err := service.EnsureSpaceFromEvent(context.Background(), v3); v3Done <- err }()
+		close(store.bindingRelease)
+		if err := <-v2Done; err != nil {
+			t.Fatal(err)
+		}
+		if err := <-v3Done; err != nil {
+			t.Fatal(err)
+		}
+		assertAtomicOrgState(t, store, "department:concurrent-child", 3, "company", "parent-v3", "v3-member")
+	})
+}
+
+func assertAtomicOrgState(t *testing.T, store *fakeStore, scope string, version int64, parentKind, parentID, memberID string) {
+	t.Helper()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	space := store.spaces[scopeKey("ent_1", scope)]
+	binding := store.bindings["ent_1|"+space.Kind+"|"+strings.TrimPrefix(scope, space.Kind+":")]
+	if space.OrgVersion != version || !binding.ParentScopeKind.Valid || binding.ParentScopeKind.String != parentKind || !binding.ParentScopeID.Valid || binding.ParentScopeID.String != parentID {
+		t.Fatalf("inconsistent space/binding: space=%+v binding=%+v", space, binding)
+	}
+	member, ok := store.members[space.ID+"|"+memberID]
+	if !ok || member.OrgVersion != version {
+		t.Fatalf("inconsistent member state: member=%+v found=%v", member, ok)
+	}
+	memberCount := 0
+	for key := range store.members {
+		if strings.HasPrefix(key, space.ID+"|") {
+			memberCount++
+		}
+	}
+	if memberCount != 1 {
+		t.Fatalf("stale or partial members remain: %+v", store.members)
+	}
+	versionCount := 0
+	for _, item := range store.versions {
+		if item.SpaceID == space.ID {
+			versionCount++
+		}
+	}
+	if versionCount != int(version) {
+		t.Fatalf("version snapshots=%d want=%d: %+v", versionCount, version, store.versions)
 	}
 }

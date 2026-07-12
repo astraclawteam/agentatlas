@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 
@@ -18,12 +19,8 @@ type Store interface {
 	EnsureEnterprise(ctx context.Context, arg db.EnsureEnterpriseParams) error
 	UpsertEnterprise(ctx context.Context, arg db.UpsertEnterpriseParams) (db.Enterprise, error)
 	GetKnowledgeSpaceByScope(ctx context.Context, arg db.GetKnowledgeSpaceByScopeParams) (db.KnowledgeSpace, error)
-	InsertKnowledgeSpace(ctx context.Context, arg db.InsertKnowledgeSpaceParams) (db.KnowledgeSpace, error)
-	UpdateKnowledgeSpaceIfNewer(ctx context.Context, arg db.UpdateKnowledgeSpaceIfNewerParams) (int64, error)
-	InsertKnowledgeSpaceVersion(ctx context.Context, arg db.InsertKnowledgeSpaceVersionParams) error
-	UpsertOrgScopeBinding(ctx context.Context, arg db.UpsertOrgScopeBindingParams) error
+	ApplyOrgSpaceEvent(ctx context.Context, arg db.ApplyOrgSpaceEventParams) (db.ApplyOrgSpaceEventRow, error)
 	UpsertOrgSnapshot(ctx context.Context, arg db.UpsertOrgSnapshotParams) error
-	UpsertSpaceMember(ctx context.Context, arg db.UpsertSpaceMemberParams) error
 	ListKnowledgeSpacesByEnterprise(ctx context.Context, enterpriseID string) ([]db.KnowledgeSpace, error)
 }
 
@@ -43,94 +40,60 @@ func (s *Service) EnsureSpaceFromEvent(ctx context.Context, ev nexus.OrgEvent) (
 		return "", false, fmt.Errorf("scope %s parent kind and id must be provided together", ev.Scope.ID)
 	}
 	scope := ScopeString(ev.Scope.Kind, ev.Scope.ID)
-
-	existing, err := s.store.GetKnowledgeSpaceByScope(ctx, db.GetKnowledgeSpaceByScopeParams{
-		EnterpriseID: ev.EnterpriseID,
-		OrgScope:     scope,
-	})
-	switch {
-	case err == nil:
-		rows, uerr := s.store.UpdateKnowledgeSpaceIfNewer(ctx, db.UpdateKnowledgeSpaceIfNewerParams{
-			ID:           existing.ID,
-			EnterpriseID: ev.EnterpriseID,
-			Name:         ev.Scope.Name,
-			OrgVersion:   ev.OrgVersion,
-		})
-		if uerr != nil {
-			return "", false, fmt.Errorf("update space %s: %w", existing.ID, uerr)
-		}
-		if rows > 0 {
-			if berr := s.upsertBinding(ctx, existing.ID, ev); berr != nil {
-				return "", false, berr
-			}
-			if verr := s.recordVersion(ctx, existing.ID, ev); verr != nil {
-				return "", false, verr
-			}
-		}
-		spaceID = existing.ID
-	case errors.Is(err, pgx.ErrNoRows):
-		space, ierr := s.store.InsertKnowledgeSpace(ctx, db.InsertKnowledgeSpaceParams{
-			ID:           newSpaceID(),
-			EnterpriseID: ev.EnterpriseID,
-			Kind:         string(ev.Scope.Kind),
-			Name:         ev.Scope.Name,
-			OrgScope:     scope,
-			OrgVersion:   ev.OrgVersion,
-		})
-		if ierr != nil {
-			return "", false, fmt.Errorf("insert space for %s: %w", scope, ierr)
-		}
-		if berr := s.upsertBinding(ctx, space.ID, ev); berr != nil {
-			return "", false, berr
-		}
-		if verr := s.recordVersion(ctx, space.ID, ev); verr != nil {
-			return "", false, verr
-		}
-		spaceID, created = space.ID, true
-	default:
-		return "", false, fmt.Errorf("get space by scope %s: %w", scope, err)
-	}
-
-	for _, member := range ev.Members {
-		if merr := s.store.UpsertSpaceMember(ctx, db.UpsertSpaceMemberParams{
-			SpaceID:     spaceID,
-			UserID:      member.UserID,
-			DisplayName: member.DisplayName,
-			OrgVersion:  ev.OrgVersion,
-		}); merr != nil {
-			return "", false, fmt.Errorf("member %s: %w", member.UserID, merr)
-		}
-	}
-	return spaceID, created, nil
-}
-
-func (s *Service) upsertBinding(ctx context.Context, spaceID string, ev nexus.OrgEvent) error {
-	if err := s.store.UpsertOrgScopeBinding(ctx, db.UpsertOrgScopeBindingParams{
-		EnterpriseID:    ev.EnterpriseID,
-		SpaceID:         spaceID,
-		ScopeKind:       string(ev.Scope.Kind),
-		ScopeID:         ev.Scope.ID,
-		ParentScopeKind: pgTextOrEmpty(string(ev.Scope.ParentKind)),
-		ParentScopeID:   pgTextOrEmpty(ev.Scope.ParentID),
-	}); err != nil {
-		return fmt.Errorf("bind scope %s: %w", ScopeString(ev.Scope.Kind, ev.Scope.ID), err)
-	}
-	return nil
-}
-
-func (s *Service) recordVersion(ctx context.Context, spaceID string, ev nexus.OrgEvent) error {
-	snapshot, err := json.Marshal(ev.Scope)
+	versionSnapshot, err := json.Marshal(ev.Scope)
 	if err != nil {
-		return fmt.Errorf("snapshot scope: %w", err)
+		return "", false, fmt.Errorf("snapshot scope: %w", err)
 	}
-	if err := s.store.InsertKnowledgeSpaceVersion(ctx, db.InsertKnowledgeSpaceVersionParams{
-		SpaceID:    spaceID,
-		OrgVersion: ev.OrgVersion,
-		Snapshot:   snapshot,
-	}); err != nil {
-		return fmt.Errorf("record space version: %w", err)
+	members := normalizeMembers(ev.Members)
+	memberSnapshot, err := json.Marshal(members)
+	if err != nil {
+		return "", false, fmt.Errorf("snapshot members: %w", err)
 	}
-	return nil
+	result, err := s.store.ApplyOrgSpaceEvent(ctx, db.ApplyOrgSpaceEventParams{
+		EventEnterpriseID:    ev.EnterpriseID,
+		EventOrgScope:        scope,
+		NewSpaceID:           newSpaceID(),
+		EventScopeKind:       string(ev.Scope.Kind),
+		EventSpaceName:       ev.Scope.Name,
+		EventOrgVersion:      ev.OrgVersion,
+		EventScopeID:         ev.Scope.ID,
+		EventParentScopeKind: pgTextOrEmpty(string(ev.Scope.ParentKind)),
+		EventParentScopeID:   pgTextOrEmpty(ev.Scope.ParentID),
+		EventVersionSnapshot: versionSnapshot,
+		EventMemberSnapshot:  memberSnapshot,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		space, getErr := s.store.GetKnowledgeSpaceByScope(ctx, db.GetKnowledgeSpaceByScopeParams{
+			EnterpriseID: ev.EnterpriseID, OrgScope: scope,
+		})
+		if getErr != nil {
+			return "", false, fmt.Errorf("load concurrently created space %s: %w", scope, getErr)
+		}
+		return space.ID, false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("apply org space event %s v%d: %w", scope, ev.OrgVersion, err)
+	}
+	return result.SpaceID, result.Created, nil
+}
+
+func normalizeMembers(members []nexus.OrgMember) []nexus.OrgMember {
+	byID := make(map[string]nexus.OrgMember, len(members))
+	for _, member := range members {
+		if member.UserID != "" {
+			byID[member.UserID] = member
+		}
+	}
+	ids := make([]string, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	result := make([]nexus.OrgMember, 0, len(ids))
+	for _, id := range ids {
+		result = append(result, byID[id])
+	}
+	return result
 }
 
 func (s *Service) ListByEnterprise(ctx context.Context, enterpriseID string) ([]db.KnowledgeSpace, error) {

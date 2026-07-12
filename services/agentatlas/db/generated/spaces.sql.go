@@ -11,6 +11,133 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const applyOrgSpaceEvent = `-- name: ApplyOrgSpaceEvent :one
+WITH existing_space AS MATERIALIZED (
+    SELECT knowledge_spaces.id, knowledge_spaces.org_version
+    FROM knowledge_spaces
+    WHERE knowledge_spaces.enterprise_id = $1
+      AND knowledge_spaces.org_scope = $2
+),
+accepted_space AS (
+    INSERT INTO knowledge_spaces (id, enterprise_id, kind, name, org_scope, org_version)
+    VALUES ($3, $1, $4,
+            $5, $2, $6)
+    ON CONFLICT (enterprise_id, org_scope) DO UPDATE
+    SET name = EXCLUDED.name,
+        org_version = EXCLUDED.org_version,
+        updated_at = now()
+    WHERE knowledge_spaces.org_version < EXCLUDED.org_version
+    RETURNING knowledge_spaces.id, knowledge_spaces.org_version
+),
+binding_write AS (
+    INSERT INTO org_scope_bindings (
+        enterprise_id, space_id, scope_kind, scope_id,
+        parent_scope_kind, parent_scope_id
+    )
+    SELECT $1, accepted_space.id,
+           $4, $7,
+           $8, $9
+    FROM accepted_space
+    ON CONFLICT (enterprise_id, scope_kind, scope_id)
+    DO UPDATE SET space_id = EXCLUDED.space_id,
+                  parent_scope_kind = EXCLUDED.parent_scope_kind,
+                  parent_scope_id = EXCLUDED.parent_scope_id
+    RETURNING 1
+),
+version_write AS (
+    INSERT INTO knowledge_space_versions (space_id, org_version, snapshot)
+    SELECT accepted_space.id, accepted_space.org_version,
+           $10::jsonb
+    FROM accepted_space
+    RETURNING 1
+),
+member_write AS (
+    INSERT INTO space_membership_cache (
+        space_id, user_id, display_name, org_version, updated_at
+    )
+    SELECT accepted_space.id, members.user_id, members.display_name,
+           accepted_space.org_version, now()
+    FROM accepted_space
+    CROSS JOIN jsonb_to_recordset($11::jsonb)
+        AS members(user_id text, display_name text)
+    ON CONFLICT (space_id, user_id)
+    DO UPDATE SET display_name = EXCLUDED.display_name,
+                  org_version = EXCLUDED.org_version,
+                  updated_at = now()
+    WHERE space_membership_cache.org_version < EXCLUDED.org_version
+    RETURNING 1
+),
+member_delete AS (
+    DELETE FROM space_membership_cache AS cached
+    USING accepted_space
+    WHERE cached.space_id = accepted_space.id
+      AND cached.org_version < accepted_space.org_version
+      AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_to_recordset($11::jsonb)
+              AS desired(user_id text, display_name text)
+          WHERE desired.user_id = cached.user_id
+      )
+    RETURNING 1
+),
+effects AS (
+    SELECT (SELECT count(*) FROM binding_write) +
+           (SELECT count(*) FROM version_write) +
+           (SELECT count(*) FROM member_write) +
+           (SELECT count(*) FROM member_delete) AS write_count
+)
+SELECT accepted_space.id::text AS space_id,
+       true::boolean AS accepted,
+       (NOT EXISTS (SELECT 1 FROM existing_space))::boolean AS created
+FROM accepted_space, effects
+UNION ALL
+SELECT existing_space.id::text AS space_id,
+       false::boolean AS accepted,
+       false::boolean AS created
+FROM existing_space
+WHERE NOT EXISTS (SELECT 1 FROM accepted_space)
+LIMIT 1
+`
+
+type ApplyOrgSpaceEventParams struct {
+	EventEnterpriseID    string      `json:"event_enterprise_id"`
+	EventOrgScope        string      `json:"event_org_scope"`
+	NewSpaceID           string      `json:"new_space_id"`
+	EventScopeKind       string      `json:"event_scope_kind"`
+	EventSpaceName       string      `json:"event_space_name"`
+	EventOrgVersion      int64       `json:"event_org_version"`
+	EventScopeID         string      `json:"event_scope_id"`
+	EventParentScopeKind pgtype.Text `json:"event_parent_scope_kind"`
+	EventParentScopeID   pgtype.Text `json:"event_parent_scope_id"`
+	EventVersionSnapshot []byte      `json:"event_version_snapshot"`
+	EventMemberSnapshot  []byte      `json:"event_member_snapshot"`
+}
+
+type ApplyOrgSpaceEventRow struct {
+	SpaceID  string `json:"space_id"`
+	Accepted bool   `json:"accepted"`
+	Created  bool   `json:"created"`
+}
+
+func (q *Queries) ApplyOrgSpaceEvent(ctx context.Context, arg ApplyOrgSpaceEventParams) (ApplyOrgSpaceEventRow, error) {
+	row := q.db.QueryRow(ctx, applyOrgSpaceEvent,
+		arg.EventEnterpriseID,
+		arg.EventOrgScope,
+		arg.NewSpaceID,
+		arg.EventScopeKind,
+		arg.EventSpaceName,
+		arg.EventOrgVersion,
+		arg.EventScopeID,
+		arg.EventParentScopeKind,
+		arg.EventParentScopeID,
+		arg.EventVersionSnapshot,
+		arg.EventMemberSnapshot,
+	)
+	var i ApplyOrgSpaceEventRow
+	err := row.Scan(&i.SpaceID, &i.Accepted, &i.Created)
+	return i, err
+}
+
 const deleteSpaceMembersStale = `-- name: DeleteSpaceMembersStale :execrows
 DELETE FROM space_membership_cache WHERE space_id = $1 AND org_version < $2
 `
