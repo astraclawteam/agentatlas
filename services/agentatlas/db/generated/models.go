@@ -101,6 +101,51 @@ type AtlasDocument struct {
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
+type ChangeDraft struct {
+	ID              string             `json:"id"`
+	EnterpriseID    string             `json:"enterprise_id"`
+	OrgUnitID       string             `json:"org_unit_id"`
+	ResourceType    string             `json:"resource_type"`
+	ResourceID      string             `json:"resource_id"`
+	Action          string             `json:"action"`
+	RequesterUserID string             `json:"requester_user_id"`
+	Origin          string             `json:"origin"`
+	PermissionMode  string             `json:"permission_mode"`
+	Revision        int32              `json:"revision"`
+	State           string             `json:"state"`
+	BaseVersion     int32              `json:"base_version"`
+	ProposedContent []byte             `json:"proposed_content"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ChangeReview struct {
+	ID             string             `json:"id"`
+	EnterpriseID   string             `json:"enterprise_id"`
+	ChangeID       string             `json:"change_id"`
+	ChangeRevision int32              `json:"change_revision"`
+	ReviewerUserID pgtype.Text        `json:"reviewer_user_id"`
+	RiskLevel      string             `json:"risk_level"`
+	RiskReasons    []byte             `json:"risk_reasons"`
+	ReviewMode     string             `json:"review_mode"`
+	State          string             `json:"state"`
+	OrgPath        []byte             `json:"org_path"`
+	Queue          pgtype.Text        `json:"queue"`
+	Decision       string             `json:"decision"`
+	Comment        string             `json:"comment"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type ChangeVersion struct {
+	ID           string             `json:"id"`
+	EnterpriseID string             `json:"enterprise_id"`
+	ChangeID     string             `json:"change_id"`
+	Version      int32              `json:"version"`
+	Content      []byte             `json:"content"`
+	PublishedBy  string             `json:"published_by"`
+	PublishedAt  pgtype.Timestamptz `json:"published_at"`
+}
+
 type DocumentBlock struct {
 	AtlasDocumentID  string      `json:"atlas_document_id"`
 	BlockID          string      `json:"block_id"`
@@ -151,16 +196,47 @@ type DreamPolicyVersion struct {
 }
 
 type DreamRun struct {
-	ID           string             `json:"id"`
-	PolicyID     string             `json:"policy_id"`
-	Version      int32              `json:"version"`
-	EnterpriseID string             `json:"enterprise_id"`
-	Status       string             `json:"status"`
-	WindowStart  pgtype.Timestamptz `json:"window_start"`
-	WindowEnd    pgtype.Timestamptz `json:"window_end"`
-	Error        string             `json:"error"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	FinishedAt   pgtype.Timestamptz `json:"finished_at"`
+	ID                 string             `json:"id"`
+	PolicyID           string             `json:"policy_id"`
+	Version            int32              `json:"version"`
+	EnterpriseID       string             `json:"enterprise_id"`
+	Status             string             `json:"status"`
+	WindowStart        pgtype.Timestamptz `json:"window_start"`
+	WindowEnd          pgtype.Timestamptz `json:"window_end"`
+	Error              string             `json:"error"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	FinishedAt         pgtype.Timestamptz `json:"finished_at"`
+	OrgUnitID          string             `json:"org_unit_id"`
+	PolicyVersion      int32              `json:"policy_version"`
+	WorkflowID         pgtype.Text        `json:"workflow_id"`
+	WorkflowVersion    pgtype.Int4        `json:"workflow_version"`
+	Timezone           string             `json:"timezone"`
+	InputSnapshot      []byte             `json:"input_snapshot"`
+	VisibilitySnapshot []byte             `json:"visibility_snapshot"`
+	ModelRoute         string             `json:"model_route"`
+	ModelVersion       string             `json:"model_version"`
+	Attempt            int32              `json:"attempt"`
+	RerunOfRunID       pgtype.Text        `json:"rerun_of_run_id"`
+	Coverage           []byte             `json:"coverage"`
+	MissingInputs      []byte             `json:"missing_inputs"`
+	IdempotencyKey     string             `json:"idempotency_key"`
+}
+
+type DreamRunAnnotation struct {
+	ID             string             `json:"id"`
+	EnterpriseID   string             `json:"enterprise_id"`
+	RunID          string             `json:"run_id"`
+	AnnotationType string             `json:"annotation_type"`
+	Body           string             `json:"body"`
+	CreatedBy      string             `json:"created_by"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type DreamRunLineage struct {
+	RunID       string             `json:"run_id"`
+	ParentRunID string             `json:"parent_run_id"`
+	Relation    string             `json:"relation"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type DreamSummary struct {
@@ -174,6 +250,10 @@ type DreamSummary struct {
 	EvidencePointerID pgtype.Text        `json:"evidence_pointer_id"`
 	RiskSignals       []byte             `json:"risk_signals"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	Facts             []byte             `json:"facts"`
+	Themes            []byte             `json:"themes"`
+	Trends            []byte             `json:"trends"`
+	Todos             []byte             `json:"todos"`
 }
 
 type Enterprise struct {
@@ -284,6 +364,18 @@ type ParserProviderRun struct {
 	Confidence float32            `json:"confidence"`
 	Error      string             `json:"error"`
 	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type PublishOperation struct {
+	ID             string             `json:"id"`
+	EnterpriseID   string             `json:"enterprise_id"`
+	ChangeID       string             `json:"change_id"`
+	ChangeRevision int32              `json:"change_revision"`
+	IdempotencyKey string             `json:"idempotency_key"`
+	Status         string             `json:"status"`
+	Result         []byte             `json:"result"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
 }
 
 type RetrievalPlan struct {

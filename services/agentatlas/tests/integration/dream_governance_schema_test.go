@@ -1,0 +1,234 @@
+// Integration test for immutable Dream lineage and governed change history.
+//
+// Run with the production-standard PostgreSQL from deploy/compose:
+//
+//	ATLAS_TEST_POSTGRES_DSN=postgres://atlas:atlas@localhost:5432/agentatlas?sslmode=disable \
+//	  go test ./tests/integration -run DreamGovernanceSchema -count=1
+package integration
+
+import (
+	"context"
+	"errors"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/storage"
+)
+
+func TestDreamGovernanceSchema(t *testing.T) {
+	dsn := os.Getenv("ATLAS_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("set ATLAS_TEST_POSTGRES_DSN (production-standard postgres from deploy/compose)")
+	}
+	ctx := context.Background()
+	if err := storage.Migrate(ctx, dsn); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	dbPool, err := storage.NewPool(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer dbPool.Close()
+	pool, err := dbPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = pool.Rollback(ctx) }()
+	assertRejected := func(label, statement string) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, "savepoint expected_rejection"); err != nil {
+			t.Fatalf("%s savepoint: %v", label, err)
+		}
+		_, execErr := pool.Exec(ctx, statement)
+		if _, err := pool.Exec(ctx, "rollback to savepoint expected_rejection"); err != nil {
+			t.Fatalf("%s rollback: %v (original error: %v)", label, err, execErr)
+		}
+		if _, err := pool.Exec(ctx, "release savepoint expected_rejection"); err != nil {
+			t.Fatalf("%s release: %v", label, err)
+		}
+		if execErr == nil {
+			t.Fatal(label)
+		}
+	}
+
+	for _, statement := range []string{
+		`insert into enterprises(id,name) values('ent-dream-a','Dream A'),('ent-dream-b','Dream B') on conflict (id) do nothing`,
+		`insert into knowledge_spaces(id,enterprise_id,kind,name,org_scope) values
+			('space-parent','ent-dream-a','department','Parent','department:parent'),
+			('space-child','ent-dream-a','project_group','Child','project_group:child'),
+			('space-foreign','ent-dream-b','project_group','Foreign','project_group:foreign')
+			on conflict (id) do nothing`,
+		`insert into org_scope_bindings(enterprise_id,space_id,scope_kind,scope_id,parent_scope_id) values
+			('ent-dream-a','space-parent','department','parent',null),
+			('ent-dream-a','space-child','project_group','child','parent'),
+			('ent-dream-b','space-foreign','project_group','foreign',null)
+			on conflict (enterprise_id,scope_kind,scope_id) do nothing`,
+		`insert into workflows(id,enterprise_id,name,kind,draft) values
+			('dream-workflow','ent-dream-a','Dream workflow','dream','{}'),
+			('foreign-workflow','ent-dream-b','Foreign workflow','dream','{}')
+			on conflict (id) do nothing`,
+		`insert into workflow_versions(workflow_id,version,definition,risk_level) values
+			('dream-workflow',1,'{}','low'),('foreign-workflow',1,'{}','low')
+			on conflict (workflow_id,version) do nothing`,
+		`insert into dream_policies(id,enterprise_id,org_scope,status,draft) values
+			('policy-parent','ent-dream-a','department:parent','published','{}'),
+			('policy-child','ent-dream-a','project_group:child','published','{}'),
+			('policy-foreign','ent-dream-b','project_group:foreign','published','{}')
+			on conflict (id) do nothing`,
+		`insert into dream_policy_versions(policy_id,version,definition) values
+			('policy-parent',1,'{}'),('policy-child',1,'{}'),('policy-foreign',1,'{}')
+			on conflict (policy_id,version) do nothing`,
+	} {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatalf("fixture: %v", err)
+		}
+	}
+
+	windowStart := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	windowEnd := windowStart.Add(24 * time.Hour)
+	for _, run := range []struct {
+		id, policyID, enterpriseID, orgUnitID, workflowID, idempotencyKey string
+	}{
+		{"parent", "policy-parent", "ent-dream-a", "parent", "dream-workflow", "dream-parent-window"},
+		{"child", "policy-child", "ent-dream-a", "child", "dream-workflow", "dream-child-window"},
+		{"foreign", "policy-foreign", "ent-dream-b", "foreign", "foreign-workflow", "dream-foreign-window"},
+	} {
+		_, err := pool.Exec(ctx, `insert into dream_runs(
+			id,policy_id,version,enterprise_id,status,window_start,window_end,
+			org_unit_id,policy_version,workflow_id,workflow_version,timezone,
+			input_snapshot,visibility_snapshot,model_route,model_version,attempt,
+			coverage,missing_inputs,idempotency_key
+		) values($1,$2,1,$3,'succeeded',$4,$5,$6,1,$7,1,'UTC',
+			'{"source_counts":[],"sanitized_input_ids":[]}',
+			'{"visibility_level":"managers","org_unit_ids":[],"masked_field_count":0}',
+			'reasoning','v1',1,
+			'{"expected_children":0,"completed_children":0,"input_count":0}','[]',$8)
+		on conflict (id) do nothing`, run.id, run.policyID, run.enterpriseID, windowStart, windowEnd,
+			run.orgUnitID, run.workflowID, run.idempotencyKey)
+		if err != nil {
+			t.Fatalf("dream run %s: %v", run.id, err)
+		}
+	}
+
+	_, err = pool.Exec(ctx, `insert into dream_summaries(
+		id,run_id,enterprise_id,space_id,layer,summary_text,facts,themes,trends,todos,risk_signals
+	) values('child-summary','child','ent-dream-a','space-child','display','sanitized child summary','[]','[]','[]','[]','[]')
+	on conflict (id) do nothing`)
+	if err != nil {
+		t.Fatalf("structured child summary: %v", err)
+	}
+
+	_, err = pool.Exec(ctx, `insert into dream_run_lineage(run_id,parent_run_id,relation) values('parent','child','child_summary')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRejected("immutable run accepted update", `update dream_runs set policy_version=2 where id='parent'`)
+	assertRejected("immutable published Dream policy version accepted update", `update dream_policy_versions set definition='{"changed":true}' where policy_id='policy-parent' and version=1`)
+	if _, err = pool.Exec(ctx, `update dream_runs set status='running', error='', finished_at=null where id='parent'`); err != nil {
+		t.Fatalf("mutable run lifecycle fields rejected: %v", err)
+	}
+	assertRejected("cross-enterprise Dream lineage accepted", `insert into dream_run_lineage(run_id,parent_run_id,relation) values('parent','foreign','child_summary')`)
+
+	queries := db.New(pool)
+	children, err := queries.ListChildSpaces(ctx, db.ListChildSpacesParams{
+		EnterpriseID: "ent-dream-a", ParentOrgUnitID: "department:parent",
+	})
+	if err != nil || len(children) != 1 || children[0].ID != "space-child" {
+		t.Fatalf("canonical parent org query: children=%+v err=%v", children, err)
+	}
+	completed, err := queries.ListCompletedChildDreamRuns(ctx, db.ListCompletedChildDreamRunsParams{
+		EnterpriseID: "ent-dream-a", ParentOrgUnitID: "department:parent",
+		WindowStart: ts(windowStart), WindowEnd: ts(windowEnd),
+	})
+	if err != nil || len(completed) != 1 || completed[0].ID != "child" {
+		t.Fatalf("completed sanitized child Dream runs: runs=%+v err=%v", completed, err)
+	}
+	if _, err := queries.GetDreamRunView(ctx, db.GetDreamRunViewParams{
+		EnterpriseID: "ent-dream-b", RunID: "parent",
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("cross-enterprise Dream run view returned err=%v", err)
+	}
+
+	_, err = pool.Exec(ctx, `insert into dream_run_annotations(
+		id,enterprise_id,run_id,annotation_type,body,created_by
+	) values('annotation-1','ent-dream-a','parent','review_note','sanitized note','reviewer-1')
+	on conflict (id) do nothing`)
+	if err != nil {
+		t.Fatalf("Dream annotation: %v", err)
+	}
+	assertRejected("cross-enterprise Dream annotation accepted", `insert into dream_run_annotations(
+		id,enterprise_id,run_id,annotation_type,body,created_by
+	) values('annotation-cross','ent-dream-b','parent','review_note','bad scope','reviewer-1')`)
+
+	_, err = pool.Exec(ctx, `insert into change_drafts(
+		id,enterprise_id,org_unit_id,resource_type,resource_id,action,requester_user_id,
+		origin,permission_mode,revision,state,base_version,proposed_content
+	) values('change-1','ent-dream-a','parent','dream_policy','policy-parent','update','requester-1',
+		'direct_edit','direct_edit',1,'draft',1,'{"schedule":"0 1 * * *"}')
+	on conflict (id) do nothing`)
+	if err != nil {
+		t.Fatalf("change draft: %v", err)
+	}
+	command, err := pool.Exec(ctx, `update change_drafts
+		set proposed_content='{"schedule":"0 2 * * *"}', revision=revision+1, updated_at=now()
+		where id='change-1' and enterprise_id='ent-dream-a' and revision=1`)
+	if err != nil || command.RowsAffected() != 1 {
+		t.Fatalf("revision-guarded draft update: rows=%d err=%v", command.RowsAffected(), err)
+	}
+	command, err = pool.Exec(ctx, `update change_drafts
+		set proposed_content='{}', revision=revision+1, updated_at=now()
+		where id='change-1' and enterprise_id='ent-dream-a' and revision=1`)
+	if err != nil || command.RowsAffected() != 0 {
+		t.Fatalf("stale draft revision accepted: rows=%d err=%v", command.RowsAffected(), err)
+	}
+
+	_, err = pool.Exec(ctx, `insert into change_versions(
+		id,enterprise_id,change_id,version,content,published_by
+	) values('change-version-1','ent-dream-a','change-1',1,'{"schedule":"0 2 * * *"}','publisher-1')`)
+	if err != nil {
+		t.Fatalf("change version: %v", err)
+	}
+	assertRejected("immutable published change version accepted update", `update change_versions set content='{}' where id='change-version-1'`)
+	assertRejected("cross-enterprise change version accepted", `insert into change_versions(
+		id,enterprise_id,change_id,version,content,published_by
+	) values('change-version-cross','ent-dream-b','change-1',2,'{}','publisher-1')`)
+
+	_, err = pool.Exec(ctx, `insert into change_reviews(
+		id,enterprise_id,change_id,change_revision,reviewer_user_id,risk_level,risk_reasons,
+		review_mode,state,org_path,decision
+	) values('review-1','ent-dream-a','change-1',2,'reviewer-1','high','["policy change"]',
+		'upward_review','approved','["parent"]','approved')`)
+	if err != nil {
+		t.Fatalf("change review: %v", err)
+	}
+	_, err = pool.Exec(ctx, `insert into change_reviews(
+		id,enterprise_id,change_id,change_revision,risk_level,risk_reasons,
+		review_mode,state,org_path,queue,decision
+	) values('review-admin','ent-dream-a','change-1',2,'high','["enterprise scope"]',
+		'enterprise_knowledge_admin_queue','pending','[]','knowledge-admins','')`)
+	if err != nil {
+		t.Fatalf("enterprise knowledge admin queue review: %v", err)
+	}
+	assertRejected("invalid low-risk upward review accepted", `insert into change_reviews(
+		id,enterprise_id,change_id,change_revision,reviewer_user_id,risk_level,risk_reasons,
+		review_mode,state,org_path,decision
+	) values('review-invalid','ent-dream-a','change-1',2,'reviewer-1','low','[]',
+		'upward_review','pending','["parent"]','')`)
+
+	_, err = pool.Exec(ctx, `insert into publish_operations(
+		id,enterprise_id,change_id,change_revision,idempotency_key,status
+	) values('publish-1','ent-dream-a','change-1',2,'publish-key-1','pending')`)
+	if err != nil {
+		t.Fatalf("publish operation: %v", err)
+	}
+	assertRejected("duplicate enterprise publish idempotency key accepted", `insert into publish_operations(
+		id,enterprise_id,change_id,change_revision,idempotency_key,status
+	) values('publish-duplicate','ent-dream-a','change-1',2,'publish-key-1','pending')`)
+	assertRejected("cross-enterprise publish operation accepted", `insert into publish_operations(
+		id,enterprise_id,change_id,change_revision,idempotency_key,status
+	) values('publish-cross','ent-dream-b','change-1',2,'publish-key-2','pending')`)
+}

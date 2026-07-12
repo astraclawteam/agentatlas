@@ -23,6 +23,48 @@ func (q *Queries) ClaimDreamRun(ctx context.Context, id string) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const createDreamAnnotation = `-- name: CreateDreamAnnotation :one
+INSERT INTO dream_run_annotations (
+    id, enterprise_id, run_id, annotation_type, body, created_by
+)
+VALUES (
+    $1, $2, $3,
+    $4, $5, $6
+)
+RETURNING id, enterprise_id, run_id, annotation_type, body, created_by, created_at
+`
+
+type CreateDreamAnnotationParams struct {
+	ID             string `json:"id"`
+	EnterpriseID   string `json:"enterprise_id"`
+	RunID          string `json:"run_id"`
+	AnnotationType string `json:"annotation_type"`
+	Body           string `json:"body"`
+	CreatedBy      string `json:"created_by"`
+}
+
+func (q *Queries) CreateDreamAnnotation(ctx context.Context, arg CreateDreamAnnotationParams) (DreamRunAnnotation, error) {
+	row := q.db.QueryRow(ctx, createDreamAnnotation,
+		arg.ID,
+		arg.EnterpriseID,
+		arg.RunID,
+		arg.AnnotationType,
+		arg.Body,
+		arg.CreatedBy,
+	)
+	var i DreamRunAnnotation
+	err := row.Scan(
+		&i.ID,
+		&i.EnterpriseID,
+		&i.RunID,
+		&i.AnnotationType,
+		&i.Body,
+		&i.CreatedBy,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createDreamPolicy = `-- name: CreateDreamPolicy :one
 INSERT INTO dream_policies (id, enterprise_id, org_scope, status, draft)
 VALUES ($1, $2, $3, $4, $5)
@@ -59,9 +101,14 @@ func (q *Queries) CreateDreamPolicy(ctx context.Context, arg CreateDreamPolicyPa
 }
 
 const createDreamRun = `-- name: CreateDreamRun :one
-INSERT INTO dream_runs (id, policy_id, version, enterprise_id, status, window_start, window_end)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at
+INSERT INTO dream_runs (
+    id, policy_id, version, enterprise_id, status, window_start, window_end,
+    org_unit_id, policy_version
+)
+SELECT $1, $2, $3, $4, $5, $6, $7, policies.org_scope, $3
+FROM dream_policies AS policies
+WHERE policies.id = $2 AND policies.enterprise_id = $4
+RETURNING id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key
 `
 
 type CreateDreamRunParams struct {
@@ -96,6 +143,44 @@ func (q *Queries) CreateDreamRun(ctx context.Context, arg CreateDreamRunParams) 
 		&i.Error,
 		&i.CreatedAt,
 		&i.FinishedAt,
+		&i.OrgUnitID,
+		&i.PolicyVersion,
+		&i.WorkflowID,
+		&i.WorkflowVersion,
+		&i.Timezone,
+		&i.InputSnapshot,
+		&i.VisibilitySnapshot,
+		&i.ModelRoute,
+		&i.ModelVersion,
+		&i.Attempt,
+		&i.RerunOfRunID,
+		&i.Coverage,
+		&i.MissingInputs,
+		&i.IdempotencyKey,
+	)
+	return i, err
+}
+
+const createDreamRunLineage = `-- name: CreateDreamRunLineage :one
+INSERT INTO dream_run_lineage (run_id, parent_run_id, relation)
+VALUES ($1, $2, $3)
+RETURNING run_id, parent_run_id, relation, created_at
+`
+
+type CreateDreamRunLineageParams struct {
+	RunID       string `json:"run_id"`
+	ParentRunID string `json:"parent_run_id"`
+	Relation    string `json:"relation"`
+}
+
+func (q *Queries) CreateDreamRunLineage(ctx context.Context, arg CreateDreamRunLineageParams) (DreamRunLineage, error) {
+	row := q.db.QueryRow(ctx, createDreamRunLineage, arg.RunID, arg.ParentRunID, arg.Relation)
+	var i DreamRunLineage
+	err := row.Scan(
+		&i.RunID,
+		&i.ParentRunID,
+		&i.Relation,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -103,7 +188,7 @@ func (q *Queries) CreateDreamRun(ctx context.Context, arg CreateDreamRunParams) 
 const createDreamSummary = `-- name: CreateDreamSummary :one
 INSERT INTO dream_summaries (id, run_id, enterprise_id, space_id, layer, summary_text, sealed_object_key, evidence_pointer_id, risk_signals)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, run_id, enterprise_id, space_id, layer, summary_text, sealed_object_key, evidence_pointer_id, risk_signals, created_at
+RETURNING id, run_id, enterprise_id, space_id, layer, summary_text, sealed_object_key, evidence_pointer_id, risk_signals, created_at, facts, themes, trends, todos
 `
 
 type CreateDreamSummaryParams struct {
@@ -142,6 +227,10 @@ func (q *Queries) CreateDreamSummary(ctx context.Context, arg CreateDreamSummary
 		&i.EvidencePointerID,
 		&i.RiskSignals,
 		&i.CreatedAt,
+		&i.Facts,
+		&i.Themes,
+		&i.Trends,
+		&i.Todos,
 	)
 	return i, err
 }
@@ -166,7 +255,7 @@ func (q *Queries) GetDreamPolicy(ctx context.Context, id string) (DreamPolicy, e
 }
 
 const getDreamRun = `-- name: GetDreamRun :one
-SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at FROM dream_runs WHERE id = $1
+SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key FROM dream_runs WHERE id = $1
 `
 
 func (q *Queries) GetDreamRun(ctx context.Context, id string) (DreamRun, error) {
@@ -183,12 +272,136 @@ func (q *Queries) GetDreamRun(ctx context.Context, id string) (DreamRun, error) 
 		&i.Error,
 		&i.CreatedAt,
 		&i.FinishedAt,
+		&i.OrgUnitID,
+		&i.PolicyVersion,
+		&i.WorkflowID,
+		&i.WorkflowVersion,
+		&i.Timezone,
+		&i.InputSnapshot,
+		&i.VisibilitySnapshot,
+		&i.ModelRoute,
+		&i.ModelVersion,
+		&i.Attempt,
+		&i.RerunOfRunID,
+		&i.Coverage,
+		&i.MissingInputs,
+		&i.IdempotencyKey,
+	)
+	return i, err
+}
+
+const getDreamRunView = `-- name: GetDreamRunView :one
+SELECT runs.id, runs.policy_id, runs.version, runs.enterprise_id, runs.status, runs.window_start, runs.window_end, runs.error, runs.created_at, runs.finished_at, runs.org_unit_id, runs.policy_version, runs.workflow_id, runs.workflow_version, runs.timezone, runs.input_snapshot, runs.visibility_snapshot, runs.model_route, runs.model_version, runs.attempt, runs.rerun_of_run_id, runs.coverage, runs.missing_inputs, runs.idempotency_key,
+       COALESCE(
+           (SELECT array_agg(lineage.parent_run_id ORDER BY lineage.parent_run_id)
+            FROM dream_run_lineage AS lineage
+            WHERE lineage.run_id = runs.id AND lineage.relation = 'child_summary'),
+           ARRAY[]::text[]
+       ) AS parent_run_ids,
+       (SELECT count(*) FROM dream_inputs AS inputs WHERE inputs.run_id = runs.id) AS input_count,
+       COALESCE(summary.summary_text, '') AS display_summary,
+       COALESCE(summary.facts, '[]'::jsonb) AS facts,
+       COALESCE(summary.themes, '[]'::jsonb) AS themes,
+       COALESCE(summary.trends, '[]'::jsonb) AS trends,
+       COALESCE(summary.risk_signals, '[]'::jsonb) AS risks,
+       COALESCE(summary.todos, '[]'::jsonb) AS todos,
+       summary.evidence_pointer_id
+FROM dream_runs AS runs
+LEFT JOIN LATERAL (
+    SELECT dream_summaries.id, dream_summaries.run_id, dream_summaries.enterprise_id, dream_summaries.space_id, dream_summaries.layer, dream_summaries.summary_text, dream_summaries.sealed_object_key, dream_summaries.evidence_pointer_id, dream_summaries.risk_signals, dream_summaries.created_at, dream_summaries.facts, dream_summaries.themes, dream_summaries.trends, dream_summaries.todos
+    FROM dream_summaries
+    WHERE dream_summaries.run_id = runs.id AND dream_summaries.layer = 'display'
+    ORDER BY dream_summaries.created_at DESC, dream_summaries.id DESC
+    LIMIT 1
+) AS summary ON true
+WHERE runs.enterprise_id = $1
+  AND runs.id = $2
+`
+
+type GetDreamRunViewParams struct {
+	EnterpriseID string `json:"enterprise_id"`
+	RunID        string `json:"run_id"`
+}
+
+type GetDreamRunViewRow struct {
+	ID                 string             `json:"id"`
+	PolicyID           string             `json:"policy_id"`
+	Version            int32              `json:"version"`
+	EnterpriseID       string             `json:"enterprise_id"`
+	Status             string             `json:"status"`
+	WindowStart        pgtype.Timestamptz `json:"window_start"`
+	WindowEnd          pgtype.Timestamptz `json:"window_end"`
+	Error              string             `json:"error"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	FinishedAt         pgtype.Timestamptz `json:"finished_at"`
+	OrgUnitID          string             `json:"org_unit_id"`
+	PolicyVersion      int32              `json:"policy_version"`
+	WorkflowID         pgtype.Text        `json:"workflow_id"`
+	WorkflowVersion    pgtype.Int4        `json:"workflow_version"`
+	Timezone           string             `json:"timezone"`
+	InputSnapshot      []byte             `json:"input_snapshot"`
+	VisibilitySnapshot []byte             `json:"visibility_snapshot"`
+	ModelRoute         string             `json:"model_route"`
+	ModelVersion       string             `json:"model_version"`
+	Attempt            int32              `json:"attempt"`
+	RerunOfRunID       pgtype.Text        `json:"rerun_of_run_id"`
+	Coverage           []byte             `json:"coverage"`
+	MissingInputs      []byte             `json:"missing_inputs"`
+	IdempotencyKey     string             `json:"idempotency_key"`
+	ParentRunIds       interface{}        `json:"parent_run_ids"`
+	InputCount         int64              `json:"input_count"`
+	DisplaySummary     string             `json:"display_summary"`
+	Facts              []byte             `json:"facts"`
+	Themes             []byte             `json:"themes"`
+	Trends             []byte             `json:"trends"`
+	Risks              []byte             `json:"risks"`
+	Todos              []byte             `json:"todos"`
+	EvidencePointerID  pgtype.Text        `json:"evidence_pointer_id"`
+}
+
+func (q *Queries) GetDreamRunView(ctx context.Context, arg GetDreamRunViewParams) (GetDreamRunViewRow, error) {
+	row := q.db.QueryRow(ctx, getDreamRunView, arg.EnterpriseID, arg.RunID)
+	var i GetDreamRunViewRow
+	err := row.Scan(
+		&i.ID,
+		&i.PolicyID,
+		&i.Version,
+		&i.EnterpriseID,
+		&i.Status,
+		&i.WindowStart,
+		&i.WindowEnd,
+		&i.Error,
+		&i.CreatedAt,
+		&i.FinishedAt,
+		&i.OrgUnitID,
+		&i.PolicyVersion,
+		&i.WorkflowID,
+		&i.WorkflowVersion,
+		&i.Timezone,
+		&i.InputSnapshot,
+		&i.VisibilitySnapshot,
+		&i.ModelRoute,
+		&i.ModelVersion,
+		&i.Attempt,
+		&i.RerunOfRunID,
+		&i.Coverage,
+		&i.MissingInputs,
+		&i.IdempotencyKey,
+		&i.ParentRunIds,
+		&i.InputCount,
+		&i.DisplaySummary,
+		&i.Facts,
+		&i.Themes,
+		&i.Trends,
+		&i.Risks,
+		&i.Todos,
+		&i.EvidencePointerID,
 	)
 	return i, err
 }
 
 const getDreamSummary = `-- name: GetDreamSummary :one
-SELECT id, run_id, enterprise_id, space_id, layer, summary_text, sealed_object_key, evidence_pointer_id, risk_signals, created_at FROM dream_summaries WHERE id = $1
+SELECT id, run_id, enterprise_id, space_id, layer, summary_text, sealed_object_key, evidence_pointer_id, risk_signals, created_at, facts, themes, trends, todos FROM dream_summaries WHERE id = $1
 `
 
 func (q *Queries) GetDreamSummary(ctx context.Context, id string) (DreamSummary, error) {
@@ -205,6 +418,10 @@ func (q *Queries) GetDreamSummary(ctx context.Context, id string) (DreamSummary,
 		&i.EvidencePointerID,
 		&i.RiskSignals,
 		&i.CreatedAt,
+		&i.Facts,
+		&i.Themes,
+		&i.Trends,
+		&i.Todos,
 	)
 	return i, err
 }
@@ -226,7 +443,7 @@ func (q *Queries) GetLatestDreamPolicyVersion(ctx context.Context, policyID stri
 }
 
 const getLatestDreamRunForPolicy = `-- name: GetLatestDreamRunForPolicy :one
-SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at FROM dream_runs WHERE policy_id = $1 ORDER BY window_end DESC LIMIT 1
+SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key FROM dream_runs WHERE policy_id = $1 ORDER BY window_end DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestDreamRunForPolicy(ctx context.Context, policyID string) (DreamRun, error) {
@@ -243,6 +460,20 @@ func (q *Queries) GetLatestDreamRunForPolicy(ctx context.Context, policyID strin
 		&i.Error,
 		&i.CreatedAt,
 		&i.FinishedAt,
+		&i.OrgUnitID,
+		&i.PolicyVersion,
+		&i.WorkflowID,
+		&i.WorkflowVersion,
+		&i.Timezone,
+		&i.InputSnapshot,
+		&i.VisibilitySnapshot,
+		&i.ModelRoute,
+		&i.ModelVersion,
+		&i.Attempt,
+		&i.RerunOfRunID,
+		&i.Coverage,
+		&i.MissingInputs,
+		&i.IdempotencyKey,
 	)
 	return i, err
 }
@@ -279,8 +510,200 @@ func (q *Queries) InsertDreamInput(ctx context.Context, arg InsertDreamInputPara
 	return err
 }
 
+const listChildSpaces = `-- name: ListChildSpaces :many
+SELECT DISTINCT spaces.id, spaces.enterprise_id, spaces.kind, spaces.name, spaces.org_scope, spaces.org_version, spaces.created_at, spaces.updated_at
+FROM knowledge_spaces AS spaces
+JOIN org_scope_bindings AS bindings ON bindings.space_id = spaces.id
+JOIN org_scope_bindings AS parent_binding
+  ON parent_binding.enterprise_id = bindings.enterprise_id
+ AND parent_binding.scope_id = bindings.parent_scope_id
+JOIN knowledge_spaces AS parent_space ON parent_space.id = parent_binding.space_id
+WHERE spaces.enterprise_id = $1
+  AND bindings.enterprise_id = $1
+  AND (
+      parent_binding.scope_id = $2::text
+      OR parent_space.org_scope = $2::text
+  )
+ORDER BY spaces.kind, spaces.name, spaces.id
+`
+
+type ListChildSpacesParams struct {
+	EnterpriseID    string `json:"enterprise_id"`
+	ParentOrgUnitID string `json:"parent_org_unit_id"`
+}
+
+func (q *Queries) ListChildSpaces(ctx context.Context, arg ListChildSpacesParams) ([]KnowledgeSpace, error) {
+	rows, err := q.db.Query(ctx, listChildSpaces, arg.EnterpriseID, arg.ParentOrgUnitID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []KnowledgeSpace
+	for rows.Next() {
+		var i KnowledgeSpace
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnterpriseID,
+			&i.Kind,
+			&i.Name,
+			&i.OrgScope,
+			&i.OrgVersion,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCompletedChildDreamRuns = `-- name: ListCompletedChildDreamRuns :many
+SELECT runs.id, runs.policy_id, runs.version, runs.enterprise_id, runs.status, runs.window_start, runs.window_end, runs.error, runs.created_at, runs.finished_at, runs.org_unit_id, runs.policy_version, runs.workflow_id, runs.workflow_version, runs.timezone, runs.input_snapshot, runs.visibility_snapshot, runs.model_route, runs.model_version, runs.attempt, runs.rerun_of_run_id, runs.coverage, runs.missing_inputs, runs.idempotency_key
+FROM dream_runs AS runs
+JOIN org_scope_bindings AS bindings
+  ON bindings.enterprise_id = runs.enterprise_id
+JOIN knowledge_spaces AS child_space
+  ON child_space.id = bindings.space_id
+ AND child_space.enterprise_id = runs.enterprise_id
+ AND (bindings.scope_id = runs.org_unit_id OR child_space.org_scope = runs.org_unit_id)
+JOIN org_scope_bindings AS parent_binding
+  ON parent_binding.enterprise_id = bindings.enterprise_id
+ AND parent_binding.scope_id = bindings.parent_scope_id
+JOIN knowledge_spaces AS parent_space ON parent_space.id = parent_binding.space_id
+WHERE runs.enterprise_id = $1
+  AND (
+      parent_binding.scope_id = $2::text
+      OR parent_space.org_scope = $2::text
+  )
+  AND runs.status = 'succeeded'
+  AND runs.window_start = $3
+  AND runs.window_end = $4
+ORDER BY runs.org_unit_id, runs.id
+`
+
+type ListCompletedChildDreamRunsParams struct {
+	EnterpriseID    string             `json:"enterprise_id"`
+	ParentOrgUnitID string             `json:"parent_org_unit_id"`
+	WindowStart     pgtype.Timestamptz `json:"window_start"`
+	WindowEnd       pgtype.Timestamptz `json:"window_end"`
+}
+
+func (q *Queries) ListCompletedChildDreamRuns(ctx context.Context, arg ListCompletedChildDreamRunsParams) ([]DreamRun, error) {
+	rows, err := q.db.Query(ctx, listCompletedChildDreamRuns,
+		arg.EnterpriseID,
+		arg.ParentOrgUnitID,
+		arg.WindowStart,
+		arg.WindowEnd,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DreamRun
+	for rows.Next() {
+		var i DreamRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.PolicyID,
+			&i.Version,
+			&i.EnterpriseID,
+			&i.Status,
+			&i.WindowStart,
+			&i.WindowEnd,
+			&i.Error,
+			&i.CreatedAt,
+			&i.FinishedAt,
+			&i.OrgUnitID,
+			&i.PolicyVersion,
+			&i.WorkflowID,
+			&i.WorkflowVersion,
+			&i.Timezone,
+			&i.InputSnapshot,
+			&i.VisibilitySnapshot,
+			&i.ModelRoute,
+			&i.ModelVersion,
+			&i.Attempt,
+			&i.RerunOfRunID,
+			&i.Coverage,
+			&i.MissingInputs,
+			&i.IdempotencyKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDreamRunsByOrg = `-- name: ListDreamRunsByOrg :many
+SELECT id, policy_id, version, enterprise_id, status, window_start, window_end, error, created_at, finished_at, org_unit_id, policy_version, workflow_id, workflow_version, timezone, input_snapshot, visibility_snapshot, model_route, model_version, attempt, rerun_of_run_id, coverage, missing_inputs, idempotency_key
+FROM dream_runs
+WHERE enterprise_id = $1
+  AND org_unit_id = $2
+ORDER BY window_end DESC, id DESC
+LIMIT $3
+`
+
+type ListDreamRunsByOrgParams struct {
+	EnterpriseID string `json:"enterprise_id"`
+	OrgUnitID    string `json:"org_unit_id"`
+	ResultLimit  int32  `json:"result_limit"`
+}
+
+func (q *Queries) ListDreamRunsByOrg(ctx context.Context, arg ListDreamRunsByOrgParams) ([]DreamRun, error) {
+	rows, err := q.db.Query(ctx, listDreamRunsByOrg, arg.EnterpriseID, arg.OrgUnitID, arg.ResultLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DreamRun
+	for rows.Next() {
+		var i DreamRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.PolicyID,
+			&i.Version,
+			&i.EnterpriseID,
+			&i.Status,
+			&i.WindowStart,
+			&i.WindowEnd,
+			&i.Error,
+			&i.CreatedAt,
+			&i.FinishedAt,
+			&i.OrgUnitID,
+			&i.PolicyVersion,
+			&i.WorkflowID,
+			&i.WorkflowVersion,
+			&i.Timezone,
+			&i.InputSnapshot,
+			&i.VisibilitySnapshot,
+			&i.ModelRoute,
+			&i.ModelVersion,
+			&i.Attempt,
+			&i.RerunOfRunID,
+			&i.Coverage,
+			&i.MissingInputs,
+			&i.IdempotencyKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDreamSummariesBySpace = `-- name: ListDreamSummariesBySpace :many
-SELECT id, run_id, enterprise_id, space_id, layer, summary_text, sealed_object_key, evidence_pointer_id, risk_signals, created_at FROM dream_summaries
+SELECT id, run_id, enterprise_id, space_id, layer, summary_text, sealed_object_key, evidence_pointer_id, risk_signals, created_at, facts, themes, trends, todos FROM dream_summaries
 WHERE space_id = $1 AND layer = $2
 ORDER BY created_at DESC
 LIMIT $3
@@ -312,6 +735,10 @@ func (q *Queries) ListDreamSummariesBySpace(ctx context.Context, arg ListDreamSu
 			&i.EvidencePointerID,
 			&i.RiskSignals,
 			&i.CreatedAt,
+			&i.Facts,
+			&i.Themes,
+			&i.Trends,
+			&i.Todos,
 		); err != nil {
 			return nil, err
 		}
