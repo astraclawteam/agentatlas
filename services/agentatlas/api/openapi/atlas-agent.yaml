@@ -118,7 +118,10 @@ paths:
       security: [{AtlasSession: []}]
       operationId: updateGovernedChange
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      responses: {'200': {description: Updated revision.}, '409': {description: Current revision and deterministic diff.}}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateChangeInput'}}}}
+      responses:
+        '200': {description: Updated revision, content: {application/json: {schema: {$ref: '#/components/schemas/ChangeDraft'}}}}
+        '409': {description: Current revision and deterministic diff, content: {application/json: {schema: {$ref: '#/components/schemas/RevisionConflict'}}}}
   /api/changes/{id}/publish:
     post:
       security: [{AtlasSession: []}]
@@ -132,7 +135,7 @@ paths:
       security: [{AtlasSession: []}]
       operationId: diffGovernedChange
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      responses: {'200': {description: Deterministic before/after diff.}}
+      responses: {'200': {description: Deterministic before/after diff, content: {application/json: {schema: {$ref: '#/components/schemas/ChangeDiff'}}}}}
   /api/changes/{id}/assess:
     post:
       security: [{AtlasSession: []}]
@@ -149,7 +152,10 @@ paths:
     post:
       security: [{AtlasSession: []}]
       operationId: decideGovernedChange
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ChangeDecisionInput'}}}}
       responses: {'204': {description: Review decision recorded.}, '403': {description: Self-review or unauthorized decision rejected.}}
   /v1/agent/runs:
     post:
@@ -710,6 +716,35 @@ components:
         action: {type: string, enum: [create, update, publish, disable, delete]}
         base_version: {type: integer, minimum: 0}
         proposed_content: {type: object, maxProperties: 100, additionalProperties: true}
+    UpdateChangeInput:
+      type: object
+      additionalProperties: false
+      required: [revision, proposed_content]
+      properties:
+        revision: {type: integer, minimum: 1}
+        proposed_content: {type: object, maxProperties: 100, additionalProperties: true}
+    ChangeDecisionInput:
+      type: object
+      additionalProperties: false
+      required: [decision]
+      properties:
+        decision: {type: string, enum: [approve, reject]}
+        comment: {type: string, maxLength: 4000}
+    ChangeDiff:
+      type: object
+      additionalProperties: false
+      required: [before, after]
+      properties:
+        before: {type: object, nullable: true, maxProperties: 100, additionalProperties: true}
+        after: {type: object, maxProperties: 100, additionalProperties: true}
+    RevisionConflict:
+      type: object
+      additionalProperties: false
+      required: [error, current_revision, diff]
+      properties:
+        error: {type: string, enum: [revision_conflict]}
+        current_revision: {type: integer, minimum: 1}
+        diff: {$ref: '#/components/schemas/ChangeDiff'}
     PublishedChangeVersion:
       type: object
       additionalProperties: false

@@ -104,6 +104,24 @@ func (e BrowserKnowledgeItemTypeLabel) Valid() bool {
 	}
 }
 
+// Defines values for ChangeDecisionInputDecision.
+const (
+	ChangeDecisionInputDecisionApprove ChangeDecisionInputDecision = "approve"
+	ChangeDecisionInputDecisionReject  ChangeDecisionInputDecision = "reject"
+)
+
+// Valid indicates whether the value is a known member of the ChangeDecisionInputDecision enum.
+func (e ChangeDecisionInputDecision) Valid() bool {
+	switch e {
+	case ChangeDecisionInputDecisionApprove:
+		return true
+	case ChangeDecisionInputDecisionReject:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChangeDraftAction.
 const (
 	ChangeDraftActionCreate  ChangeDraftAction = "create"
@@ -857,6 +875,21 @@ func (e ReviewRoute2RiskLevel) Valid() bool {
 	}
 }
 
+// Defines values for RevisionConflictError.
+const (
+	RevisionConflictErrorRevisionConflict RevisionConflictError = "revision_conflict"
+)
+
+// Valid indicates whether the value is a known member of the RevisionConflictError enum.
+func (e RevisionConflictError) Valid() bool {
+	switch e {
+	case RevisionConflictErrorRevisionConflict:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RiskAssessmentRiskLevel.
 const (
 	GovernanceRiskHigh RiskAssessmentRiskLevel = "high"
@@ -1093,22 +1126,22 @@ func (e SubmitDreamPolicyReviewJSONBodyAction) Valid() bool {
 
 // Defines values for AnnotateDreamRunJSONBodyAction.
 const (
-	Comment       AnnotateDreamRunJSONBodyAction = "comment"
-	Confirm       AnnotateDreamRunJSONBodyAction = "confirm"
-	MarkIncorrect AnnotateDreamRunJSONBodyAction = "mark_incorrect"
-	Reject        AnnotateDreamRunJSONBodyAction = "reject"
+	AnnotateDreamRunJSONBodyActionComment       AnnotateDreamRunJSONBodyAction = "comment"
+	AnnotateDreamRunJSONBodyActionConfirm       AnnotateDreamRunJSONBodyAction = "confirm"
+	AnnotateDreamRunJSONBodyActionMarkIncorrect AnnotateDreamRunJSONBodyAction = "mark_incorrect"
+	AnnotateDreamRunJSONBodyActionReject        AnnotateDreamRunJSONBodyAction = "reject"
 )
 
 // Valid indicates whether the value is a known member of the AnnotateDreamRunJSONBodyAction enum.
 func (e AnnotateDreamRunJSONBodyAction) Valid() bool {
 	switch e {
-	case Comment:
+	case AnnotateDreamRunJSONBodyActionComment:
 		return true
-	case Confirm:
+	case AnnotateDreamRunJSONBodyActionConfirm:
 		return true
-	case MarkIncorrect:
+	case AnnotateDreamRunJSONBodyActionMarkIncorrect:
 		return true
-	case Reject:
+	case AnnotateDreamRunJSONBodyActionReject:
 		return true
 	default:
 		return false
@@ -1209,6 +1242,21 @@ type BrowserSessionView struct {
 	OrgUnitIds          []string              `json:"org_unit_ids"`
 	OrgVersion          int64                 `json:"org_version"`
 	Permissions         []string              `json:"permissions"`
+}
+
+// ChangeDecisionInput defines model for ChangeDecisionInput.
+type ChangeDecisionInput struct {
+	Comment  *string                     `json:"comment,omitempty"`
+	Decision ChangeDecisionInputDecision `json:"decision"`
+}
+
+// ChangeDecisionInputDecision defines model for ChangeDecisionInput.Decision.
+type ChangeDecisionInputDecision string
+
+// ChangeDiff defines model for ChangeDiff.
+type ChangeDiff struct {
+	After  map[string]interface{}  `json:"after"`
+	Before *map[string]interface{} `json:"before"`
 }
 
 // ChangeDraft defines model for ChangeDraft.
@@ -1518,6 +1566,16 @@ type ReviewRoute2Mode string
 // ReviewRoute2RiskLevel defines model for ReviewRoute.2.RiskLevel.
 type ReviewRoute2RiskLevel string
 
+// RevisionConflict defines model for RevisionConflict.
+type RevisionConflict struct {
+	CurrentRevision int                   `json:"current_revision"`
+	Diff            ChangeDiff            `json:"diff"`
+	Error           RevisionConflictError `json:"error"`
+}
+
+// RevisionConflictError defines model for RevisionConflict.Error.
+type RevisionConflictError string
+
 // RiskAssessment defines model for RiskAssessment.
 type RiskAssessment struct {
 	RiskLevel   RiskAssessmentRiskLevel `json:"risk_level"`
@@ -1554,6 +1612,12 @@ type SuggestionInputAction string
 
 // SuggestionInputResourceType defines model for SuggestionInput.ResourceType.
 type SuggestionInputResourceType string
+
+// UpdateChangeInput defines model for UpdateChangeInput.
+type UpdateChangeInput struct {
+	ProposedContent map[string]interface{} `json:"proposed_content"`
+	Revision        int                    `json:"revision"`
+}
 
 // VisibilitySnapshotSummary defines model for VisibilitySnapshotSummary.
 type VisibilitySnapshotSummary struct {
@@ -1596,6 +1660,11 @@ type nexusTicketContextKey string
 type ListGovernedChangesParams struct {
 	OrgUnitId string `form:"org_unit_id" json:"org_unit_id"`
 	Limit     *int   `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// DecideGovernedChangeParams defines parameters for DecideGovernedChange.
+type DecideGovernedChangeParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
 }
 
 // PublishGovernedChangeParams defines parameters for PublishGovernedChange.
@@ -1786,6 +1855,12 @@ type CreateGovernedChangeDraftJSONRequestBody = SuggestionInput
 
 // SuggestGovernedChangeJSONRequestBody defines body for SuggestGovernedChange for application/json ContentType.
 type SuggestGovernedChangeJSONRequestBody = SuggestionInput
+
+// UpdateGovernedChangeJSONRequestBody defines body for UpdateGovernedChange for application/json ContentType.
+type UpdateGovernedChangeJSONRequestBody = UpdateChangeInput
+
+// DecideGovernedChangeJSONRequestBody defines body for DecideGovernedChange for application/json ContentType.
+type DecideGovernedChangeJSONRequestBody = ChangeDecisionInput
 
 // UploadLegacyAssistantAttachmentsMultipartRequestBody defines body for UploadLegacyAssistantAttachments for multipart/form-data ContentType.
 type UploadLegacyAssistantAttachmentsMultipartRequestBody UploadLegacyAssistantAttachmentsMultipartBody

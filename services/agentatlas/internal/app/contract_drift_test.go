@@ -221,6 +221,12 @@ var (
 	_ = agentapi.Coverage{}
 	_ = agentapi.MissingInput{}
 	_ = agentapi.ChangeDraft{}
+	_ = agentapi.ChangeDiff{}
+	_ = agentapi.RevisionConflict{}
+	_ = agentapi.UpdateChangeInput{}
+	_ = agentapi.ChangeDecisionInput{}
+	_ = agentapi.UpdateGovernedChangeJSONRequestBody{}
+	_ = agentapi.DecideGovernedChangeJSONRequestBody{}
 	_ = agentapi.RiskAssessment{}
 	_ = agentapi.ReviewRoute{}
 )

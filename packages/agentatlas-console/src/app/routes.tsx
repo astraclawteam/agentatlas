@@ -4,7 +4,9 @@ import { Navigate, Route, Routes, useNavigate, useParams } from "react-router-do
 
 import { LegacyRouteAdapter, type LegacySurface } from "../features/legacy/LegacyRouteAdapter";
 import { KnowledgeHome } from "../features/knowledge/KnowledgeHome";
+import { KnowledgeEditor } from "../features/knowledge/KnowledgeEditor";
 import { KnowledgeTaskHandoff } from "../features/knowledge/KnowledgeTaskHandoff";
+import { ChangeReviewListPage, ChangeReviewPage } from "../features/governance/ChangeReviewPage";
 
 export const consoleSurfaces = [
   { path: "/knowledge", label: "企业知识", icon: LibraryBig },
@@ -77,6 +79,11 @@ export function ConsoleRoutes() {
       <Route path="/" element={<Navigate to="/knowledge" replace />} />
       <Route path="/knowledge" element={<KnowledgeHome />} />
       <Route path="/knowledge/:orgUnitID" element={<KnowledgeHome />} />
+      <Route path="/knowledge/:orgUnitID/edit" element={<KnowledgeEditor />} />
+      <Route path="/knowledge/:orgUnitID/sop" element={<KnowledgeEditor kind="sop" />} />
+      <Route path="/knowledge/:orgUnitID/reviews" element={<ChangeReviewListPage />} />
+      <Route path="/knowledge/:orgUnitID/changes/:changeID/edit" element={<KnowledgeEditor />} />
+      <Route path="/knowledge/:orgUnitID/changes/:changeID/review" element={<ChangeReviewPage />} />
       <Route path="/knowledge/:orgUnitID/:task" element={<KnowledgeTaskHandoff />} />
       <Route path="/dream/*" element={<RouteAdapter surface="dream" />} />
       <Route path="/workflows/*" element={<RouteAdapter surface="workflows" />} />

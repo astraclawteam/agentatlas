@@ -16,7 +16,7 @@ const session = {
       children: [{ id: "dept-rd", name: "研发一部", selectable: true, children: [] }],
     },
   ],
-  permissions: ["knowledge:read"],
+  permissions: ["knowledge:read", "suggest", "edit", "workflow_edit", "publish_low_risk"],
   advanced_mode_allowed: true,
 };
 
@@ -85,4 +85,32 @@ test("200 percent zoom equivalent and narrow screens stay operable through the a
   await page.getByRole("button", { name: "打开 Atlas 助手" }).click();
   await expect(page).toHaveURL(/\/assistant$/);
   await expect(page.getByRole("dialog", { name: "Atlas 助手" })).toBeVisible();
+});
+
+test("structured editor stays readable at 1280 and at 200 percent zoom equivalent", async ({ page }, testInfo) => {
+  await page.route("**/api/session", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(session) }),
+  );
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/knowledge/dept-rd/edit");
+  await expect(page.getByRole("heading", { name: "新建或修改知识" })).toBeVisible();
+  const [outline, editor, context] = await Promise.all([
+    page.getByRole("navigation", { name: "内容目录" }).boundingBox(),
+    page.locator(".knowledge-editor-content").boundingBox(),
+    page.getByRole("complementary", { name: "范围与依据" }).boundingBox(),
+  ]);
+  expect(outline).not.toBeNull();
+  expect(editor).not.toBeNull();
+  expect(context).not.toBeNull();
+  expect(outline!.x + outline!.width).toBeLessThanOrEqual(editor!.x);
+  expect(editor!.x + editor!.width).toBeLessThanOrEqual(context!.x);
+  await expect(page.locator(".knowledge-primary-button")).toHaveCount(1);
+  await testInfo.attach("knowledge-editor-1280.png", { body: await page.screenshot(), contentType: "image/png" });
+
+  await page.setViewportSize({ width: 640, height: 360 });
+  await expect(page.getByRole("textbox", { name: "知识名称" })).toBeVisible();
+  await expect(page.getByText("影响范围", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBeTruthy();
+  await expect(page.locator(".knowledge-primary-button")).toHaveCount(1);
+  await testInfo.attach("knowledge-editor-200-percent-equivalent.png", { body: await page.screenshot(), contentType: "image/png" });
 });
