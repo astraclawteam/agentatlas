@@ -434,4 +434,94 @@ func TestDreamGovernanceSchema(t *testing.T) {
 	assertRejected("stale change revision publish accepted", `insert into publish_operations(
 		id,enterprise_id,change_id,change_revision,idempotency_key,status
 	) values('publish-stale','ent-dream-a','change-1',1,'publish-key-stale','pending')`)
+
+	_, err = queries.CreateChangeDraft(ctx, db.CreateChangeDraftParams{
+		ID: "change-lifecycle", EnterpriseID: "ent-dream-a", OrgUnitID: "parent",
+		ResourceType: "dream_policy", ResourceID: "policy-parent", Action: "publish",
+		RequesterUserID: "requester-1", Origin: "direct_edit", PermissionMode: "direct_edit",
+		Revision: 1, State: "approved", BaseVersion: 0, ProposedContent: []byte(`{"version":1}`),
+	})
+	if err != nil {
+		t.Fatalf("lifecycle change draft: %v", err)
+	}
+	firstOperation, err := queries.GetOrCreatePublishOperation(ctx, db.GetOrCreatePublishOperationParams{
+		ID: "publish-lifecycle", EnterpriseID: "ent-dream-a", ChangeID: "change-lifecycle",
+		ChangeRevision: 1, IdempotencyKey: "publish-lifecycle-key", Status: "pending",
+	})
+	if err != nil {
+		t.Fatalf("initial lifecycle publish operation: %v", err)
+	}
+	if _, err := queries.UpdateChangeDraftIfRevision(ctx, db.UpdateChangeDraftIfRevisionParams{
+		ID: "change-lifecycle", EnterpriseID: "ent-dream-a", ExpectedRevision: 1,
+		State: "approved", ProposedContent: []byte(`{"version":2}`),
+	}); err != nil {
+		t.Fatalf("advance lifecycle draft: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "savepoint stable_retry"); err != nil {
+		t.Fatal(err)
+	}
+	retriedOperation, retryErr := queries.GetOrCreatePublishOperation(ctx, db.GetOrCreatePublishOperationParams{
+		ID: "publish-lifecycle-retry", EnterpriseID: "ent-dream-a", ChangeID: "change-lifecycle",
+		ChangeRevision: 1, IdempotencyKey: "publish-lifecycle-key", Status: "pending",
+	})
+	if _, err := pool.Exec(ctx, "rollback to savepoint stable_retry"); err != nil {
+		t.Fatalf("stable retry rollback: %v (original error: %v)", err, retryErr)
+	}
+	if _, err := pool.Exec(ctx, "release savepoint stable_retry"); err != nil {
+		t.Fatal(err)
+	}
+	if retryErr != nil || retriedOperation.ID != firstOperation.ID {
+		t.Errorf("stable retry after draft advance: first=%+v retry=%+v err=%v", firstOperation, retriedOperation, retryErr)
+	}
+	if _, err := pool.Exec(ctx, "savepoint lifecycle_update"); err != nil {
+		t.Fatal(err)
+	}
+	command, lifecycleErr := pool.Exec(ctx, `update publish_operations
+		set status='succeeded', result='{"published_version":1}', finished_at=now()
+		where id='publish-lifecycle' and enterprise_id='ent-dream-a'`)
+	if lifecycleErr != nil {
+		if _, err := pool.Exec(ctx, "rollback to savepoint lifecycle_update"); err != nil {
+			t.Fatalf("lifecycle update rollback: %v (original error: %v)", err, lifecycleErr)
+		}
+	}
+	if _, err := pool.Exec(ctx, "release savepoint lifecycle_update"); err != nil {
+		t.Fatal(err)
+	}
+	if lifecycleErr != nil || command.RowsAffected() != 1 {
+		t.Errorf("publish lifecycle update: rows=%d err=%v", command.RowsAffected(), lifecycleErr)
+	} else {
+		var status string
+		var result []byte
+		var finished bool
+		if err := pool.QueryRow(ctx, `select status,result,finished_at is not null
+			from publish_operations where id='publish-lifecycle' and enterprise_id='ent-dream-a'`).Scan(
+			&status, &result, &finished,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if status != "succeeded" || string(result) != `{"published_version": 1}` || !finished {
+			t.Errorf("publish lifecycle fields not persisted: status=%s result=%s finished=%v", status, result, finished)
+		}
+	}
+	assertRejected("publish operation identity rewrite accepted", `update publish_operations
+		set change_revision=2 where id='publish-lifecycle' and enterprise_id='ent-dream-a'`)
+	assertRejected("new-key stale publish revision accepted", `insert into publish_operations(
+		id,enterprise_id,change_id,change_revision,idempotency_key,status
+	) values('publish-lifecycle-stale','ent-dream-a','change-lifecycle',1,'publish-lifecycle-new-key','pending')`)
+	if _, err := pool.Exec(ctx, "savepoint payload_mismatch"); err != nil {
+		t.Fatal(err)
+	}
+	_, mismatchErr := queries.GetOrCreatePublishOperation(ctx, db.GetOrCreatePublishOperationParams{
+		ID: "publish-lifecycle-mismatch", EnterpriseID: "ent-dream-a", ChangeID: "change-lifecycle",
+		ChangeRevision: 2, IdempotencyKey: "publish-lifecycle-key", Status: "pending",
+	})
+	if _, err := pool.Exec(ctx, "rollback to savepoint payload_mismatch"); err != nil {
+		t.Fatalf("payload mismatch rollback: %v (original error: %v)", err, mismatchErr)
+	}
+	if _, err := pool.Exec(ctx, "release savepoint payload_mismatch"); err != nil {
+		t.Fatal(err)
+	}
+	if mismatchErr == nil {
+		t.Error("same-key payload mismatch accepted")
+	}
 }

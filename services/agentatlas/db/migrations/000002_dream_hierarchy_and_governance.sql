@@ -330,11 +330,34 @@ $$;
 -- +goose StatementEnd
 
 CREATE TRIGGER publish_operations_revision_guard
-BEFORE INSERT OR UPDATE ON publish_operations
+AFTER INSERT ON publish_operations
 FOR EACH ROW EXECUTE FUNCTION validate_publish_operation_revision();
+
+-- +goose StatementBegin
+CREATE FUNCTION protect_publish_operation_identity_update() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.id IS DISTINCT FROM OLD.id
+       OR NEW.enterprise_id IS DISTINCT FROM OLD.enterprise_id
+       OR NEW.change_id IS DISTINCT FROM OLD.change_id
+       OR NEW.change_revision IS DISTINCT FROM OLD.change_revision
+       OR NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key
+       OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+        RAISE EXCEPTION 'Publish operation identity is immutable';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+-- +goose StatementEnd
+
+CREATE TRIGGER publish_operations_identity_guard
+BEFORE UPDATE ON publish_operations
+FOR EACH ROW EXECUTE FUNCTION protect_publish_operation_identity_update();
 
 -- +goose Down
 
+DROP TRIGGER publish_operations_identity_guard ON publish_operations;
+DROP FUNCTION protect_publish_operation_identity_update();
 DROP TRIGGER publish_operations_revision_guard ON publish_operations;
 DROP FUNCTION validate_publish_operation_revision();
 DROP TABLE publish_operations;
