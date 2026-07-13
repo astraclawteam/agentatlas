@@ -1,0 +1,156 @@
+# Reproducible build lock for the Outcome Graph Apache AGE image (GA Task 1A).
+#
+# Records the exact, independently reproducible inputs to ./Dockerfile and
+# the outputs of the last build attempt against it.  Every value below is
+# either:
+#   - a real digest independently verified by the commands in
+#     agentatlas-enterprise/evidence/2026.2-lts/ga-task-1a/verify-commands.txt
+#     (never fetched by this file itself — build.lock.yaml is data, not
+#     automation), or
+#   - explicitly marked pending with the exact reason evidence could not be
+#     produced in the build environment.
+#
+# Nothing here is a placeholder or fabricated digest. This is the [core]
+# counterpart consumed by [enterprise] contracts/ga-manifest.yaml
+# outcome_graph.graph_postgres_image / outcome_graph.age — the two files
+# must be updated together.
+schema_version: 1
+
+image:
+  name: agentatlas/age-postgres17
+  tag: "1.6.0"
+  # OCI manifest digest of the image actually produced by the build command
+  # below. pending: true and digest: "" until a build in this environment
+  # actually completes and the digest is read back with
+  # `docker buildx imagetools inspect` / `docker inspect`; see notes.md for
+  # the exact outcome recorded for this revision.
+  digest: ""
+  pending: true
+  pending_reason: >-
+    Three build attempts in this authoring environment all failed for
+    network/tooling reasons, never for AGE/PG17 compatibility (see
+    age.compatibility_note below and evidence/2026.2-lts/ga-task-1a/notes.md
+    section 4 for the full record). Attempt 1 (docker buildx --sbom=true
+    --provenance=true): "Attestation is not supported for the docker
+    driver" - the default buildx builder in this Docker Desktop 29.1.3
+    install uses the docker driver, which cannot emit SBOM/provenance
+    attestations; a docker-container builder is required. Attempt 2 (plain
+    docker build, no attestations, to isolate the compile question):
+    apt-get install postgresql-server-dev-17 failed on
+    deb.debian.org/debian/dists/trixie/main (404 after a ~3KB/s partial
+    transfer). Attempt 3 (retry of attempt 2): all 92 packages (176MB)
+    downloaded successfully this time, but the build then failed during
+    dpkg configure with "failed to solve: Unavailable: error reading from
+    server: EOF" (a BuildKit-to-daemon session drop on this long-running
+    step, not an AGE/PG17 error). No attempt reached a compile error in
+    Apache AGE's own make/make install step. Every other AGE tuple
+    field below (release, source digest, license, compatibility note) is
+    real and independently verified regardless of this pending image.
+  registry: "local buildx (not pushed to any remote registry)"
+
+base_image:
+  ref: "postgres:17"
+  digest: "sha256:0af65001d05296a2ead57ac4a6412433d8913d1bb5d0c88435a7d1e1ee5cb04b"
+  digest_kind: "OCI image index (multi-arch manifest list)"
+  resolved_via: >-
+    docker pull postgres:17 && docker inspect --format
+    '{{index .RepoDigests 0}}' postgres:17
+  # This is the SAME digest agentatlas-enterprise/contracts/ga-manifest.yaml
+  # pins as outcome_graph.authoritative_postgres_image.digest. Sharing a
+  # base-image digest is not a "dual role" violation by itself: the rule in
+  # Task 1A is that the *authoritative* endpoint and the *graph* endpoint
+  # must never be the SAME running database/image. This Dockerfile's build
+  # stage starts FROM that same public upstream base and then compiles and
+  # bakes in the Apache AGE extension, producing a distinct final image
+  # (image.digest above, once built) that is never used as the authoritative
+  # store. verify.go's outcome_graph policy compares
+  # authoritative_postgres_image.digest against graph_postgres_image.digest
+  # (the FINAL age-postgres17 image, not this base), so the two remain
+  # independent for policy purposes even though both start from the same
+  # public upstream base layer.
+
+age:
+  release: "1.6.0"
+  upstream_repo: "https://github.com/apache/age.git"
+  upstream_tag: "PG17/v1.6.0-rc0"
+  upstream_commit: "54905a09bf8462f22a87c3adfd2ab5752e5c1e71"
+  upstream_target_branch: "release/PG17/1.6.0"
+  license: "Apache-2.0"
+  source_url: "https://github.com/apache/age/releases/download/PG17/v1.6.0-rc0/apache-age-1.6.0-src.tar.gz"
+  source_sha256: "sha256:57c7187a37942f1b6208e1f68caafcb7374f8bedaabad162c8760adb44ae9ffe"
+  source_size_bytes: 5483675
+  source_verified_via: >-
+    curl -fsSL -o apache-age-1.6.0-src.tar.gz <source_url> && sha256sum
+    apache-age-1.6.0-src.tar.gz; independently matches the sha256 GitHub
+    recorded for release asset id 296121326 at
+    https://api.github.com/repos/apache/age/releases/tags/PG17%2Fv1.6.0-rc0
+  compatibility_note: >-
+    Apache AGE maintains separate per-PostgreSQL-major release branches
+    (PG11..PG18) rather than one release spanning every major. 1.6.0 for
+    PG17 is a dedicated, separately tagged, published release (not a
+    backport or unofficial patch): tag PG17/v1.6.0-rc0, published
+    2025-09-22T19:16:21Z, "Release v1.6.0 for PG17", non-draft,
+    non-prerelease per the GitHub Releases API. This resolves the GA plan's
+    required PG17/AGE-1.6.0 compatibility check affirmatively: the pinned
+    tuple is upstream-supported, not a plan/tuple conflict. Verified via
+    `gh api repos/apache/age/releases/tags/PG17%2Fv1.6.0-rc0` and
+    `gh api repos/apache/age/tags` (both recorded in verify-commands.txt).
+
+build:
+  postgres_major: 17
+  dockerfile: "Dockerfile"
+  build_context: "services/agentatlas/deploy/images/age"
+  platforms:
+    - "linux/amd64"
+  # linux/arm64 is declared in agentatlas-enterprise contracts/ga-manifest.yaml
+  # platform_matrix as "planned-not-ga" (matching the existing linux-compose
+  # platform entry), so it is not required to be built/tested for this GA
+  # revision; the base postgres:17 image digest above is a multi-arch index
+  # that already covers arm64 for when that architecture is promoted.
+  command: >-
+    docker buildx build --sbom=true --provenance=true --platform linux/amd64
+    -t agentatlas/age-postgres17:1.6.0 -f Dockerfile . --load
+  sbom:
+    generated: false
+    digest: ""
+    pending: true
+    pending_reason: "Generated by scanning the built image (buildx --sbom=true); image.pending above must resolve first. Also requires a docker-container buildx builder in this environment (see image.pending_reason)."
+  provenance:
+    generated: false
+    digest: ""
+    pending: true
+    pending_reason: "Generated by buildx --provenance=true at build time; image.pending above must resolve first. Also requires a docker-container buildx builder in this environment (see image.pending_reason)."
+
+reproducibility_notes: >-
+  Bit-for-bit reproducibility of the compiled AGE layer is NOT yet
+  guaranteed by this revision, despite this file's name. The inputs that
+  ARE pinned and content-addressed: the base image (base_image.digest, an
+  exact OCI index digest) and the Apache AGE source archive
+  (age.source_sha256, checksum-gated in the Dockerfile via `sha256sum -c`
+  before extraction). What is NOT pinned: the Debian apt packages the build
+  stage installs (bison, flex, build-essential, postgresql-server-dev-17
+  and their transitive LLVM/Clang toolchain) are resolved as "latest in the
+  configured suite at build time", so the compiler/toolchain versions —
+  and therefore the exact bytes of the produced age.so — can drift between
+  builds run on different days. This matches upstream: Apache AGE's own
+  reference docker/Dockerfile also does not pin apt versions. Deliberately
+  NOT fixed here (pinning would add a Debian snapshot repo the upstream
+  recipe doesn't use, and the image is pending anyway). For Task 22 (the
+  GA acceptance/reproducibility gate), full bit-reproducibility would
+  require: (a) pinning apt to a snapshot.debian.org timestamp (or an
+  internal frozen mirror) so the toolchain is deterministic, (b) recording
+  the resolved package versions in this file, and (c) building with
+  SOURCE_DATE_EPOCH set and buildx's reproducible options. Until then, the
+  guarantee this file provides is "same pinned base image + same verified
+  AGE source", not "identical output digest on every build". See
+  agentatlas-enterprise evidence/2026.2-lts/ga-task-1a/notes.md (MINOR-3).
+
+verification:
+  # Exact commands recorded in agentatlas-enterprise
+  # evidence/2026.2-lts/ga-task-1a/verify-commands.txt; duplicated here only
+  # as pointers so this lock file is self-describing without re-deriving
+  # any digest.
+  base_image_digest_command: "docker pull postgres:17; docker inspect --format '{{index .RepoDigests 0}}' postgres:17"
+  age_source_digest_command: "curl -fsSL -o apache-age-1.6.0-src.tar.gz <source_url> && sha256sum apache-age-1.6.0-src.tar.gz"
+  image_build_command: "docker buildx build --sbom=true --provenance=true --platform linux/amd64 -t agentatlas/age-postgres17:1.6.0 -f Dockerfile . --load"
+  image_digest_command: "docker buildx imagetools inspect agentatlas/age-postgres17:1.6.0 --raw | sha256sum"
