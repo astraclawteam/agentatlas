@@ -23,6 +23,7 @@ import (
 
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/transportsecurity"
 )
 
 // HTTPClient implements nexus.Client against api/openapi/agentnexus-client.yaml.
@@ -59,7 +60,11 @@ func (c *HTTPClient) String() string {
 
 func (c *HTTPClient) GoString() string { return c.String() }
 
-func New(baseURL string, timeout time.Duration, serviceClientID, serviceSecretFile string) (*HTTPClient, error) {
+// New builds the AgentNexus HTTP client. tlsMgr configures the AgentNexus
+// link's transport security (services/agentatlas/internal/transportsecurity);
+// pass a Manager built with LinkConfig.Mode == ModeOff (or nil) to keep
+// today's plaintext behavior — ConfigureTransport is then a no-op.
+func New(baseURL string, timeout time.Duration, serviceClientID, serviceSecretFile string, tlsMgr *transportsecurity.Manager) (*HTTPClient, error) {
 	if strings.TrimSpace(baseURL) == "" || timeout <= 0 || serviceClientID != "agentatlas" {
 		return nil, fmt.Errorf("invalid AgentNexus client configuration")
 	}
@@ -67,10 +72,17 @@ func New(baseURL string, timeout time.Duration, serviceClientID, serviceSecretFi
 	if err != nil {
 		return nil, fmt.Errorf("load AgentNexus service credential: %w", err)
 	}
+	transport := &http.Transport{}
+	if tlsMgr != nil {
+		if err := tlsMgr.ConfigureTransport(transport); err != nil {
+			return nil, fmt.Errorf("agentnexus tls: %w", err)
+		}
+	}
 	return &HTTPClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		http: &http.Client{
-			Timeout: timeout,
+			Timeout:   timeout,
+			Transport: transport,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},

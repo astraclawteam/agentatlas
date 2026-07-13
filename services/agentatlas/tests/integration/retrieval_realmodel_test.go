@@ -29,7 +29,7 @@ func TestRetrievalRealModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("embedder: %v", err)
 	}
-	client, err := retrieval.NewHTTPSearchClient([]string{osURL}, "", "")
+	client, err := retrieval.NewHTTPSearchClient([]string{osURL}, "", "", nil)
 	if err != nil {
 		t.Fatalf("search client: %v", err)
 	}

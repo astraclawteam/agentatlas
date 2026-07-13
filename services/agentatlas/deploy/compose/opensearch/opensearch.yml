@@ -3,3 +3,25 @@
 # local stack; production Helm deployments enable TLS + auth instead).
 cluster.name: agentatlas
 network.host: 0.0.0.0
+
+# Transport security (GA Task 13A): mTLS for the OpenSearch link. Off by
+# default (matching this compose stack's DISABLE_SECURITY_PLUGIN=true /
+# ATLAS_TLS_MODE=off local-dev posture) — the security plugin itself must
+# also be re-enabled (drop DISABLE_SECURITY_PLUGIN in compose.yaml) for any
+# of this to take effect; that live activation, and OpenSearch's admin-DN /
+# security-index bootstrap it requires, are deferred to Task 16A alongside
+# the rest of this compose stack's live TLS qualification. Cert material at
+# the paths below is mounted from the same agentatlas_tls volume every
+# atlas-* service reads ([enterprise] `atlasctl certificates bootstrap`
+# writes exactly this certs/opensearch/{tls.crt,tls.key,ca.crt} layout).
+#
+# plugins.security.ssl.http.enabled: true
+# plugins.security.ssl.http.pemcert_filepath: /run/secrets/agentatlas_tls/opensearch/tls.crt
+# plugins.security.ssl.http.pemkey_filepath: /run/secrets/agentatlas_tls/opensearch/tls.key
+# plugins.security.ssl.http.pemtrustedcas_filepath: /run/secrets/agentatlas_tls/opensearch/ca.crt
+# plugins.security.ssl.http.clientauth_mode: REQUIRE
+# plugins.security.ssl.transport.pemcert_filepath: /run/secrets/agentatlas_tls/opensearch/tls.crt
+# plugins.security.ssl.transport.pemkey_filepath: /run/secrets/agentatlas_tls/opensearch/tls.key
+# plugins.security.ssl.transport.pemtrustedcas_filepath: /run/secrets/agentatlas_tls/opensearch/ca.crt
+# plugins.security.ssl.transport.enforce_hostname_verification: true
+# plugins.security.allow_unsafe_democertificates: false

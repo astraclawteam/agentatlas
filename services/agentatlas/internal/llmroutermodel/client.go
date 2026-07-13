@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/transportsecurity"
 )
 
 type Config struct {
@@ -23,6 +25,11 @@ type Config struct {
 	// DefaultModel is used when the ADK request does not carry a model name.
 	DefaultModel string
 	Timeout      time.Duration
+	// TLS configures the llmrouter link's transport security
+	// (services/agentatlas/internal/transportsecurity); nil, or a Manager
+	// built with LinkConfig.Mode == ModeOff, keeps today's plaintext
+	// behavior.
+	TLS *transportsecurity.Manager
 }
 
 type Client struct {
@@ -40,7 +47,13 @@ func NewClient(cfg Config) (*Client, error) {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 120 * time.Second
 	}
-	return &Client{cfg: cfg, http: &http.Client{Timeout: cfg.Timeout}}, nil
+	transport := &http.Transport{}
+	if cfg.TLS != nil {
+		if err := cfg.TLS.ConfigureTransport(transport); err != nil {
+			return nil, fmt.Errorf("llmroutermodel: tls: %w", err)
+		}
+	}
+	return &Client{cfg: cfg, http: &http.Client{Timeout: cfg.Timeout, Transport: transport}}, nil
 }
 
 // --- OpenAI-compatible wire types -----------------------------------------

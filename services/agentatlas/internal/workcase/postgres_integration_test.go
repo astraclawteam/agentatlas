@@ -47,7 +47,7 @@ func newPostgresService(t *testing.T, dsn string) (*workcase.Service, *workcase.
 	if err := storage.Migrate(ctx, dsn); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	pool, err := storage.NewPool(ctx, dsn)
+	pool, err := storage.NewPool(ctx, dsn, nil)
 	if err != nil {
 		t.Fatalf("pool: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestPostgresWorkcaseLifecycleRestartAndEventReplay(t *testing.T) {
 
 	// Simulate a process restart: open a brand new pool/store against the
 	// same database instead of reusing any in-process state.
-	restarted, err := storage.NewPool(ctx, dsn)
+	restarted, err := storage.NewPool(ctx, dsn, nil)
 	if err != nil {
 		t.Fatalf("reopen pool after restart: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestPostgresTransactionalEventAppendRollsBackSnapshotOnEventInsertFailure(t
 	dsn := testDSN(t)
 	ctx := context.Background()
 	svc, _, ent := newPostgresService(t, dsn)
-	pool, err := storage.NewPool(ctx, dsn)
+	pool, err := storage.NewPool(ctx, dsn, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +376,7 @@ func TestPostgresCrossTenantAccessLooksLikeNotFound(t *testing.T) {
 	ctx := context.Background()
 	svc, _, entA := newPostgresService(t, dsn)
 	entB := runID("ent-tenant-b")
-	pool, err := storage.NewPool(ctx, dsn)
+	pool, err := storage.NewPool(ctx, dsn, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +410,7 @@ func TestPostgresDuplicateIdempotencyKeyReplaysAcrossConnections(t *testing.T) {
 	dsn := testDSN(t)
 	ctx := context.Background()
 	svc, _, ent := newPostgresService(t, dsn)
-	pool, err := storage.NewPool(ctx, dsn)
+	pool, err := storage.NewPool(ctx, dsn, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -583,7 +583,7 @@ func conformanceBackends() []struct {
 			if err := storage.Migrate(ctx, dsn); err != nil {
 				t.Fatalf("migrate: %v", err)
 			}
-			pool, err := storage.NewPool(ctx, dsn)
+			pool, err := storage.NewPool(ctx, dsn, nil)
 			if err != nil {
 				t.Fatalf("pool: %v", err)
 			}

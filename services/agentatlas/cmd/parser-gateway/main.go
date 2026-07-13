@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,6 +20,7 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/config"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/parsergateway"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/transportsecurity"
 )
 
 func main() {
@@ -41,6 +43,17 @@ func run() error {
 		return err
 	}
 	defer logger.Sync()
+
+	// Transport security: parser-gateway's own server identity (the
+	// "gateway" link) — loaded fail-closed, a safe no-op when Mode is off
+	// (today's backward-compatible default). The docling/mineru/asr/video
+	// sidecar connections this binary makes as a CLIENT are out of this
+	// task's scope (see notes.md — "parser" names the atlas-worker ->
+	// parser-gateway link, not the gateway -> sidecar links).
+	gatewayTLS, err := transportsecurity.NewManager("gateway", transportsecurity.FromLinkTLS(cfg.TLS.Gateway))
+	if err != nil {
+		return fmt.Errorf("gateway server tls: %w", err)
+	}
 
 	registry, err := parsergateway.NewRegistry(
 		parsergateway.NewDoclingProvider(cfg.Parsers.Docling.BaseURL),
@@ -83,11 +96,20 @@ func run() error {
 		zap.String("mineru", cfg.Parsers.MinerU.BaseURL),
 		zap.String("asr", cfg.Parsers.ASR.BaseURL),
 		zap.String("video", cfg.Parsers.Video.BaseURL),
+		zap.String("tls_mode", string(cfg.TLS.Gateway.Mode)),
 	)
 	server := &http.Server{Addr: addr, Handler: router, ReadHeaderTimeout: 10 * time.Second}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", addr, err)
+	}
+	ln, err = gatewayTLS.WrapListener(ln)
+	if err != nil {
+		return fmt.Errorf("gateway server tls: %w", err)
+	}
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- server.ListenAndServe() }()
+	go func() { errCh <- server.Serve(ln) }()
 	select {
 	case err := <-errCh:
 		return err

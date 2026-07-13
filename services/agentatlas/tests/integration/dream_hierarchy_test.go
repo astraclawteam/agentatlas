@@ -41,13 +41,13 @@ func TestDreamHierarchy(t *testing.T) {
 	if err := storage.Migrate(ctx, dsn); err != nil {
 		t.Fatal(err)
 	}
-	pool, err := storage.NewPool(ctx, dsn)
+	pool, err := storage.NewPool(ctx, dsn, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
 	q := db.New(pool)
-	objects, err := storage.NewObjectStore(config.ObjectStorage{Endpoint: endpoint, Bucket: "agentatlas", AccessKey: envOr("ATLAS_TEST_OBJECT_ACCESS_KEY", "atlas"), SecretKey: envOr("ATLAS_TEST_OBJECT_SECRET_KEY", "atlas-secret-key")})
+	objects, err := storage.NewObjectStore(config.ObjectStorage{Endpoint: endpoint, Bucket: "agentatlas", AccessKey: envOr("ATLAS_TEST_OBJECT_ACCESS_KEY", "atlas"), SecretKey: envOr("ATLAS_TEST_OBJECT_SECRET_KEY", "atlas-secret-key")}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

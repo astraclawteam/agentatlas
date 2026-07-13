@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -31,6 +32,7 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/retrieval"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/storage"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/tasks"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/transportsecurity"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/workflow"
 )
 
@@ -49,7 +51,18 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	rawNexusClient, err := nexusclient.New(cfg.AgentNexus.BaseURL, 30*time.Second, cfg.AgentNexus.ClientID, cfg.AgentNexus.SecretFile)
+
+	// Transport security: one Manager per named link, loaded fail-closed —
+	// NewManager returns a named, sanitized error (never key material) if
+	// a link's Mode != off but its cert/key/trust-bundle material is
+	// missing or invalid. Every Manager is a safe no-op when its Mode is
+	// off (today's backward-compatible default).
+	tlsLinks, err := loadTLSManagers(cfg)
+	if err != nil {
+		return err
+	}
+
+	rawNexusClient, err := nexusclient.New(cfg.AgentNexus.BaseURL, 30*time.Second, cfg.AgentNexus.ClientID, cfg.AgentNexus.SecretFile, tlsLinks.agentNexus)
 	if err != nil {
 		return err
 	}
@@ -67,7 +80,7 @@ func run() error {
 	if err := storage.Migrate(ctx, cfg.Postgres.DSN); err != nil {
 		return err
 	}
-	pool, err := storage.NewPool(ctx, cfg.Postgres.DSN)
+	pool, err := storage.NewPool(ctx, cfg.Postgres.DSN, tlsLinks.postgres)
 	if err != nil {
 		return err
 	}
@@ -129,7 +142,7 @@ func run() error {
 	}
 	llm, err := llmroutermodel.New(llmroutermodel.Config{
 		BaseURL: cfg.LLMRouter.BaseURL, APIKey: cfg.LLMRouter.APIKey,
-		DefaultModel: defaultModel, Timeout: 120 * time.Second,
+		DefaultModel: defaultModel, Timeout: 120 * time.Second, TLS: tlsLinks.llmRouter,
 	})
 	if err != nil {
 		return err
@@ -152,7 +165,7 @@ func run() error {
 
 	// Producer-only task runner: the control plane enqueues workflow runs;
 	// atlas-worker consumes them.
-	bus, err := tasks.NewNATSBus(ctx, cfg.NATS.URL)
+	bus, err := tasks.NewNATSBus(ctx, cfg.NATS.URL, tlsLinks.nats)
 	if err != nil {
 		return fmt.Errorf("nats (production-standard dependency): %w", err)
 	}
@@ -176,6 +189,7 @@ func run() error {
 		Runtime: workflowRuntime, Dreams: dreamPolicies, Store: queries,
 		DreamRerun: dreamScheduler, Runner: taskRunner, Metrics: metrics,
 		BrowserSessions: browserSessions, BrowserHandleProtector: protector, Changes: changes, BrowserAuthorizer: rawNexusClient,
+		TLS: tlsLinks.agentAtlas,
 	})
 
 	addr := os.Getenv("ATLAS_AGENT_ADDR")
@@ -187,11 +201,20 @@ func run() error {
 		zap.String("version", app.Version),
 		zap.String("agentnexus", cfg.AgentNexus.BaseURL),
 		zap.String("model", defaultModel),
+		zap.String("tls_mode", string(cfg.TLS.AgentAtlas.Mode)),
 	)
 	server := &http.Server{Addr: addr, Handler: router, ReadHeaderTimeout: 10 * time.Second}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", addr, err)
+	}
+	ln, err = tlsLinks.agentAtlas.WrapListener(ln)
+	if err != nil {
+		return fmt.Errorf("agentatlas server tls: %w", err)
+	}
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- server.ListenAndServe() }()
+	go func() { errCh <- server.Serve(ln) }()
 	select {
 	case err := <-errCh:
 		return err
@@ -207,4 +230,36 @@ func run() error {
 		}
 		return nil
 	}
+}
+
+// tlsManagers is atlas-agent's transport-security composition: one Manager
+// per named link this binary participates in (its own server identity plus
+// every dependency it dials out to).
+type tlsManagers struct {
+	agentAtlas *transportsecurity.Manager // server identity (this binary accepts inbound connections)
+	agentNexus *transportsecurity.Manager
+	llmRouter  *transportsecurity.Manager
+	postgres   *transportsecurity.Manager
+	nats       *transportsecurity.Manager
+}
+
+func loadTLSManagers(cfg *config.Config) (tlsManagers, error) {
+	var out tlsManagers
+	var err error
+	if out.agentAtlas, err = transportsecurity.NewManager("AgentAtlas", transportsecurity.FromLinkTLS(cfg.TLS.AgentAtlas)); err != nil {
+		return out, fmt.Errorf("agentatlas server tls: %w", err)
+	}
+	if out.agentNexus, err = transportsecurity.NewManager("AgentNexus", transportsecurity.FromLinkTLS(cfg.TLS.AgentNexus)); err != nil {
+		return out, fmt.Errorf("agentnexus tls: %w", err)
+	}
+	if out.llmRouter, err = transportsecurity.NewManager("llmrouter", transportsecurity.FromLinkTLS(cfg.TLS.LLMRouter)); err != nil {
+		return out, fmt.Errorf("llmrouter tls: %w", err)
+	}
+	if out.postgres, err = transportsecurity.NewManager("PostgreSQL", transportsecurity.FromLinkTLS(cfg.TLS.Postgres)); err != nil {
+		return out, fmt.Errorf("postgres tls: %w", err)
+	}
+	if out.nats, err = transportsecurity.NewManager("NATS", transportsecurity.FromLinkTLS(cfg.TLS.NATS)); err != nil {
+		return out, fmt.Errorf("nats tls: %w", err)
+	}
+	return out, nil
 }

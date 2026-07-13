@@ -22,9 +22,35 @@ spec:
           image: {{ include "agentatlas.image" (dict "root" . "service" "parser-gateway") }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
+            # Serves TLS on this SAME port instead of plaintext once
+            # .Values.tls.enabled (GA Task 13A) — no separate secure port.
             - containerPort: {{ .Values.services.parserGateway.port }}
           env:
             {{- include "agentatlas.env" . | nindent 12 }}
+            {{- if .Values.tls.enabled }}
+            - name: ATLAS_TLS_MODE
+              value: {{ .Values.tls.mode | quote }}
+            {{- range .Values.tls.links }}
+            - name: ATLAS_TLS_{{ .envPrefix }}_CERT_FILE
+              value: {{ printf "/var/run/secrets/agentatlas-tls/%s/tls.crt" .slug }}
+            - name: ATLAS_TLS_{{ .envPrefix }}_KEY_FILE
+              value: {{ printf "/var/run/secrets/agentatlas-tls/%s/tls.key" .slug }}
+            - name: ATLAS_TLS_{{ .envPrefix }}_TRUST_BUNDLE_FILE
+              value: {{ printf "/var/run/secrets/agentatlas-tls/%s/ca.crt" .slug }}
+            - name: ATLAS_TLS_{{ .envPrefix }}_REVOCATION_FILE
+              value: /var/run/secrets/agentatlas-tls/revoked.txt
+            - name: ATLAS_TLS_{{ .envPrefix }}_SERVER_NAME
+              value: {{ .serverName | quote }}
+            - name: ATLAS_TLS_{{ .envPrefix }}_SPIFFE_ID
+              value: {{ .spiffeId | quote }}
+            {{- end }}
+            {{- end }}
+          {{- if .Values.tls.enabled }}
+          volumeMounts:
+            - name: agentatlas-tls
+              mountPath: /var/run/secrets/agentatlas-tls
+              readOnly: true
+          {{- end }}
           readinessProbe:
             httpGet: { path: /healthz, port: {{ .Values.services.parserGateway.port }} }
             initialDelaySeconds: 5
@@ -35,6 +61,27 @@ spec:
             periodSeconds: 20
           resources:
             {{- toYaml .Values.resources.parserGateway | nindent 12 }}
+      {{- if .Values.tls.enabled }}
+      volumes:
+        - name: agentatlas-tls
+          secret:
+            secretName: {{ .Values.tls.secretName | quote }}
+            items:
+              {{- range .Values.tls.links }}
+              - key: {{ printf "%s-tls-crt" .slug }}
+                path: {{ printf "%s/tls.crt" .slug }}
+                mode: 0400
+              - key: {{ printf "%s-tls-key" .slug }}
+                path: {{ printf "%s/tls.key" .slug }}
+                mode: 0400
+              - key: {{ printf "%s-ca-crt" .slug }}
+                path: {{ printf "%s/ca.crt" .slug }}
+                mode: 0400
+              {{- end }}
+              - key: revoked-txt
+                path: revoked.txt
+                mode: 0400
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service

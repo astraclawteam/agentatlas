@@ -66,7 +66,7 @@ func TestArtifactPipeline(t *testing.T) {
 	if err := storage.Migrate(ctx, dsn); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	pool, err := storage.NewPool(ctx, dsn)
+	pool, err := storage.NewPool(ctx, dsn, nil)
 	if err != nil {
 		t.Fatalf("pool: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestArtifactPipeline(t *testing.T) {
 		AccessKey: envOr("ATLAS_TEST_OBJECT_ACCESS_KEY", "atlas"),
 		SecretKey: envOr("ATLAS_TEST_OBJECT_SECRET_KEY", "atlas-secret-key"),
 		Region:    "us-east-1",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("object store: %v", err)
 	}

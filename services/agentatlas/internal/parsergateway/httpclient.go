@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/transportsecurity"
 )
 
 // ParseResponse is the parser-gateway HTTP contract for POST /v1/parse —
@@ -25,15 +27,27 @@ type HTTPClient struct {
 	http    *http.Client
 }
 
-func NewHTTPClient(baseURL string) (*HTTPClient, error) {
+// NewHTTPClient dials the standalone parser-gateway service. tlsMgr
+// configures the "parser" link's transport security
+// (services/agentatlas/internal/transportsecurity) — this is AgentAtlas
+// (atlas-worker) as CLIENT dialing OUT to the parser-gateway server; nil,
+// or a Manager built with LinkConfig.Mode == ModeOff, keeps today's
+// plaintext behavior.
+func NewHTTPClient(baseURL string, tlsMgr *transportsecurity.Manager) (*HTTPClient, error) {
 	if baseURL == "" {
 		return nil, fmt.Errorf("parser gateway client: base URL required")
+	}
+	transport := &http.Transport{}
+	if tlsMgr != nil {
+		if err := tlsMgr.ConfigureTransport(transport); err != nil {
+			return nil, fmt.Errorf("parser gateway tls: %w", err)
+		}
 	}
 	return &HTTPClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		// Parsing large documents/media is slow; generous ceiling, context
 		// cancellation still applies.
-		http: &http.Client{Timeout: 10 * time.Minute},
+		http: &http.Client{Timeout: 10 * time.Minute, Transport: transport},
 	}, nil
 }
 

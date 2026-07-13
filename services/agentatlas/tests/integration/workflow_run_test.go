@@ -38,7 +38,7 @@ func TestWorkflowRun(t *testing.T) {
 	if err := storage.Migrate(ctx, dsn); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	pool, err := storage.NewPool(ctx, dsn)
+	pool, err := storage.NewPool(ctx, dsn, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestWorkflowRun(t *testing.T) {
 		Endpoint: objEndpoint, Bucket: "agentatlas",
 		AccessKey: envOr("ATLAS_TEST_OBJECT_ACCESS_KEY", "atlas"),
 		SecretKey: envOr("ATLAS_TEST_OBJECT_SECRET_KEY", "atlas-secret-key"),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

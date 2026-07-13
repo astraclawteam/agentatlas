@@ -5,8 +5,8 @@ package retrieval
 
 import (
 	"bytes"
-	_ "embed"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/transportsecurity"
 )
 
 //go:embed mapping.json
@@ -77,14 +79,24 @@ type HTTPSearchClient struct {
 
 var _ SearchClient = (*HTTPSearchClient)(nil)
 
-func NewHTTPSearchClient(addresses []string, username, password string) (*HTTPSearchClient, error) {
+// NewHTTPSearchClient dials OpenSearch. tlsMgr configures the OpenSearch
+// link's transport security (services/agentatlas/internal/transportsecurity);
+// nil, or a Manager built with LinkConfig.Mode == ModeOff, keeps today's
+// plaintext behavior.
+func NewHTTPSearchClient(addresses []string, username, password string, tlsMgr *transportsecurity.Manager) (*HTTPSearchClient, error) {
 	if len(addresses) == 0 {
 		return nil, fmt.Errorf("opensearch: no addresses configured")
+	}
+	transport := &http.Transport{}
+	if tlsMgr != nil {
+		if err := tlsMgr.ConfigureTransport(transport); err != nil {
+			return nil, fmt.Errorf("opensearch tls: %w", err)
+		}
 	}
 	return &HTTPSearchClient{
 		base: strings.TrimRight(addresses[0], "/"),
 		user: username, pass: password,
-		http: &http.Client{Timeout: 60 * time.Second},
+		http: &http.Client{Timeout: 60 * time.Second, Transport: transport},
 	}, nil
 }
 

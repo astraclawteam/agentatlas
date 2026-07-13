@@ -20,7 +20,7 @@ func TestDreamOutputImmutabilityPostgres(t *testing.T) {
 	if err := storage.Migrate(ctx, dsn); err != nil {
 		t.Fatal(err)
 	}
-	pool, err := storage.NewPool(ctx, dsn)
+	pool, err := storage.NewPool(ctx, dsn, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

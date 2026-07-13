@@ -114,7 +114,7 @@ func TestParserServerRoutesAndFailsLoud(t *testing.T) {
 	}
 
 	// the HTTP client round-trips the same contract
-	client, err := parsergateway.NewHTTPClient(srv.URL)
+	client, err := parsergateway.NewHTTPClient(srv.URL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

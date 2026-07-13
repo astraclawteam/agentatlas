@@ -30,7 +30,7 @@ func TestDreamGovernanceSchemaUpgradeFromPopulatedV1(t *testing.T) {
 		t.Skip("set ATLAS_TEST_POSTGRES_DSN (production-standard postgres from deploy/compose)")
 	}
 	ctx := context.Background()
-	admin, err := storage.NewPool(ctx, dsn)
+	admin, err := storage.NewPool(ctx, dsn, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +295,7 @@ values('outbox-dream','outbox-policy',1,'outbox-ent','running',now()-interval '1
 func openDreamMigrationQueries(t *testing.T, dsn string, version int64) (context.Context, *pgx.Conn, *db.Queries) {
 	t.Helper()
 	ctx := context.Background()
-	admin, err := storage.NewPool(ctx, dsn)
+	admin, err := storage.NewPool(ctx, dsn, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +341,7 @@ func openDreamMigrationQueries(t *testing.T, dsn string, version int64) (context
 func openDreamMigrationDB(t *testing.T, dsn string, version int64) (context.Context, *sql.DB) {
 	t.Helper()
 	ctx := context.Background()
-	admin, err := storage.NewPool(ctx, dsn)
+	admin, err := storage.NewPool(ctx, dsn, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -570,7 +570,7 @@ func TestDreamGovernancePublishOperationConcurrency(t *testing.T) {
 	if err := storage.Migrate(ctx, dsn); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	pool, err := storage.NewPool(ctx, dsn)
+	pool, err := storage.NewPool(ctx, dsn, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -656,7 +656,7 @@ func TestDreamGovernanceSchema(t *testing.T) {
 	if err := storage.Migrate(ctx, dsn); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	dbPool, err := storage.NewPool(ctx, dsn)
+	dbPool, err := storage.NewPool(ctx, dsn, nil)
 	if err != nil {
 		t.Fatalf("pool: %v", err)
 	}

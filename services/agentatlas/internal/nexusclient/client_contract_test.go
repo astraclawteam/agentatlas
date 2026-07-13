@@ -129,7 +129,7 @@ func writeServiceSecret(t *testing.T, value string) string {
 func TestHTTPClientContract(t *testing.T) {
 	const serviceSecret = "AgentAtlas-Nexus-Service-Q7mV2xK9pR4tY8dF3"
 	srv := contractServer(t, serviceSecret)
-	c, err := New(srv.URL, 5*time.Second, "agentatlas", writeServiceSecret(t, serviceSecret))
+	c, err := New(srv.URL, 5*time.Second, "agentatlas", writeServiceSecret(t, serviceSecret), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestHTTPClientServiceCredentialsFailClosed(t *testing.T) {
 		"whitespace":      {"agentatlas", writeServiceSecret(t, "AgentAtlas-Nexus-Service-Q7mV2xK9pR4tY8dF3\n")},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := New("https://nexus.example", time.Second, values[0], values[1]); err == nil {
+			if _, err := New("https://nexus.example", time.Second, values[0], values[1], nil); err == nil {
 				t.Fatal("unsafe service credential configuration accepted")
 			}
 		})
@@ -203,7 +203,7 @@ func TestHTTPClientServiceCredentialsFailClosed(t *testing.T) {
 		if err := os.Chmod(good, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := New("https://nexus.example", time.Second, "agentatlas", good); err == nil {
+		if _, err := New("https://nexus.example", time.Second, "agentatlas", good, nil); err == nil {
 			t.Fatal("broad service secret permissions accepted")
 		}
 	}
@@ -222,7 +222,7 @@ func TestHTTPClientNeverForwardsServiceCredentialOnRedirect(t *testing.T) {
 	})
 	server := httptest.NewServer(mux)
 	defer server.Close()
-	client, err := New(server.URL, time.Second, "agentatlas", writeServiceSecret(t, "AgentAtlas-Nexus-Service-Q7mV2xK9pR4tY8dF3"))
+	client, err := New(server.URL, time.Second, "agentatlas", writeServiceSecret(t, "AgentAtlas-Nexus-Service-Q7mV2xK9pR4tY8dF3"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestHTTPClientMapsAuditPayloadMismatchToConflict(t *testing.T) {
 		http.Error(w, `{"error":"idempotency_conflict"}`, http.StatusConflict)
 	}))
 	defer server.Close()
-	client, err := New(server.URL, time.Second, "agentatlas", writeServiceSecret(t, "AgentAtlas-Nexus-Service-Q7mV2xK9pR4tY8dF3"))
+	client, err := New(server.URL, time.Second, "agentatlas", writeServiceSecret(t, "AgentAtlas-Nexus-Service-Q7mV2xK9pR4tY8dF3"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

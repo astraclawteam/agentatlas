@@ -45,7 +45,7 @@ func TestAgentAtlasMVPRealStack(t *testing.T) {
 	nexusAddr := envOr("ATLAS_MOCK_NEXUS_ADDR", "0.0.0.0:8100")
 	ctx := context.Background()
 
-	pool, err := storage.NewPool(ctx, dsn)
+	pool, err := storage.NewPool(ctx, dsn, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

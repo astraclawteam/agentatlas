@@ -5,12 +5,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/config"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/transportsecurity"
 )
 
 // ObjectStore wraps the S3-compatible bucket that keeps everything too raw
@@ -21,17 +23,32 @@ type ObjectStore struct {
 	bucket string
 }
 
-func NewObjectStore(cfg config.ObjectStorage) (*ObjectStore, error) {
+// NewObjectStore dials the S3-compatible object store. tlsMgr configures
+// the object-storage link's transport security
+// (services/agentatlas/internal/transportsecurity), layered independently
+// of cfg.UseSSL/the endpoint scheme (both of which keep controlling whether
+// the connection is secured at all; tlsMgr additionally enforces mTLS
+// client-identity + peer-pinning when configured). nil, or a Manager built
+// with LinkConfig.Mode == ModeOff, keeps today's behavior.
+func NewObjectStore(cfg config.ObjectStorage, tlsMgr *transportsecurity.Manager) (*ObjectStore, error) {
 	u, err := url.Parse(cfg.Endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("object endpoint: %w", err)
 	}
 	secure := u.Scheme == "https"
-	client, err := minio.New(u.Host, &minio.Options{
+	opts := &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
 		Secure: secure || cfg.UseSSL,
 		Region: cfg.Region,
-	})
+	}
+	if tlsMgr != nil {
+		transport := &http.Transport{}
+		if err := tlsMgr.ConfigureTransport(transport); err != nil {
+			return nil, fmt.Errorf("object storage tls: %w", err)
+		}
+		opts.Transport = transport
+	}
+	client, err := minio.New(u.Host, opts)
 	if err != nil {
 		return nil, fmt.Errorf("object client: %w", err)
 	}

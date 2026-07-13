@@ -50,6 +50,78 @@ config:
   asrUrl: http://asr-sidecar:5003
   videoUrl: http://video-sidecar:5004
 
+# Transport security (GA Task 13A). Every link defaults OFF (enabled:
+# false — backward-compatible plaintext, matching every containerPort
+# below unchanged: a pod's listener serves TLS instead of plaintext on its
+# EXISTING port once enabled, no separate secure port). Flip enabled to
+# true (mode: mtls is the recommended secure production posture) to
+# activate every link at once, projected from one Kubernetes Secret
+# (secretName below) whose flat data keys are
+# <slug>-tls-crt/<slug>-tls-key/<slug>-ca-crt per link plus one shared
+# revoked-txt key — populate it by running [enterprise]
+# `atlasctl certificates bootstrap` and `kubectl create secret generic
+# <secretName> --from-file=...` over its <state-dir>/certs/*/{tls.crt,
+# tls.key,ca.crt} + <state-dir>/revoked.txt output (renamed to the flat key
+# convention above). Live cross-service TLS validation of this chart is
+# deferred to Task 16A; this file only adds the configuration surface,
+# validated here by static `helm template`/`helm lint` rendering.
+tls:
+  enabled: false
+  mode: mtls
+  secretName: agentatlas-tls
+  # slug is the hyphenated path/Secret-key segment for each link — kept as
+  # an explicit field (rather than derived via `envPrefix | lower`, which
+  # would turn OBJECT_STORAGE into "object_storage") so it matches
+  # deploy/compose/compose.yaml's mount paths and [enterprise]
+  # `atlasctl certificates bootstrap`'s pki.Slugify output
+  # (`certs/object-storage/...`) exactly.
+  links:
+    - name: AgentAtlas
+      envPrefix: AGENTATLAS
+      slug: agentatlas
+      serverName: caller.agentatlas.internal
+      spiffeId: spiffe://agentatlas.internal/ns/prod/sa/caller-of-agentatlas
+    - name: gateway
+      envPrefix: GATEWAY
+      slug: gateway
+      serverName: caller.gateway.internal
+      spiffeId: spiffe://agentatlas.internal/ns/prod/sa/caller-of-gateway
+    - name: AgentNexus
+      envPrefix: AGENTNEXUS
+      slug: agentnexus
+      serverName: agentnexus.internal
+      spiffeId: spiffe://agentatlas.internal/ns/prod/sa/agentnexus
+    - name: llmrouter
+      envPrefix: LLMROUTER
+      slug: llmrouter
+      serverName: llmrouter.internal
+      spiffeId: spiffe://agentatlas.internal/ns/prod/sa/llmrouter
+    - name: PostgreSQL
+      envPrefix: POSTGRES
+      slug: postgresql
+      serverName: postgresql.internal
+      spiffeId: spiffe://agentatlas.internal/ns/prod/sa/postgresql
+    - name: OpenSearch
+      envPrefix: OPENSEARCH
+      slug: opensearch
+      serverName: opensearch.internal
+      spiffeId: spiffe://agentatlas.internal/ns/prod/sa/opensearch
+    - name: NATS
+      envPrefix: NATS
+      slug: nats
+      serverName: nats.internal
+      spiffeId: spiffe://agentatlas.internal/ns/prod/sa/nats
+    - name: object storage
+      envPrefix: OBJECT_STORAGE
+      slug: object-storage
+      serverName: object-storage.internal
+      spiffeId: spiffe://agentatlas.internal/ns/prod/sa/object-storage
+    - name: parser
+      envPrefix: PARSER
+      slug: parser
+      serverName: parser.internal
+      spiffeId: spiffe://agentatlas.internal/ns/prod/sa/parser
+
 resources:
   atlasApi:
     requests: { cpu: 250m, memory: 256Mi }

@@ -14,6 +14,7 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/governance"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/tasks"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/transportsecurity"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/workflow"
 )
 
@@ -38,6 +39,11 @@ type AgentRouterDeps struct {
 	BrowserKnowledgeStore  browserKnowledgeStore     // optional; defaults to Store
 	BrowserAuthorizer      nexus.BrowserBFFClient    // optional; required by advanced legacy BFF routes
 	Changes                *governance.Service       // optional; enables governed maintenance routes
+	// TLS is this service's own server-identity Manager (the "AgentAtlas"
+	// link); optional. When set, /healthz surfaces certificate lifecycle
+	// status distinctly from readiness, without leaking key material — see
+	// healthzResponse's doc comment in routes.go.
+	TLS *transportsecurity.Manager
 }
 
 type dreamBackfiller interface {
@@ -130,8 +136,17 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 		r.Method(http.MethodGet, "/metrics", deps.Metrics.Handler())
 	}
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, NewHealthStatus("atlas-agent",
-			"postgres", "nats", "agentnexus", "llmrouter").MarkReady(true))
+		status := NewHealthStatus("atlas-agent",
+			"postgres", "nats", "agentnexus", "llmrouter").MarkReady(true)
+		resp := healthzResponse{HealthStatus: status}
+		if deps.TLS != nil {
+			tlsStatus := deps.TLS.Status()
+			resp.TLS = &tlsStatus
+			if !tlsStatus.Ready {
+				resp.HealthStatus = status.MarkReady(false)
+			}
+		}
+		writeJSON(w, http.StatusOK, resp)
 	})
 
 	wf := &workflowHandler{deps: deps}

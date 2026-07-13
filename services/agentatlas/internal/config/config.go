@@ -72,6 +72,66 @@ type Parsers struct {
 	Video      ParserEndpoint `yaml:"video"`
 }
 
+// TLSMode selects how a link enforces transport security. The values
+// mirror internal/transportsecurity.Mode's; kept as an independent string
+// type here (rather than importing that package) so package config stays a
+// dependency-free leaf — internal/transportsecurity.FromLinkTLS is the one
+// place that converts a LinkTLS value into that package's runtime type, at
+// each cmd/*/main.go composition root.
+type TLSMode string
+
+const (
+	// TLSModeOff disables TLS for the link — the backward-compatible
+	// default for every existing deployment.
+	TLSModeOff TLSMode = "off"
+	// TLSModeTLS is server-auth-only TLS (no client certificate).
+	TLSModeTLS TLSMode = "tls"
+	// TLSModeMTLS is mutual TLS: both sides present and verify a
+	// certificate. This is the secure-default posture every named
+	// AgentAtlas link should run in production (see
+	// deploy/compose/compose.yaml and deploy/helm/agentatlas/values.yaml).
+	TLSModeMTLS TLSMode = "mtls"
+)
+
+// LinkTLS configures one transport-security link: this service's own leaf
+// certificate/key, the trust bundle used to verify the peer, an optional
+// revoked-serial list, and the peer identity this link expects on the
+// other end (a SPIFFE URI and/or a DNS name — at least one is required
+// once Mode != TLSModeOff).
+type LinkTLS struct {
+	Mode            TLSMode `yaml:"mode"`
+	CertFile        string  `yaml:"cert_file"`
+	KeyFile         string  `yaml:"key_file"`
+	TrustBundleFile string  `yaml:"trust_bundle_file"`
+	// RevocationFile is optional even when Mode != TLSModeOff: a plain
+	// text file of revoked certificate serial numbers, one hex-encoded
+	// serial per line. Empty means "no revocation checking" for this link.
+	RevocationFile string `yaml:"revocation_file"`
+	ServerName     string `yaml:"server_name"`
+	SPIFFEID       string `yaml:"spiffe_id"`
+}
+
+// TLS is the transport-security configuration surface for every named
+// AgentAtlas link (the same nine links GA Task 13A's per-link matrix
+// names): AgentAtlas and Gateway are this service's own SERVER identities
+// (atlas-api/atlas-agent and parser-gateway accepting inbound connections);
+// AgentNexus, LLMRouter, Postgres, OpenSearch, NATS, ObjectStorage, and
+// Parser are the CLIENT links AgentAtlas dials out on. Every link defaults
+// to TLSModeOff (backward-compatible plaintext); flipping to TLSModeMTLS
+// per link, or globally via ATLAS_TLS_MODE, is the documented secure
+// production posture.
+type TLS struct {
+	AgentAtlas    LinkTLS `yaml:"agentatlas"`
+	Gateway       LinkTLS `yaml:"gateway"`
+	AgentNexus    LinkTLS `yaml:"agentnexus"`
+	LLMRouter     LinkTLS `yaml:"llmrouter"`
+	Postgres      LinkTLS `yaml:"postgres"`
+	OpenSearch    LinkTLS `yaml:"opensearch"`
+	NATS          LinkTLS `yaml:"nats"`
+	ObjectStorage LinkTLS `yaml:"object_storage"`
+	Parser        LinkTLS `yaml:"parser"`
+}
+
 type Config struct {
 	Postgres      Postgres      `yaml:"postgres"`
 	OpenSearch    OpenSearch    `yaml:"opensearch"`
@@ -80,6 +140,7 @@ type Config struct {
 	LLMRouter     LLMRouter     `yaml:"llmrouter"`
 	AgentNexus    AgentNexus    `yaml:"agentnexus"`
 	Parsers       Parsers       `yaml:"parsers"`
+	TLS           TLS           `yaml:"tls"`
 }
 
 func Default() *Config {
@@ -100,6 +161,17 @@ func Default() *Config {
 			ASR:     ParserEndpoint{BaseURL: "http://localhost:5003"},
 			Video:   ParserEndpoint{BaseURL: "http://localhost:5004"},
 		},
+		TLS: TLS{
+			AgentAtlas:    LinkTLS{Mode: TLSModeOff},
+			Gateway:       LinkTLS{Mode: TLSModeOff},
+			AgentNexus:    LinkTLS{Mode: TLSModeOff},
+			LLMRouter:     LinkTLS{Mode: TLSModeOff},
+			Postgres:      LinkTLS{Mode: TLSModeOff},
+			OpenSearch:    LinkTLS{Mode: TLSModeOff},
+			NATS:          LinkTLS{Mode: TLSModeOff},
+			ObjectStorage: LinkTLS{Mode: TLSModeOff},
+			Parser:        LinkTLS{Mode: TLSModeOff},
+		},
 	}
 }
 
@@ -117,6 +189,9 @@ func Load(path string) (*Config, error) {
 		}
 	}
 	cfg.applyEnv()
+	if err := cfg.TLS.validate(); err != nil {
+		return nil, err
+	}
 	return cfg, nil
 }
 
@@ -161,4 +236,77 @@ func (c *Config) applyEnv() {
 	set(&c.Parsers.MinerU.BaseURL, "ATLAS_MINERU_URL")
 	set(&c.Parsers.ASR.BaseURL, "ATLAS_ASR_URL")
 	set(&c.Parsers.Video.BaseURL, "ATLAS_VIDEO_URL")
+
+	// ATLAS_TLS_MODE seeds every link's mode at once — the single on/off
+	// switch for the secure-default posture — then each link's own
+	// ATLAS_TLS_<LINK>_* variables can override individually. Same
+	// same-keys-everywhere rule as the rest of this file: identical
+	// behavior across Compose, Helm, and offline packages.
+	links := c.tlsLinkEnvs()
+	if v, ok := os.LookupEnv("ATLAS_TLS_MODE"); ok {
+		for _, l := range links {
+			l.cfg.Mode = TLSMode(v)
+		}
+	}
+	for _, l := range links {
+		applyLinkTLSEnv(l.cfg, l.prefix)
+	}
+}
+
+type tlsLinkEnv struct {
+	cfg    *LinkTLS
+	name   string
+	prefix string
+}
+
+func (c *Config) tlsLinkEnvs() []tlsLinkEnv {
+	return []tlsLinkEnv{
+		{&c.TLS.AgentAtlas, "agentatlas", "ATLAS_TLS_AGENTATLAS_"},
+		{&c.TLS.Gateway, "gateway", "ATLAS_TLS_GATEWAY_"},
+		{&c.TLS.AgentNexus, "agentnexus", "ATLAS_TLS_AGENTNEXUS_"},
+		{&c.TLS.LLMRouter, "llmrouter", "ATLAS_TLS_LLMROUTER_"},
+		{&c.TLS.Postgres, "postgres", "ATLAS_TLS_POSTGRES_"},
+		{&c.TLS.OpenSearch, "opensearch", "ATLAS_TLS_OPENSEARCH_"},
+		{&c.TLS.NATS, "nats", "ATLAS_TLS_NATS_"},
+		{&c.TLS.ObjectStorage, "object_storage", "ATLAS_TLS_OBJECT_STORAGE_"},
+		{&c.TLS.Parser, "parser", "ATLAS_TLS_PARSER_"},
+	}
+}
+
+// validate enforces the fail-closed invariants at config-load time
+// (defense-in-depth ahead of internal/transportsecurity.NewManager, which
+// enforces the same identity rule again at composition time). A link that
+// enables TLS (Mode != off) MUST pin an expected peer identity — at least
+// one of server_name / spiffe_id — otherwise it would accept any
+// chain-verified peer, defeating per-link identity pinning (GA Task 13A).
+func (t *TLS) validate() error {
+	for _, l := range (&Config{TLS: *t}).tlsLinkEnvs() {
+		if l.cfg.Mode == "" || l.cfg.Mode == TLSModeOff {
+			continue
+		}
+		if l.cfg.Mode != TLSModeTLS && l.cfg.Mode != TLSModeMTLS {
+			return fmt.Errorf("config: tls.%s.mode %q is invalid (want off, tls, or mtls)", l.name, l.cfg.Mode)
+		}
+		if strings.TrimSpace(l.cfg.ServerName) == "" && strings.TrimSpace(l.cfg.SPIFFEID) == "" {
+			return fmt.Errorf("config: tls.%s enables TLS (mode=%s) but pins no peer identity — set tls.%s.server_name and/or tls.%s.spiffe_id (a link with no expected identity would accept any chain-verified peer)", l.name, l.cfg.Mode, l.name, l.name)
+		}
+	}
+	return nil
+}
+
+func applyLinkTLSEnv(l *LinkTLS, prefix string) {
+	if v, ok := os.LookupEnv(prefix + "MODE"); ok {
+		l.Mode = TLSMode(v)
+	}
+	setStr := func(target *string, key string) {
+		if v, ok := os.LookupEnv(prefix + key); ok {
+			*target = v
+		}
+	}
+	setStr(&l.CertFile, "CERT_FILE")
+	setStr(&l.KeyFile, "KEY_FILE")
+	setStr(&l.TrustBundleFile, "TRUST_BUNDLE_FILE")
+	setStr(&l.RevocationFile, "REVOCATION_FILE")
+	setStr(&l.ServerName, "SERVER_NAME")
+	setStr(&l.SPIFFEID, "SPIFFE_ID")
 }

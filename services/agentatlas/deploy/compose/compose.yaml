@@ -27,6 +27,78 @@ x-atlas-env: &atlas-env
   ATLAS_MINERU_URL: http://mineru-sidecar:8000
   ATLAS_ASR_URL: http://asr-sidecar:5003
   ATLAS_VIDEO_URL: http://video-sidecar:5004
+  # Transport security (GA Task 13A). Every link defaults to
+  # ATLAS_TLS_MODE=off (backward-compatible plaintext, matching every port
+  # below unchanged). Set ATLAS_TLS_MODE to "mtls" (the recommended secure
+  # production posture) or "tls" to activate every link at once on the SAME
+  # ports listed below (a service's listener serves TLS instead of
+  # plaintext on its existing port when enabled — no separate secure port);
+  # each link's own ATLAS_TLS_<LINK>_MODE still overrides individually.
+  # Cert/key/trust-bundle files are expected at the paths below, inside the
+  # bind-mounted ATLAS_TLS_MATERIAL_DIR_SOURCE — populated by running
+  # [enterprise] `atlasctl certificates bootstrap` (it writes exactly this
+  # <slug>/{tls.crt,tls.key,ca.crt} + revoked.txt layout). Standing up a
+  # live TLS'd instance of this compose stack is deferred to Task 16A; this
+  # file only adds the configuration surface, validated here by static
+  # `docker compose config` rendering.
+  ATLAS_TLS_MODE: ${ATLAS_TLS_MODE:-off}
+  ATLAS_TLS_AGENTATLAS_CERT_FILE: /run/secrets/agentatlas_tls/agentatlas/tls.crt
+  ATLAS_TLS_AGENTATLAS_KEY_FILE: /run/secrets/agentatlas_tls/agentatlas/tls.key
+  ATLAS_TLS_AGENTATLAS_TRUST_BUNDLE_FILE: /run/secrets/agentatlas_tls/agentatlas/ca.crt
+  ATLAS_TLS_AGENTATLAS_REVOCATION_FILE: /run/secrets/agentatlas_tls/revoked.txt
+  ATLAS_TLS_AGENTATLAS_SERVER_NAME: caller.agentatlas.internal
+  ATLAS_TLS_AGENTATLAS_SPIFFE_ID: spiffe://agentatlas.internal/ns/prod/sa/caller-of-agentatlas
+  ATLAS_TLS_GATEWAY_CERT_FILE: /run/secrets/agentatlas_tls/gateway/tls.crt
+  ATLAS_TLS_GATEWAY_KEY_FILE: /run/secrets/agentatlas_tls/gateway/tls.key
+  ATLAS_TLS_GATEWAY_TRUST_BUNDLE_FILE: /run/secrets/agentatlas_tls/gateway/ca.crt
+  ATLAS_TLS_GATEWAY_REVOCATION_FILE: /run/secrets/agentatlas_tls/revoked.txt
+  ATLAS_TLS_GATEWAY_SERVER_NAME: caller.gateway.internal
+  ATLAS_TLS_GATEWAY_SPIFFE_ID: spiffe://agentatlas.internal/ns/prod/sa/caller-of-gateway
+  ATLAS_TLS_AGENTNEXUS_CERT_FILE: /run/secrets/agentatlas_tls/agentnexus/tls.crt
+  ATLAS_TLS_AGENTNEXUS_KEY_FILE: /run/secrets/agentatlas_tls/agentnexus/tls.key
+  ATLAS_TLS_AGENTNEXUS_TRUST_BUNDLE_FILE: /run/secrets/agentatlas_tls/agentnexus/ca.crt
+  ATLAS_TLS_AGENTNEXUS_REVOCATION_FILE: /run/secrets/agentatlas_tls/revoked.txt
+  ATLAS_TLS_AGENTNEXUS_SERVER_NAME: agentnexus.internal
+  ATLAS_TLS_AGENTNEXUS_SPIFFE_ID: spiffe://agentatlas.internal/ns/prod/sa/agentnexus
+  ATLAS_TLS_LLMROUTER_CERT_FILE: /run/secrets/agentatlas_tls/llmrouter/tls.crt
+  ATLAS_TLS_LLMROUTER_KEY_FILE: /run/secrets/agentatlas_tls/llmrouter/tls.key
+  ATLAS_TLS_LLMROUTER_TRUST_BUNDLE_FILE: /run/secrets/agentatlas_tls/llmrouter/ca.crt
+  ATLAS_TLS_LLMROUTER_REVOCATION_FILE: /run/secrets/agentatlas_tls/revoked.txt
+  ATLAS_TLS_LLMROUTER_SERVER_NAME: llmrouter.internal
+  ATLAS_TLS_LLMROUTER_SPIFFE_ID: spiffe://agentatlas.internal/ns/prod/sa/llmrouter
+  ATLAS_TLS_POSTGRES_CERT_FILE: /run/secrets/agentatlas_tls/postgresql/tls.crt
+  ATLAS_TLS_POSTGRES_KEY_FILE: /run/secrets/agentatlas_tls/postgresql/tls.key
+  ATLAS_TLS_POSTGRES_TRUST_BUNDLE_FILE: /run/secrets/agentatlas_tls/postgresql/ca.crt
+  ATLAS_TLS_POSTGRES_REVOCATION_FILE: /run/secrets/agentatlas_tls/revoked.txt
+  ATLAS_TLS_POSTGRES_SERVER_NAME: postgresql.internal
+  ATLAS_TLS_POSTGRES_SPIFFE_ID: spiffe://agentatlas.internal/ns/prod/sa/postgresql
+  ATLAS_TLS_OPENSEARCH_CERT_FILE: /run/secrets/agentatlas_tls/opensearch/tls.crt
+  ATLAS_TLS_OPENSEARCH_KEY_FILE: /run/secrets/agentatlas_tls/opensearch/tls.key
+  ATLAS_TLS_OPENSEARCH_TRUST_BUNDLE_FILE: /run/secrets/agentatlas_tls/opensearch/ca.crt
+  ATLAS_TLS_OPENSEARCH_REVOCATION_FILE: /run/secrets/agentatlas_tls/revoked.txt
+  ATLAS_TLS_OPENSEARCH_SERVER_NAME: opensearch.internal
+  ATLAS_TLS_OPENSEARCH_SPIFFE_ID: spiffe://agentatlas.internal/ns/prod/sa/opensearch
+  ATLAS_TLS_NATS_CERT_FILE: /run/secrets/agentatlas_tls/nats/tls.crt
+  ATLAS_TLS_NATS_KEY_FILE: /run/secrets/agentatlas_tls/nats/tls.key
+  ATLAS_TLS_NATS_TRUST_BUNDLE_FILE: /run/secrets/agentatlas_tls/nats/ca.crt
+  ATLAS_TLS_NATS_REVOCATION_FILE: /run/secrets/agentatlas_tls/revoked.txt
+  ATLAS_TLS_NATS_SERVER_NAME: nats.internal
+  ATLAS_TLS_NATS_SPIFFE_ID: spiffe://agentatlas.internal/ns/prod/sa/nats
+  ATLAS_TLS_OBJECT_STORAGE_CERT_FILE: /run/secrets/agentatlas_tls/object-storage/tls.crt
+  ATLAS_TLS_OBJECT_STORAGE_KEY_FILE: /run/secrets/agentatlas_tls/object-storage/tls.key
+  ATLAS_TLS_OBJECT_STORAGE_TRUST_BUNDLE_FILE: /run/secrets/agentatlas_tls/object-storage/ca.crt
+  ATLAS_TLS_OBJECT_STORAGE_REVOCATION_FILE: /run/secrets/agentatlas_tls/revoked.txt
+  ATLAS_TLS_OBJECT_STORAGE_SERVER_NAME: object-storage.internal
+  ATLAS_TLS_OBJECT_STORAGE_SPIFFE_ID: spiffe://agentatlas.internal/ns/prod/sa/object-storage
+  ATLAS_TLS_PARSER_CERT_FILE: /run/secrets/agentatlas_tls/parser/tls.crt
+  ATLAS_TLS_PARSER_KEY_FILE: /run/secrets/agentatlas_tls/parser/tls.key
+  ATLAS_TLS_PARSER_TRUST_BUNDLE_FILE: /run/secrets/agentatlas_tls/parser/ca.crt
+  ATLAS_TLS_PARSER_REVOCATION_FILE: /run/secrets/agentatlas_tls/revoked.txt
+  ATLAS_TLS_PARSER_SERVER_NAME: parser.internal
+  ATLAS_TLS_PARSER_SPIFFE_ID: spiffe://agentatlas.internal/ns/prod/sa/parser
+
+x-atlas-tls-volume: &atlas-tls-volume
+  - ${ATLAS_TLS_MATERIAL_DIR_SOURCE:-./tls}:/run/secrets/agentatlas_tls:ro
 
 services:
   postgres:
@@ -61,9 +133,13 @@ services:
         soft: -1
         hard: -1
     ports:
+      # Same 9200 serves TLS once opensearch.yml's commented
+      # plugins.security.ssl.* block (GA Task 13A) is enabled — no
+      # separate secure port.
       - "9200:9200"
     volumes:
       - osdata:/usr/share/opensearch/data
+      - ${ATLAS_TLS_MATERIAL_DIR_SOURCE:-./tls}:/run/secrets/agentatlas_tls:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
       interval: 10s
@@ -74,11 +150,14 @@ services:
     image: ${NATS_IMAGE:-nats:2.11-alpine}
     command: ["-c", "/etc/nats/nats.conf"]
     ports:
+      # Same 4222 serves TLS once nats.conf's commented `tls { ... }` block
+      # (GA Task 13A) is enabled — no separate secure port.
       - "4222:4222"
       - "8222:8222"
     volumes:
       - ./nats/nats.conf:/etc/nats/nats.conf:ro
       - natsdata:/data/jetstream
+      - ${ATLAS_TLS_MATERIAL_DIR_SOURCE:-./tls}:/run/secrets/agentatlas_tls:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8222/healthz | grep -q ok"]
       interval: 5s
@@ -125,7 +204,10 @@ services:
     secrets:
       - agentatlas_agentnexus_service_secret
       - agentatlas_agentnexus_approval_facts_secret
+    volumes: *atlas-tls-volume
     ports:
+      # Serves TLS on this SAME port instead of plaintext once
+      # ATLAS_TLS_AGENTATLAS_MODE (or the global ATLAS_TLS_MODE) is set.
       - "8080:8080"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz >/dev/null || exit 1"]
@@ -156,7 +238,10 @@ services:
       - agentatlas_agentnexus_approval_facts_secret
       - agentatlas_browser_client_secret
       - agentatlas_browser_session_key
+    volumes: *atlas-tls-volume
     ports:
+      # Serves TLS on this SAME port instead of plaintext once
+      # ATLAS_TLS_AGENTATLAS_MODE (or the global ATLAS_TLS_MODE) is set.
       - "8081:8081"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8081/healthz >/dev/null || exit 1"]
@@ -184,8 +269,9 @@ services:
     secrets:
       - agentatlas_agentnexus_service_secret
       - agentatlas_agentnexus_approval_facts_secret
+    volumes: *atlas-tls-volume
     ports:
-      - "9091:9091" # metrics/liveness listener
+      - "9091:9091" # metrics/liveness listener (plaintext; not a named TLS link)
     healthcheck:
       # the worker has no API port; its /metrics listener doubles as liveness
       test: ["CMD-SHELL", "wget -qO- http://localhost:9091/metrics >/dev/null || exit 1"]
@@ -211,7 +297,10 @@ services:
         GOPROXY: ${GOPROXY_BUILD:-https://proxy.golang.org,direct}
     environment:
       <<: *atlas-env
+    volumes: *atlas-tls-volume
     ports:
+      # Serves TLS on this SAME port instead of plaintext once
+      # ATLAS_TLS_GATEWAY_MODE (or the global ATLAS_TLS_MODE) is set.
       - "8090:8090"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8090/healthz >/dev/null || exit 1"]

@@ -12,6 +12,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/transportsecurity"
 )
 
 // Bus dispatches job ids by type.
@@ -172,8 +174,22 @@ type NATSBus struct {
 	js jetstream.JetStream
 }
 
-func NewNATSBus(ctx context.Context, url string) (*NATSBus, error) {
-	nc, err := nats.Connect(url, nats.Timeout(10*time.Second))
+// NewNATSBus connects to NATS JetStream. tlsMgr configures the NATS link's
+// transport security (services/agentatlas/internal/transportsecurity);
+// nil, or a Manager built with LinkConfig.Mode == ModeOff, keeps today's
+// plaintext (nats://) behavior unchanged.
+func NewNATSBus(ctx context.Context, url string, tlsMgr *transportsecurity.Manager) (*NATSBus, error) {
+	opts := []nats.Option{nats.Timeout(10 * time.Second)}
+	if tlsMgr != nil {
+		tlsCfg, err := tlsMgr.ClientTLSConfigOrNil()
+		if err != nil {
+			return nil, fmt.Errorf("nats tls: %w", err)
+		}
+		if tlsCfg != nil {
+			opts = append(opts, nats.Secure(tlsCfg))
+		}
+	}
+	nc, err := nats.Connect(url, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("nats connect: %w", err)
 	}

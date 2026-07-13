@@ -34,6 +34,7 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/storage"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/tasks"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/trace"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/transportsecurity"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/worker"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/workflow"
 )
@@ -53,7 +54,21 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	nexusClient, err := nexusclient.New(cfg.AgentNexus.BaseURL, 30*time.Second, cfg.AgentNexus.ClientID, cfg.AgentNexus.SecretFile)
+
+	// Transport security: one Manager per named link, loaded fail-closed —
+	// NewManager returns a named, sanitized error (never key material) if
+	// a link's Mode != off but its cert/key/trust-bundle material is
+	// missing or invalid. Every Manager is a safe no-op when its Mode is
+	// off (today's backward-compatible default). atlas-worker has no
+	// inbound API server of its own (only the plaintext metrics listener,
+	// unaffected — not one of the named links), so this composes CLIENT
+	// links only.
+	tlsLinks, err := loadTLSManagers(cfg)
+	if err != nil {
+		return err
+	}
+
+	nexusClient, err := nexusclient.New(cfg.AgentNexus.BaseURL, 30*time.Second, cfg.AgentNexus.ClientID, cfg.AgentNexus.SecretFile, tlsLinks.agentNexus)
 	if err != nil {
 		return err
 	}
@@ -66,14 +81,14 @@ func run() error {
 	if err := storage.Migrate(ctx, cfg.Postgres.DSN); err != nil {
 		return err
 	}
-	pool, err := storage.NewPool(ctx, cfg.Postgres.DSN)
+	pool, err := storage.NewPool(ctx, cfg.Postgres.DSN, tlsLinks.postgres)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
 	queries := db.New(pool)
 
-	objects, err := storage.NewObjectStore(cfg.ObjectStorage)
+	objects, err := storage.NewObjectStore(cfg.ObjectStorage, tlsLinks.objectStorage)
 	if err != nil {
 		return err
 	}
@@ -82,10 +97,13 @@ func run() error {
 	}
 
 	// Deployment topology: worker -> parser-gateway service over HTTP when
-	// configured; in-process gateway otherwise.
+	// configured; in-process gateway otherwise. TLS ("parser" link) only
+	// applies to the standalone-gateway path — the in-process gateway
+	// dials the docling/mineru/asr/video sidecar providers directly, which
+	// is out of this task's scope (see notes.md).
 	var parserGW artifacts.ParserGateway
 	if cfg.Parsers.GatewayURL != "" {
-		parserGW, err = parsergateway.NewHTTPClient(cfg.Parsers.GatewayURL)
+		parserGW, err = parsergateway.NewHTTPClient(cfg.Parsers.GatewayURL, tlsLinks.parser)
 		if err != nil {
 			return err
 		}
@@ -102,7 +120,7 @@ func run() error {
 		parserGW = parsergateway.NewGateway(registry)
 	}
 
-	search, err := retrieval.NewHTTPSearchClient(cfg.OpenSearch.Addresses, cfg.OpenSearch.Username, cfg.OpenSearch.Password)
+	search, err := retrieval.NewHTTPSearchClient(cfg.OpenSearch.Addresses, cfg.OpenSearch.Username, cfg.OpenSearch.Password, tlsLinks.openSearch)
 	if err != nil {
 		return err
 	}
@@ -133,7 +151,7 @@ func run() error {
 		}
 		llm, err := llmroutermodel.New(llmroutermodel.Config{
 			BaseURL: cfg.LLMRouter.BaseURL, APIKey: cfg.LLMRouter.APIKey,
-			DefaultModel: defaultModel, Timeout: 120 * time.Second,
+			DefaultModel: defaultModel, Timeout: 120 * time.Second, TLS: tlsLinks.llmRouter,
 		})
 		if err != nil {
 			return err
@@ -168,7 +186,7 @@ func run() error {
 		logger.Warn("llmrouter api key not configured: worker runs deterministic summaries and keyword-only indexing")
 	}
 
-	bus, err := tasks.NewNATSBus(ctx, cfg.NATS.URL)
+	bus, err := tasks.NewNATSBus(ctx, cfg.NATS.URL, tlsLinks.nats)
 	if err != nil {
 		return fmt.Errorf("nats (production-standard dependency): %w", err)
 	}
@@ -334,4 +352,44 @@ func run() error {
 	logger.Info("atlas-worker draining")
 	w.Stop()
 	return nil
+}
+
+// tlsManagers is atlas-worker's transport-security composition: one
+// Manager per named CLIENT link this binary dials out to (atlas-worker has
+// no inbound API server of its own).
+type tlsManagers struct {
+	agentNexus    *transportsecurity.Manager
+	llmRouter     *transportsecurity.Manager
+	postgres      *transportsecurity.Manager
+	openSearch    *transportsecurity.Manager
+	nats          *transportsecurity.Manager
+	objectStorage *transportsecurity.Manager
+	parser        *transportsecurity.Manager // atlas-worker -> standalone parser-gateway
+}
+
+func loadTLSManagers(cfg *config.Config) (tlsManagers, error) {
+	var out tlsManagers
+	var err error
+	if out.agentNexus, err = transportsecurity.NewManager("AgentNexus", transportsecurity.FromLinkTLS(cfg.TLS.AgentNexus)); err != nil {
+		return out, fmt.Errorf("agentnexus tls: %w", err)
+	}
+	if out.llmRouter, err = transportsecurity.NewManager("llmrouter", transportsecurity.FromLinkTLS(cfg.TLS.LLMRouter)); err != nil {
+		return out, fmt.Errorf("llmrouter tls: %w", err)
+	}
+	if out.postgres, err = transportsecurity.NewManager("PostgreSQL", transportsecurity.FromLinkTLS(cfg.TLS.Postgres)); err != nil {
+		return out, fmt.Errorf("postgres tls: %w", err)
+	}
+	if out.openSearch, err = transportsecurity.NewManager("OpenSearch", transportsecurity.FromLinkTLS(cfg.TLS.OpenSearch)); err != nil {
+		return out, fmt.Errorf("opensearch tls: %w", err)
+	}
+	if out.nats, err = transportsecurity.NewManager("NATS", transportsecurity.FromLinkTLS(cfg.TLS.NATS)); err != nil {
+		return out, fmt.Errorf("nats tls: %w", err)
+	}
+	if out.objectStorage, err = transportsecurity.NewManager("object storage", transportsecurity.FromLinkTLS(cfg.TLS.ObjectStorage)); err != nil {
+		return out, fmt.Errorf("object storage tls: %w", err)
+	}
+	if out.parser, err = transportsecurity.NewManager("parser", transportsecurity.FromLinkTLS(cfg.TLS.Parser)); err != nil {
+		return out, fmt.Errorf("parser tls: %w", err)
+	}
+	return out, nil
 }
