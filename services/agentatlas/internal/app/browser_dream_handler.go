@@ -787,7 +787,7 @@ func (h *browserDreamHandler) putAdvancedPolicy(w http.ResponseWriter, r *http.R
 		h.writePolicy(w, session, *op.Replay, http.StatusOK)
 		return
 	}
-	audit, ok := h.auditPolicy(w, r, session, op, current, "advanced_update", map[string]any{"revision": input.Revision})
+	audit, ok := h.auditPolicy(w, r, session, op, current, "advanced.edit", map[string]any{"revision": input.Revision})
 	if !ok {
 		return
 	}
@@ -1009,7 +1009,7 @@ func (h *browserDreamHandler) backfillPolicy(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	if !session.AdvancedModeAllowed {
+	if !advancedModeEnabled(r, session) {
 		writeError(w, http.StatusForbidden, "advanced_mode_denied", "Dream backfill requires advanced maintenance authorization")
 		return
 	}

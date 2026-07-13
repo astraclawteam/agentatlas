@@ -227,6 +227,19 @@ func TestBrowserDreamAdvancedPolicyRequiresEntitlementAndExplicitMode(t *testing
 	if allowed.Code != http.StatusOK || !strings.Contains(allowed.Body.String(), `"timezone":"Asia/Shanghai"`) || nx.last.Action != "dream.policy.advanced.read" {
 		t.Fatalf("advanced get=%d body=%s auth=%+v", allowed.Code, allowed.Body.String(), nx.last)
 	}
+	var advanced browserDreamAdvancedPolicy
+	_ = json.Unmarshal(allowed.Body.Bytes(), &advanced)
+	advanced.Timezone = "UTC"
+	raw, _ := json.Marshal(advanced)
+	update := browserDreamRequest(http.MethodPut, "/api/dream/policies/"+summary.Handle+"/advanced", session, string(raw))
+	update.Header.Set("X-Atlas-Advanced-Mode", "enabled")
+	update.Header.Set("Idempotency-Key", "advanced-update-0001")
+	update = update.WithContext(context.WithValue(update.Context(), chi.RouteCtxKey, route))
+	updated := httptest.NewRecorder()
+	h.putAdvancedPolicy(updated, update)
+	if updated.Code != http.StatusOK || nx.last.Action != "dream.policy.advanced.edit" || nx.lastAudit.AuthorizedAction != "dream.policy.advanced.edit" {
+		t.Fatalf("advanced update=%d body=%s auth=%+v audit=%+v", updated.Code, updated.Body.String(), nx.last, nx.lastAudit)
+	}
 }
 
 func TestBrowserDreamMutationIsCSRFAndIdempotencyReadyAndAppendOnly(t *testing.T) {
@@ -435,6 +448,10 @@ func TestBrowserDreamPolicyGovernedLifecycleAndBackfill(t *testing.T) {
 	if deniedAdvanced.Code != http.StatusForbidden || backfiller.backfillCalls != 0 {
 		t.Fatalf("advanced gate status=%d calls=%d body=%s", deniedAdvanced.Code, backfiller.backfillCalls, deniedAdvanced.Body.String())
 	}
+	deniedInactive := callBrowserPolicy(t, h.backfillPolicy, http.MethodPost, "/api/dream/policies/"+policyHandle+"/backfills", creator, policyHandle, "denied-inactive-backfill", `{"window_start":"2026-07-01T00:00:00Z","window_end":"2026-07-02T00:00:00Z"}`)
+	if deniedInactive.Code != http.StatusForbidden || backfiller.backfillCalls != 0 {
+		t.Fatalf("inactive mode status=%d calls=%d body=%s", deniedInactive.Code, backfiller.backfillCalls, deniedInactive.Body.String())
+	}
 	view, err := policies.GetLifecycle(context.Background(), creator.EnterpriseID, claim.ResourceID)
 	if err != nil {
 		t.Fatal(err)
@@ -465,7 +482,7 @@ func TestBrowserDreamPolicyGovernedLifecycleAndBackfill(t *testing.T) {
 	if json.Unmarshal(published.Body.Bytes(), &summary) != nil || summary.Status != "published" {
 		t.Fatalf("publish=%d %s", published.Code, published.Body.String())
 	}
-	backfill := callBrowserPolicy(t, h.backfillPolicy, http.MethodPost, "/api/dream/policies/"+policyHandle+"/backfills", creator, policyHandle, "lifecycle-backfill-01", `{"window_start":"2026-07-01T00:00:00Z","window_end":"2026-07-02T00:00:00Z"}`)
+	backfill := callBrowserAdvancedPolicy(t, h.backfillPolicy, http.MethodPost, "/api/dream/policies/"+policyHandle+"/backfills", creator, policyHandle, "lifecycle-backfill-01", `{"window_start":"2026-07-01T00:00:00Z","window_end":"2026-07-02T00:00:00Z"}`)
 	if backfill.Code != http.StatusAccepted || backfiller.backfillCalls != 1 {
 		t.Fatalf("backfill=%d %s calls=%d", backfill.Code, backfill.Body.String(), backfiller.backfillCalls)
 	}
@@ -498,7 +515,7 @@ func TestBrowserDreamBackfillFailsBeforeWorkWithoutAuditClient(t *testing.T) {
 	}
 	h.evidence = nil
 	handle := summary.Handle
-	rec := callBrowserPolicy(t, h.backfillPolicy, http.MethodPost, "/api/dream/policies/"+handle+"/backfills", session, handle, "no-audit-backfill", `{"window_start":"2026-07-01T00:00:00Z","window_end":"2026-07-02T00:00:00Z"}`)
+	rec := callBrowserAdvancedPolicy(t, h.backfillPolicy, http.MethodPost, "/api/dream/policies/"+handle+"/backfills", session, handle, "no-audit-backfill", `{"window_start":"2026-07-01T00:00:00Z","window_end":"2026-07-02T00:00:00Z"}`)
 	if rec.Code != http.StatusServiceUnavailable || runner.backfillCalls != 0 {
 		t.Fatalf("status=%d calls=%d body=%s", rec.Code, runner.backfillCalls, rec.Body.String())
 	}
@@ -549,7 +566,7 @@ func TestBrowserDreamSuggestionAdoptionCreatesImmutableDirectEditLineageAndRepla
 
 func TestBrowserDreamRouterRequiresSessionForEveryRouteAndCSRFForeveryMutation(t *testing.T) {
 	now := time.Date(2026, 7, 12, 10, 0, 0, 0, time.UTC)
-	identity := browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", DisplayName: "陈经理", OrgVersion: 7, OrgUnitIDs: []string{"department:rd", "pg_mes"}, Permissions: []string{"dream:read", "dream:annotate", "dream:rerun", "dream:evidence:read", "edit", "approve_high_risk"}}
+	identity := browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", DisplayName: "陈经理", OrgVersion: 7, OrgUnitIDs: []string{"department:rd", "pg_mes"}, Permissions: []string{"dream:read", "dream:annotate", "dream:rerun", "dream:evidence:read", "edit", "approve_high_risk"}, AdvancedModeAllowed: true}
 	oidc := &fakeAtlasOIDC{profile: identity}
 	sessions, err := browsersession.New(browsersession.Config{Issuer: "https://nexus.example", ClientID: "agentatlas", ClientSecret: "secret", RedirectURI: "https://atlas.example/auth/callback"}, browsersession.NewMemoryStore(func() time.Time { return now }), oidc, func() time.Time { return now })
 	if err != nil {
@@ -570,7 +587,7 @@ func TestBrowserDreamRouterRequiresSessionForEveryRouteAndCSRFForeveryMutation(t
 	cookie := rr.Result().Cookies()[0]
 
 	routes := []struct{ method, path string }{
-		{http.MethodGet, "/api/dream/runs?org_unit_id=department:rd"}, {http.MethodGet, "/api/dream/runs/opaque"}, {http.MethodGet, "/api/dream/policies?org_unit_id=pg_mes"}, {http.MethodGet, "/api/dream/workflow-bindings?org_unit_id=pg_mes"},
+		{http.MethodGet, "/api/dream/runs?org_unit_id=department:rd"}, {http.MethodGet, "/api/dream/runs/opaque"}, {http.MethodGet, "/api/dream/policies?org_unit_id=pg_mes"}, {http.MethodGet, "/api/dream/workflow-bindings?org_unit_id=pg_mes"}, {http.MethodGet, "/api/dream/policies/opaque/advanced"},
 		{http.MethodPost, "/api/dream/runs/opaque/annotations"}, {http.MethodPost, "/api/dream/runs/opaque/reruns"}, {http.MethodPost, "/api/dream/runs/opaque/evidence-access"}, {http.MethodPost, "/api/dream/policies"}, {http.MethodPut, "/api/dream/policies/opaque"}, {http.MethodPost, "/api/dream/policies/opaque/adoptions"}, {http.MethodPost, "/api/dream/policies/opaque/check"}, {http.MethodPost, "/api/dream/policies/opaque/review"}, {http.MethodPost, "/api/dream/policies/opaque/decisions"}, {http.MethodPost, "/api/dream/policies/opaque/publish"}, {http.MethodPost, "/api/dream/policies/opaque/disable"}, {http.MethodPost, "/api/dream/policies/opaque/backfills"},
 	}
 	for _, route := range routes {
@@ -588,6 +605,15 @@ func TestBrowserDreamRouterRequiresSessionForEveryRouteAndCSRFForeveryMutation(t
 				router.ServeHTTP(response, request)
 				if response.Code != http.StatusForbidden {
 					t.Fatalf("without same-origin CSRF=%d body=%s", response.Code, response.Body.String())
+				}
+			} else if strings.Contains(route.path, "/advanced") {
+				request = httptest.NewRequest(route.method, "https://atlas.example"+route.path, nil)
+				request.AddCookie(cookie)
+				request.Header.Set("X-Atlas-Advanced-Mode", "enabled")
+				response = httptest.NewRecorder()
+				router.ServeHTTP(response, request)
+				if response.Code == http.StatusForbidden {
+					t.Fatalf("credentialed Advanced GET was incorrectly CSRF-gated: %s", response.Body.String())
 				}
 			}
 		})
@@ -608,11 +634,27 @@ func callBrowserPolicy(t *testing.T, handler http.HandlerFunc, method, target st
 	return rec
 }
 
+func callBrowserAdvancedPolicy(t *testing.T, handler http.HandlerFunc, method, target string, session browsersession.Session, id, key, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := browserDreamRequest(method, target, session, body)
+	req.Header.Set("Idempotency-Key", key)
+	req.Header.Set("X-Atlas-Advanced-Mode", "enabled")
+	if id != "" {
+		route := chi.NewRouteContext()
+		route.URLParams.Add("id", id)
+		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, route))
+	}
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	return rec
+}
+
 type fakeBrowserDreamNexus struct {
 	detail                 string
 	route                  nexus.ApprovalRoute
 	locates, reads, audits int
 	last                   nexus.BrowserAuthorizationRequest
+	lastAudit              nexus.AppendAuditEvidenceRequest
 }
 
 type browserPolicyStore struct {
@@ -665,8 +707,9 @@ func (f *fakeBrowserDreamNexus) AuthorizeBrowserOperation(_ context.Context, _ s
 func (f *fakeBrowserDreamNexus) ResolveApprovalRouteWithBearer(context.Context, string, nexus.ApprovalResolveRequest) (nexus.ApprovalRoute, error) {
 	return f.route, nil
 }
-func (f *fakeBrowserDreamNexus) AppendAuditEvidenceWithBearer(context.Context, string, nexus.AppendAuditEvidenceRequest) (nexus.AppendAuditEvidenceResponse, error) {
+func (f *fakeBrowserDreamNexus) AppendAuditEvidenceWithBearer(_ context.Context, _ string, request nexus.AppendAuditEvidenceRequest) (nexus.AppendAuditEvidenceResponse, error) {
 	f.audits++
+	f.lastAudit = request
 	return nexus.AppendAuditEvidenceResponse{AuditRefID: "audit-secret"}, nil
 }
 func (f *fakeBrowserDreamNexus) LocateEvidenceWithBearer(context.Context, string, nexus.LocateEvidenceRequest) (nexus.LocateEvidenceResponse, error) {

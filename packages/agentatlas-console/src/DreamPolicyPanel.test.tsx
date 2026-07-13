@@ -28,6 +28,16 @@ describe("DreamPolicyPanel", () => {
     expect(container.querySelectorAll(".dream-primary")).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ organization: "dept-b", bindingHandle: "binding-b" }), "policy-b"));
+    fireEvent.change(screen.getByLabelText("选择策略"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存梦境工作流" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ organization: "dept-b", bindingHandle: "binding-b" }), undefined));
+  });
+  it("keeps lifecycle actions visible for a custom advanced policy", () => {
+    const policy: DreamPolicyLifecycle = { handle: "custom-policy", organization_id: "dept", status: "draft", revision: 4, version: 0, permission_mode: "direct_edit", risk_reasons: [], cadence: "custom", input_sources: ["work_brief"], visibility: "managers", confirmation: "high_risk_only", can_adopt: false };
+    render(<DreamPolicyPanel organizations={[{ id: "dept", name: "研发一部" }]} bindings={bindings} initialPolicies={[policy]} advancedAllowed advancedMode />);
+    expect(screen.getByText("这是高级策略")).toBeVisible();
+    expect(screen.getByRole("button", { name: "检查并提交复核" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "编辑基础设置" })).not.toBeInTheDocument();
   });
   it("shows the advanced bridge only with authorization and active mode", () => {
     const { rerender } = render(<DreamPolicyPanel organizations={[{ id: "dept", name: "研发一部" }]} bindings={bindings} advancedAllowed advancedMode={false} />);

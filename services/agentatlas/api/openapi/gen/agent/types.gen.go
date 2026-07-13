@@ -1505,6 +1505,21 @@ func (e UpdateBrowserDreamAdvancedPolicyParamsXAtlasAdvancedMode) Valid() bool {
 	}
 }
 
+// Defines values for BackfillBrowserDreamPolicyParamsXAtlasAdvancedMode.
+const (
+	Enabled BackfillBrowserDreamPolicyParamsXAtlasAdvancedMode = "enabled"
+)
+
+// Valid indicates whether the value is a known member of the BackfillBrowserDreamPolicyParamsXAtlasAdvancedMode enum.
+func (e BackfillBrowserDreamPolicyParamsXAtlasAdvancedMode) Valid() bool {
+	switch e {
+	case Enabled:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DecideBrowserDreamPolicyJSONBodyDecision.
 const (
 	DecideBrowserDreamPolicyJSONBodyDecisionApprove DecideBrowserDreamPolicyJSONBodyDecision = "approve"
@@ -2477,8 +2492,12 @@ type UpdateBrowserDreamAdvancedPolicyParamsXAtlasAdvancedMode string
 
 // BackfillBrowserDreamPolicyParams defines parameters for BackfillBrowserDreamPolicy.
 type BackfillBrowserDreamPolicyParams struct {
-	IdempotencyKey string `json:"Idempotency-Key"`
+	XAtlasAdvancedMode BackfillBrowserDreamPolicyParamsXAtlasAdvancedMode `json:"X-Atlas-Advanced-Mode"`
+	IdempotencyKey     string                                             `json:"Idempotency-Key"`
 }
+
+// BackfillBrowserDreamPolicyParamsXAtlasAdvancedMode defines parameters for BackfillBrowserDreamPolicy.
+type BackfillBrowserDreamPolicyParamsXAtlasAdvancedMode string
 
 // CheckBrowserDreamPolicyRiskJSONBody defines parameters for CheckBrowserDreamPolicyRisk.
 type CheckBrowserDreamPolicyRiskJSONBody struct {

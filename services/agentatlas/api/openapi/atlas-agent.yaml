@@ -208,6 +208,7 @@ paths:
       operationId: backfillBrowserDreamPolicy
       parameters:
         - {name: id, in: path, required: true, schema: {$ref: '#/components/schemas/OpaqueDreamHandle'}}
+        - {name: X-Atlas-Advanced-Mode, in: header, required: true, schema: {type: string, enum: [enabled]}}
         - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserDreamBackfillRequest'}}}}
       responses: {'202': {description: Bounded audited backfill accepted, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserDreamRunHandleResponse'}}}}, '403': {description: Advanced maintenance or exact edit authorization denied.}, '409': {description: Window, lineage, overlap, or idempotency conflict.}}

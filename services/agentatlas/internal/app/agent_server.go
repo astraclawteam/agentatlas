@@ -193,6 +193,7 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 			r.Get("/runs/{id}", browserDream.detail)
 			r.Get("/policies", browserDream.listPolicies)
 			r.Get("/workflow-bindings", browserDream.listWorkflowBindings)
+			r.Get("/policies/{id}/advanced", browserDream.getAdvancedPolicy)
 			r.Group(func(r chi.Router) {
 				r.Use(sameOriginCSRF)
 				r.Post("/runs/{id}/annotations", browserDream.annotate)
@@ -201,7 +202,6 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 				r.Post("/policies", browserDream.createPolicy)
 				r.Post("/policies/{id}/adoptions", browserDream.adoptPolicy)
 				r.Put("/policies/{id}", browserDream.updatePolicy)
-				r.Get("/policies/{id}/advanced", browserDream.getAdvancedPolicy)
 				r.Put("/policies/{id}/advanced", browserDream.putAdvancedPolicy)
 				r.Post("/policies/{id}/check", browserDream.checkPolicy)
 				r.Post("/policies/{id}/review", browserDream.reviewPolicy)
