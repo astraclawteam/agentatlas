@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentatlas.dev/schemas/workcase/workcase.schema.json",
+  "title": "AgentAtlas WorkCase v1",
+  "description": "Top-level operating-work record. A WorkCase nests WorkPlan revisions; the authoritative WorkPlan shape lives in schemas/workcase/work-plan.schema.json so 'plans' below is intentionally shallow rather than duplicated.",
+  "$ref": "#/$defs/WorkCase",
+  "$defs": {
+    "Status": {
+      "type": "string",
+      "enum": ["draft", "reviewing", "executing", "completed", "terminated"]
+    },
+    "WorkCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "enterprise_id", "org_scope", "actor_ref", "status", "revision"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "enterprise_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "org_scope": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "actor_ref": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "status": { "$ref": "#/$defs/Status" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "plans": {
+          "type": "array",
+          "default": [],
+          "maxItems": 1000,
+          "items": {
+            "type": "object",
+            "description": "Authoritative shape is schemas/workcase/work-plan.schema.json#/$defs/WorkPlan."
+          }
+        }
+      }
+    }
+  }
+}

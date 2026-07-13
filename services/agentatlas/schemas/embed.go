@@ -18,3 +18,12 @@ var DreamSchemaJSON []byte
 
 //go:embed governance/governance.schema.json
 var GovernanceSchemaJSON []byte
+
+//go:embed workcase/workcase.schema.json
+var WorkCaseSchemaJSON []byte
+
+//go:embed workcase/work-plan.schema.json
+var WorkPlanSchemaJSON []byte
+
+//go:embed workcase/action.schema.json
+var ActionSpecSchemaJSON []byte

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentatlas.dev/schemas/workcase/action.schema.json",
+  "title": "AgentAtlas ActionSpec v1",
+  "description": "Frozen shape of one dispatchable action. Carries only opaque business-capability identifiers, parameter/idempotency hashes and policy fields -- never a connector endpoint, credential, URL or raw enterprise content.",
+  "$ref": "#/$defs/ActionSpec",
+  "$defs": {
+    "Precondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value_hash"],
+      "description": "A fact the runtime must reconfirm (by opaque value hash) before the action may execute.",
+      "properties": {
+        "kind": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "value_hash": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "ActionSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "business_capability", "parameters_hash", "idempotency_key", "expires_at"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Open, business-defined verb, for example read or write. Only \"write\" (any side-effecting action) is special-cased: it requires failure_policy."
+        },
+        "business_capability": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[a-z0-9]+(\\.[a-z0-9_]+)*$"
+        },
+        "parameters_hash": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "risk": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "preconditions": {
+          "type": "array",
+          "default": [],
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/Precondition" }
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Always present on the wire (mirrors a Go time.Time that cannot be omitted). The zero timestamp 0001-01-01T00:00:00Z means expiry not yet bound; Task 0D requires a bound, non-zero expiry before an Action can be granted."
+        },
+        "expected_receipt_schema": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "compensation_action_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "failure_policy": { "type": "string", "minLength": 1, "maxLength": 64 }
+      },
+      "if": {
+        "required": ["kind"],
+        "properties": { "kind": { "const": "write" } }
+      },
+      "then": {
+        "required": ["failure_policy"]
+      }
+    }
+  }
+}
