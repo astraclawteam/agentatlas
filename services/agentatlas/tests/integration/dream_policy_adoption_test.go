@@ -81,4 +81,57 @@ func TestDreamPolicyAdoptionPostgresConcurrencyReplayAndLineage(t *testing.T) {
 	if err != nil || lineage.TargetPolicyID != targetID || lineage.AdopterUserID != "editor" || lineage.OperationKey != key {
 		t.Fatalf("lineage=%+v err=%v", lineage, err)
 	}
+
+	competingSource := "policy-competing-source-" + suffix
+	if _, err := pool.Exec(ctx, `INSERT INTO dream_policies(id,enterprise_id,org_scope,status,draft,requester_user_id,permission_mode,audit_ref_id) VALUES($1,$2,'team','draft',$3,'employee-2','suggestion_only','audit-source-2')`, competingSource, ent, raw); err != nil {
+		t.Fatal(err)
+	}
+	keys := []string{"postgres-adoption-compete-a-" + suffix, "postgres-adoption-compete-b-" + suffix}
+	actors := []string{"editor-a", "editor-b"}
+	targets := []string{"policy-competing-target-a-" + suffix, "policy-competing-target-b-" + suffix}
+	for index := range keys {
+		if _, err := svc.BeginOperation(ctx, ent, keys[index], "adopt", competingSource, actors[index], strings.Repeat(string(rune('b'+index)), 64)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.RecordOperationAudit(ctx, ent, keys[index], "audit-"+keys[index]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type result struct {
+		index int
+		err   error
+	}
+	competingStart := make(chan struct{})
+	results := make(chan result, 2)
+	for index := range keys {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-competingStart
+			_, callErr := svc.AdoptSuggestion(ctx, ent, competingSource, targets[index], actors[index], "audit-"+keys[index], keys[index], 0)
+			results <- result{index: index, err: callErr}
+		}(index)
+	}
+	close(competingStart)
+	wg.Wait()
+	close(results)
+	winners := 0
+	for outcome := range results {
+		if outcome.err == nil {
+			winners++
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("competing adopters winners=%d, want exactly one", winners)
+	}
+	var targetCount, lineageCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM dream_policies WHERE enterprise_id=$1 AND id=ANY($2)`, ent, targets).Scan(&targetCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM dream_policy_adoptions WHERE enterprise_id=$1 AND source_policy_id=$2 AND source_revision=0`, ent, competingSource).Scan(&lineageCount); err != nil {
+		t.Fatal(err)
+	}
+	if targetCount != 1 || lineageCount != 1 {
+		t.Fatalf("competing adoption target_count=%d lineage_count=%d", targetCount, lineageCount)
+	}
 }

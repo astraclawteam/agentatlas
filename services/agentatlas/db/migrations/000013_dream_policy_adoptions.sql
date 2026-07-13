@@ -24,10 +24,17 @@ BEFORE UPDATE OR DELETE ON dream_policy_adoptions
 FOR EACH ROW EXECUTE FUNCTION reject_immutable_dream_output_change();
 
 -- +goose Down
-DELETE FROM dream_policy_transition_audits WHERE policy_id IN (SELECT target_policy_id FROM dream_policy_adoptions);
+-- +goose StatementBegin
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM dream_policy_adoptions) THEN
+        RAISE EXCEPTION 'cannot downgrade 000013: Dream policy adoption lineage and adopted descendants exist';
+    END IF;
+END $$;
+-- +goose StatementEnd
+
 DROP TRIGGER dream_policy_adoptions_immutable ON dream_policy_adoptions;
 DROP TABLE dream_policy_adoptions;
-DELETE FROM dream_policy_operations WHERE operation_kind='adopt';
 ALTER TABLE dream_policy_operations DROP CONSTRAINT dream_policy_operations_operation_kind_check;
 ALTER TABLE dream_policy_operations ADD CONSTRAINT dream_policy_operations_operation_kind_check
     CHECK (operation_kind IN ('create','update','review','decision','publish','disable','rerun','backfill'));

@@ -201,6 +201,8 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 				r.Post("/policies", browserDream.createPolicy)
 				r.Post("/policies/{id}/adoptions", browserDream.adoptPolicy)
 				r.Put("/policies/{id}", browserDream.updatePolicy)
+				r.Get("/policies/{id}/advanced", browserDream.getAdvancedPolicy)
+				r.Put("/policies/{id}/advanced", browserDream.putAdvancedPolicy)
 				r.Post("/policies/{id}/check", browserDream.checkPolicy)
 				r.Post("/policies/{id}/review", browserDream.reviewPolicy)
 				r.Post("/policies/{id}/decisions", browserDream.decidePolicy)

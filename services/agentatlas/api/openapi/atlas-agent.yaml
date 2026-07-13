@@ -62,7 +62,7 @@ paths:
     get:
       security: [{AtlasSession: []}]
       operationId: getBrowserDreamRun
-      parameters: [{name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}]
+      parameters: [{name: id, in: path, required: true, schema: {$ref: '#/components/schemas/OpaqueDreamHandle'}}]
       responses:
         '200': {description: Immutable sanitized Dream run, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserDreamRunView'}}}}
         '401': {$ref: '#/components/responses/Unauthorized'}
@@ -74,25 +74,25 @@ paths:
       operationId: annotateBrowserDreamRun
       description: Appends an idempotent governed annotation; immutable Dream output is never edited.
       parameters:
-        - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: id, in: path, required: true, schema: {$ref: '#/components/schemas/OpaqueDreamHandle'}}
         - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 256}}
       requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, required: [action], properties: {action: {type: string, enum: [confirm, reject, mark_incorrect, comment]}, comment: {type: string, maxLength: 4000}}}}}}
-      responses: {'201': {description: Annotation appended.}, '403': {description: Exact annotation authorization denied.}, '409': {description: Idempotency conflict.}}
+      responses: {'201': {description: Annotation appended, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserDreamAnnotation'}}}}, '403': {description: Exact annotation authorization denied.}, '409': {description: Idempotency conflict.}}
   /api/dream/runs/{id}/reruns:
     post:
       security: [{AtlasSession: []}]
       operationId: rerunBrowserDreamRun
       description: Creates an idempotent immutable rerun pinned to the original run window and versions.
       parameters:
-        - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: id, in: path, required: true, schema: {$ref: '#/components/schemas/OpaqueDreamHandle'}}
         - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 256}}
-      responses: {'202': {description: Rerun scheduled.}, '403': {description: Exact rerun authorization denied.}, '409': {description: Idempotency conflict.}}
+      responses: {'202': {description: Rerun scheduled, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserDreamRunHandleResponse'}}}}, '403': {description: Exact rerun authorization denied.}, '409': {description: Idempotency conflict.}}
   /api/dream/runs/{id}/evidence-access:
     post:
       security: [{AtlasSession: []}]
       operationId: accessBrowserDreamEvidence
       description: Requests a resource-bound AgentNexus Step Grant, appends mandatory audit, then returns sanitized detail without raw pointer, grant, or audit identifiers.
-      parameters: [{name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}]
+      parameters: [{name: id, in: path, required: true, schema: {$ref: '#/components/schemas/OpaqueDreamHandle'}}]
       responses:
         '200': {description: Sanitized audited evidence detail, content: {application/json: {schema: {type: object, additionalProperties: false, required: [content_type, sanitized_detail, content_hash], properties: {content_type: {type: string}, sanitized_detail: {type: string, maxLength: 100000}, content_hash: {type: string}}}}}}
         '403': {description: Step Grant or exact organization authorization denied.}
@@ -117,7 +117,7 @@ paths:
       description: Lists human-readable published Dream workflows with opaque session-bound binding handles; workflow and output-space identifiers are never returned.
       parameters: [{name: org_unit_id, in: query, required: true, schema: {type: string, minLength: 1, maxLength: 128}}]
       responses:
-        '200': {description: Bounded published Dream workflow bindings.}
+        '200': {description: Bounded published Dream workflow bindings, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserDreamWorkflowBindingList'}}}}
         '403': {description: Exact organization authorization denied.}
         '503': {description: Published workflow or authoritative output binding unavailable.}
   /api/dream/policies/{id}:
@@ -125,15 +125,32 @@ paths:
       security: [{AtlasSession: []}]
       operationId: updateBrowserDreamPolicyDraft
       parameters:
-        - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: id, in: path, required: true, schema: {$ref: '#/components/schemas/OpaqueDreamHandle'}}
         - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserDreamBasicPolicyUpdate'}}}}
       responses: {'200': {description: Draft updated without publication, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserDreamPolicyLifecycle'}}}}, '403': {description: Exact edit authorization denied.}, '409': {description: Revision or idempotency conflict.}}
+  /api/dream/policies/{id}/advanced:
+    get:
+      security: [{AtlasSession: []}]
+      operationId: getBrowserDreamAdvancedPolicy
+      parameters:
+        - {name: id, in: path, required: true, schema: {$ref: '#/components/schemas/OpaqueDreamHandle'}}
+        - {name: X-Atlas-Advanced-Mode, in: header, required: true, schema: {type: string, enum: [enabled]}}
+      responses: {'200': {description: Advanced policy fields, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserDreamAdvancedPolicy'}}}}, '403': {description: Advanced entitlement, mode, or exact authorization denied.}}
+    put:
+      security: [{AtlasSession: []}]
+      operationId: updateBrowserDreamAdvancedPolicy
+      parameters:
+        - {name: id, in: path, required: true, schema: {$ref: '#/components/schemas/OpaqueDreamHandle'}}
+        - {name: X-Atlas-Advanced-Mode, in: header, required: true, schema: {type: string, enum: [enabled]}}
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserDreamAdvancedPolicy'}}}}
+      responses: {'200': {description: Advanced policy draft updated, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserDreamPolicyLifecycle'}}}}, '403': {description: Advanced entitlement, mode, or exact authorization denied.}, '409': {description: Revision or idempotency conflict.}, '422': {description: Invalid advanced policy.}}
   /api/dream/policies/{id}/check:
     post:
       security: [{AtlasSession: []}]
       operationId: checkBrowserDreamPolicyRisk
-      parameters: [{name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}]
+      parameters: [{name: id, in: path, required: true, schema: {$ref: '#/components/schemas/OpaqueDreamHandle'}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [revision], properties: {revision: {type: integer, minimum: 0}}}}}}
       responses: {'200': {description: Deterministic risk and changed fields.}, '403': {description: Exact edit authorization denied.}, '409': {description: Stale revision.}}
   /api/dream/policies/{id}/adoptions:
@@ -142,11 +159,11 @@ paths:
       operationId: adoptBrowserDreamPolicySuggestion
       description: Creates a new direct-edit draft from an immutable employee suggestion and records durable source lineage; the source suggestion is never mutated.
       parameters:
-        - {name: id, in: path, required: true, schema: {type: string, minLength: 32, maxLength: 4096}}
+        - {name: id, in: path, required: true, schema: {$ref: '#/components/schemas/OpaqueDreamHandle'}}
         - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
       requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, required: [revision], properties: {revision: {type: integer, minimum: 0}}}}}}
       responses:
-        '201': {description: New direct-edit draft created with immutable adoption lineage.}
+        '201': {description: New direct-edit draft created with immutable adoption lineage, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserDreamPolicyLifecycle'}}}}
         '403': {description: Exact edit or organization authorization denied.}
         '409': {description: Suggestion state, revision, concurrency, or idempotency conflict.}
   /api/dream/policies/{id}/review:
@@ -154,7 +171,7 @@ paths:
       security: [{AtlasSession: []}]
       operationId: submitBrowserDreamPolicyReview
       parameters:
-        - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: id, in: path, required: true, schema: {$ref: '#/components/schemas/OpaqueDreamHandle'}}
         - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [revision, action], properties: {revision: {type: integer, minimum: 0}, action: {type: string, enum: [publish, disable]}}}}}}
       responses: {'200': {description: AgentNexus-bound single-confirmation, upward-review, or admin-queue route recorded.}, '403': {description: Requester, organization, or self-review rule denied.}, '409': {description: Invalid lifecycle state or revision.}}
@@ -163,7 +180,7 @@ paths:
       security: [{AtlasSession: []}]
       operationId: decideBrowserDreamPolicy
       parameters:
-        - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: id, in: path, required: true, schema: {$ref: '#/components/schemas/OpaqueDreamHandle'}}
         - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [revision, decision], properties: {revision: {type: integer, minimum: 0}, decision: {type: string, enum: [approve, reject]}, comment: {type: string, maxLength: 4000}}}}}}
       responses: {'200': {description: Assigned decision recorded; publication still separate.}, '403': {description: Wrong reviewer, self-review, permission, or organization denied.}, '409': {description: Invalid lifecycle state or revision.}}
@@ -172,7 +189,7 @@ paths:
       security: [{AtlasSession: []}]
       operationId: publishBrowserDreamPolicy
       parameters:
-        - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: id, in: path, required: true, schema: {$ref: '#/components/schemas/OpaqueDreamHandle'}}
         - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [revision], properties: {revision: {type: integer, minimum: 0}}}}}}
       responses: {'200': {description: Approved policy version published atomically.}, '403': {description: Exact edit authorization denied.}, '409': {description: Approved decision, valid workflow, revision, or idempotency requirement failed.}}
@@ -181,7 +198,7 @@ paths:
       security: [{AtlasSession: []}]
       operationId: disableBrowserDreamPolicy
       parameters:
-        - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: id, in: path, required: true, schema: {$ref: '#/components/schemas/OpaqueDreamHandle'}}
         - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [revision], properties: {revision: {type: integer, minimum: 0}}}}}}
       responses: {'200': {description: Approved high-risk disable completed.}, '403': {description: Exact edit authorization denied.}, '409': {description: Approved disable decision or lifecycle requirement failed.}}
@@ -190,10 +207,10 @@ paths:
       security: [{AtlasSession: []}]
       operationId: backfillBrowserDreamPolicy
       parameters:
-        - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: id, in: path, required: true, schema: {$ref: '#/components/schemas/OpaqueDreamHandle'}}
         - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [window_start, window_end], properties: {window_start: {type: string, format: date-time}, window_end: {type: string, format: date-time}, rerun_of_run_id: {type: string, maxLength: 128}}}}}}
-      responses: {'202': {description: Bounded audited backfill accepted.}, '403': {description: Exact edit authorization denied.}, '409': {description: Window, lineage, overlap, or idempotency conflict.}}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserDreamBackfillRequest'}}}}
+      responses: {'202': {description: Bounded audited backfill accepted, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserDreamRunHandleResponse'}}}}, '403': {description: Advanced maintenance or exact edit authorization denied.}, '409': {description: Window, lineage, overlap, or idempotency conflict.}}
   /auth/logout:
     post:
       security: [{AtlasSession: []}]
@@ -903,6 +920,56 @@ components:
         resource_id: {type: string}
         version: {type: integer, minimum: 1}
         audit_ref_id: {type: string}
+    OpaqueDreamHandle:
+      type: string
+      minLength: 32
+      maxLength: 4096
+      description: Opaque, encrypted, browser-session-family-bound Dream resource handle.
+    BrowserDreamRunHandleResponse:
+      type: object
+      additionalProperties: false
+      required: [handle]
+      properties:
+        handle: {$ref: '#/components/schemas/OpaqueDreamHandle'}
+    BrowserDreamBackfillRequest:
+      type: object
+      additionalProperties: false
+      required: [window_start, window_end]
+      properties:
+        window_start: {type: string, format: date-time}
+        window_end: {type: string, format: date-time}
+        rerun_handle: {$ref: '#/components/schemas/OpaqueDreamHandle'}
+    BrowserDreamAdvancedPolicy:
+      type: object
+      additionalProperties: false
+      required: [revision, timezone, schedule, masking_rules, risk_signal_rules, evidence_retention, max_attempts, allow_partial_children]
+      properties:
+        revision: {type: integer, minimum: 0}
+        timezone: {type: string, minLength: 1, maxLength: 100}
+        schedule: {type: string, minLength: 1, maxLength: 200}
+        masking_rules: {type: array, maxItems: 100, items: {type: string, maxLength: 1000}}
+        risk_signal_rules: {type: array, maxItems: 100, items: {type: string, maxLength: 1000}}
+        evidence_retention: {type: string, enum: [pointer_only, pointer_plus_display_summary]}
+        max_attempts: {type: integer, minimum: 1, maximum: 20}
+        allow_partial_children: {type: boolean}
+    BrowserDreamWorkflowBinding:
+      type: object
+      additionalProperties: false
+      required: [handle, name, version_label, output_name]
+      properties:
+        handle: {$ref: '#/components/schemas/OpaqueDreamHandle'}
+        name: {type: string, maxLength: 200}
+        version_label: {type: string, maxLength: 100}
+        output_name: {type: string, maxLength: 200}
+    BrowserDreamWorkflowBindingList:
+      type: object
+      additionalProperties: false
+      required: [bindings]
+      properties:
+        bindings:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/BrowserDreamWorkflowBinding'}
     DreamRunList:
       type: object
       additionalProperties: false
@@ -925,7 +992,7 @@ components:
       additionalProperties: false
       required: [handle, status, window_start, window_end, input_count, coverage, missing_input_reasons, facts, themes, trends, risks, todos, display_summary, rerun]
       properties:
-        handle: {type: string, minLength: 32, maxLength: 4096}
+        handle: {$ref: '#/components/schemas/OpaqueDreamHandle'}
         status: {type: string, enum: [pending, running, waiting_confirmation, succeeded, failed]}
         window_start: {type: string, format: date-time}
         window_end: {type: string, format: date-time}
@@ -939,6 +1006,8 @@ components:
         todos: {type: array, maxItems: 500, items: {$ref: '#/components/schemas/BrowserDreamSignal'}}
         display_summary: {type: string, maxLength: 10000}
         rerun: {type: boolean}
+        organization_name: {type: string, maxLength: 200}
+        rerun_relation: {type: string, maxLength: 200}
         failure_stage: {type: string, maxLength: 100}
         annotations: {type: array, maxItems: 500, items: {$ref: '#/components/schemas/BrowserDreamAnnotation'}}
         input_organizations: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/BrowserDreamLineage'}}
@@ -959,13 +1028,13 @@ components:
       properties:
         organization_name: {type: string, maxLength: 200}
         relation: {type: string, maxLength: 100}
-        handle: {type: string, minLength: 32, maxLength: 4096}
+        handle: {$ref: '#/components/schemas/OpaqueDreamHandle'}
     BrowserDreamPolicyLifecycle:
       type: object
       additionalProperties: false
       required: [handle, status, revision, version, permission_mode, risk_reasons, cadence, input_sources, visibility, confirmation, can_adopt, can_decide]
       properties:
-        handle: {type: string, minLength: 32, maxLength: 4096}
+        handle: {$ref: '#/components/schemas/OpaqueDreamHandle'}
         status: {type: string, enum: [draft, review_pending, approved, rejected, published, disabled]}
         revision: {type: integer, minimum: 0}
         version: {type: integer, minimum: 0}
@@ -991,7 +1060,7 @@ components:
         input_sources: {type: array, minItems: 1, maxItems: 16, uniqueItems: true, items: {type: string, enum: [work_brief, child_dream_summary, project_record, sop_update, agent_answer, external_evidence, completed_task, risk_event]}}
         visibility: {type: string, enum: [members, managers, company_sanitized]}
         confirmation: {type: string, enum: [always, high_risk_only, never]}
-        binding_handle: {type: string, minLength: 32, maxLength: 4096}
+        binding_handle: {$ref: '#/components/schemas/OpaqueDreamHandle'}
     BrowserDreamBasicPolicyUpdate:
       type: object
       additionalProperties: false
@@ -1003,7 +1072,7 @@ components:
         input_sources: {type: array, minItems: 1, maxItems: 16, uniqueItems: true, items: {type: string, enum: [work_brief, child_dream_summary, project_record, sop_update, agent_answer, external_evidence, completed_task, risk_event]}}
         visibility: {type: string, enum: [members, managers, company_sanitized]}
         confirmation: {type: string, enum: [always, high_risk_only, never]}
-        binding_handle: {type: string, minLength: 32, maxLength: 4096}
+        binding_handle: {$ref: '#/components/schemas/OpaqueDreamHandle'}
     Error:
       type: object
       required: [code, message]

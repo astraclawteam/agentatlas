@@ -29,7 +29,7 @@ func TestBrowserDreamReadRequiresExactSessionAndNexusOrganization(t *testing.T) 
 	store := &fakeDreamRunStore{run: run, runs: []db.DreamRun{{ID: run.ID, EnterpriseID: run.EnterpriseID, OrgUnitID: run.OrgUnitID}}}
 	auth := &fakeBrowserAuthorizer{}
 	h := &browserDreamHandler{store: store, authorizer: auth, handles: browserDreamTestCodec(t)}
-	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"department:rd"}, Permissions: []string{"dream:read"}}, UpstreamAccessToken: "bearer-session"}
+	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"department:rd"}, Permissions: []string{"dream:read"}}, FamilyID: "family-read", UpstreamAccessToken: "bearer-session"}
 
 	rec := httptest.NewRecorder()
 	h.list(rec, browserDreamRequest(http.MethodGet, "/api/dream/runs?org_unit_id=department:rd", session, ""))
@@ -124,6 +124,9 @@ func browserDreamTestCodec(t *testing.T) *browserDreamHandleCodec {
 func browserBasicPolicyBody(t *testing.T, h *browserDreamHandler, session browsersession.Session) []byte {
 	t.Helper()
 	binding := publishedDreamWorkflowBinding{WorkflowID: "wf-dream", WorkflowVersion: 3, WorkflowName: "企业梦境", OutputSpaceID: "spc_1", OutputName: "研发知识"}
+	if h.bindings == nil {
+		h.bindings = fakePublishedDreamBindingLister{items: []publishedDreamWorkflowBinding{binding}}
+	}
 	raw, _ := json.Marshal(binding)
 	handle, err := h.handles.issue(session, "binding", "pg_mes", string(raw))
 	if err != nil {
@@ -133,13 +136,106 @@ func browserBasicPolicyBody(t *testing.T, h *browserDreamHandler, session browse
 	return body
 }
 
+func TestBrowserDreamPolicyRejectsStalePublishedBindingHandle(t *testing.T) {
+	nx := &fakeBrowserDreamNexus{}
+	h := &browserDreamHandler{authorizer: nx, evidence: nx, operations: dream.NewPolicyService(newFakePolicyStore()), handles: browserDreamTestCodec(t)}
+	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes"}, Permissions: []string{"edit"}}, FamilyID: "family-policy-stale", UpstreamAccessToken: "bearer-session"}
+	body := browserBasicPolicyBody(t, h, session)
+	h.bindings = fakePublishedDreamBindingLister{}
+
+	rec := callBrowserPolicy(t, h.createPolicy, http.MethodPost, "/api/dream/policies", session, "", "stale-binding-create", string(body))
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "stale") {
+		t.Fatalf("stale binding status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestBrowserDreamBasicUpdatePreservesAdvancedFieldsAndOrganization(t *testing.T) {
+	nx := &fakeBrowserDreamNexus{}
+	store := &browserPolicyStore{fakePolicyStore: newFakePolicyStore()}
+	h := &browserDreamHandler{authorizer: nx, evidence: nx, operations: dream.NewPolicyService(store), handles: browserDreamTestCodec(t)}
+	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes", "pg_other"}, Permissions: []string{"edit"}}, FamilyID: "family-policy-merge", UpstreamAccessToken: "bearer-session"}
+	body := browserBasicPolicyBody(t, h, session)
+	created := callBrowserPolicy(t, h.createPolicy, http.MethodPost, "/api/dream/policies", session, "", "merge-create-0001", string(body))
+	var summary browserDreamPolicySummary
+	if created.Code != http.StatusCreated || json.Unmarshal(created.Body.Bytes(), &summary) != nil {
+		t.Fatalf("create=%d body=%s", created.Code, created.Body.String())
+	}
+	claim, err := h.handles.resolve(session, "policy", summary.Handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := store.policies[claim.ResourceID]
+	var canonical dream.Policy
+	if err := json.Unmarshal(row.Draft, &canonical); err != nil {
+		t.Fatal(err)
+	}
+	canonical.Timezone = "Pacific/Auckland"
+	canonical.MaskingRules = []string{"secret-[0-9]+"}
+	canonical.RiskSignalRules = []string{"critical"}
+	canonical.EvidenceRetention = "pointer_plus_display_summary"
+	canonical.MaxAttempts = 9
+	canonical.AllowPartialChildren = true
+	row.Draft, _ = json.Marshal(canonical)
+	store.policies[row.ID] = row
+
+	var basic map[string]any
+	_ = json.Unmarshal(body, &basic)
+	basic["org_unit_id"] = "pg_other"
+	wrongOrg, _ := json.Marshal(basic)
+	denied := callBrowserPolicy(t, h.updatePolicy, http.MethodPut, "/api/dream/policies/"+summary.Handle, session, summary.Handle, "merge-wrong-org-01", string(wrongOrg))
+	if denied.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("cross-org update=%d body=%s", denied.Code, denied.Body.String())
+	}
+
+	basic["org_unit_id"] = "pg_mes"
+	basic["cadence"] = "weekly"
+	updateBody, _ := json.Marshal(basic)
+	updated := callBrowserPolicy(t, h.updatePolicy, http.MethodPut, "/api/dream/policies/"+summary.Handle, session, summary.Handle, "merge-update-0001", string(updateBody))
+	if updated.Code != http.StatusOK {
+		t.Fatalf("update=%d body=%s", updated.Code, updated.Body.String())
+	}
+	row = store.policies[claim.ResourceID]
+	if err := json.Unmarshal(row.Draft, &canonical); err != nil {
+		t.Fatal(err)
+	}
+	if canonical.OrgUnitID != "pg_mes" || canonical.Schedule != "0 22 * * 0" || canonical.Timezone != "Pacific/Auckland" || len(canonical.MaskingRules) != 1 || len(canonical.RiskSignalRules) != 1 || canonical.EvidenceRetention != "pointer_plus_display_summary" || canonical.MaxAttempts != 9 || !canonical.AllowPartialChildren {
+		t.Fatalf("basic update erased or moved advanced policy fields: %+v", canonical)
+	}
+}
+
+func TestBrowserDreamAdvancedPolicyRequiresEntitlementAndExplicitMode(t *testing.T) {
+	nx := &fakeBrowserDreamNexus{}
+	store := &browserPolicyStore{fakePolicyStore: newFakePolicyStore()}
+	h := &browserDreamHandler{authorizer: nx, evidence: nx, operations: dream.NewPolicyService(store), handles: browserDreamTestCodec(t)}
+	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "provider-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes"}, Permissions: []string{"edit"}, AdvancedModeAllowed: true}, FamilyID: "family-advanced", UpstreamAccessToken: "bearer-session"}
+	created := callBrowserPolicy(t, h.createPolicy, http.MethodPost, "/api/dream/policies", session, "", "advanced-create-001", string(browserBasicPolicyBody(t, h, session)))
+	var summary browserDreamPolicySummary
+	_ = json.Unmarshal(created.Body.Bytes(), &summary)
+
+	request := browserDreamRequest(http.MethodGet, "/api/dream/policies/"+summary.Handle+"/advanced", session, "")
+	route := chi.NewRouteContext()
+	route.URLParams.Add("id", summary.Handle)
+	request = request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, route))
+	denied := httptest.NewRecorder()
+	h.getAdvancedPolicy(denied, request)
+	if denied.Code != http.StatusForbidden {
+		t.Fatalf("inactive advanced mode=%d body=%s", denied.Code, denied.Body.String())
+	}
+	request.Header.Set("X-Atlas-Advanced-Mode", "enabled")
+	allowed := httptest.NewRecorder()
+	h.getAdvancedPolicy(allowed, request)
+	if allowed.Code != http.StatusOK || !strings.Contains(allowed.Body.String(), `"timezone":"Asia/Shanghai"`) || nx.last.Action != "dream.policy.advanced.read" {
+		t.Fatalf("advanced get=%d body=%s auth=%+v", allowed.Code, allowed.Body.String(), nx.last)
+	}
+}
+
 func TestBrowserDreamMutationIsCSRFAndIdempotencyReadyAndAppendOnly(t *testing.T) {
 	run := dreamRunFixture()
 	run.ParentRunIds = nil
 	store := &fakeDreamRunStore{run: run}
 	auth := &fakeBrowserAuthorizer{}
 	h := &browserDreamHandler{store: store, authorizer: auth, handles: browserDreamTestCodec(t)}
-	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"department:rd"}, Permissions: []string{"dream:annotate", "dream:read"}}, UpstreamAccessToken: "bearer-session"}
+	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"department:rd"}, Permissions: []string{"dream:annotate", "dream:read"}}, FamilyID: "family-annotation", UpstreamAccessToken: "bearer-session"}
 
 	handle, _ := h.handles.issue(session, "run", run.OrgUnitID, run.ID)
 	req := browserDreamRequest(http.MethodPost, "/api/dream/runs/"+handle+"/annotations", session, `{"action":"mark_incorrect","comment":"wrong"}`)
@@ -202,7 +298,7 @@ func TestBrowserDreamEvidenceFailsClosedBeforeReturningSanitizedDetail(t *testin
 	store := &fakeDreamRunStore{run: run}
 	nx := &fakeBrowserDreamNexus{detail: "sanitized detail"}
 	h := &browserDreamHandler{store: store, authorizer: nx, evidence: nx, handles: browserDreamTestCodec(t)}
-	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"department:rd"}, Permissions: []string{"dream:evidence:read"}}, UpstreamAccessToken: "bearer-session"}
+	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"department:rd"}, Permissions: []string{"dream:evidence:read"}}, FamilyID: "family-evidence", UpstreamAccessToken: "bearer-session"}
 
 	handle, _ := h.handles.issue(session, "run", run.OrgUnitID, run.ID)
 	req := browserDreamRequest(http.MethodPost, "/api/dream/runs/"+handle+"/evidence-access", session, "{}")
@@ -248,7 +344,7 @@ func TestBrowserDreamRerunUsesBearerAuditAndPinnedIdempotency(t *testing.T) {
 	rerunner := &fakeDreamRerunner{}
 	operations := dream.NewPolicyService(newFakePolicyStore())
 	h := &browserDreamHandler{store: store, authorizer: nx, evidence: nx, rerun: rerunner, operations: operations, handles: browserDreamTestCodec(t)}
-	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"department:rd"}, Permissions: []string{"dream:rerun"}}, UpstreamAccessToken: "bearer-session"}
+	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"department:rd"}, Permissions: []string{"dream:rerun"}}, FamilyID: "family-rerun", UpstreamAccessToken: "bearer-session"}
 	handle, _ := h.handles.issue(session, "run", run.OrgUnitID, run.ID)
 	req := browserDreamRequest(http.MethodPost, "/api/dream/runs/"+handle+"/reruns", session, "{}")
 	req.Header.Set("Idempotency-Key", "browser-rerun-key-0001")
@@ -293,12 +389,16 @@ func TestBrowserDreamPolicyCreateIsDraftOnlyAuthorizedAndAudited(t *testing.T) {
 }
 
 func TestBrowserDreamPublishedBindingListReturnsHumanLabelsAndOpaqueHandlesOnly(t *testing.T) {
-	h := &browserDreamHandler{authorizer: &fakeBrowserAuthorizer{}, handles: browserDreamTestCodec(t), bindings: fakePublishedDreamBindingLister{items: []publishedDreamWorkflowBinding{{WorkflowID: "workflow-secret", WorkflowVersion: 7, WorkflowName: "企业梦境整理", OutputSpaceID: "space-secret", OutputName: "研发知识"}}}}
+	auth := &fakeBrowserAuthorizer{}
+	h := &browserDreamHandler{authorizer: auth, handles: browserDreamTestCodec(t), bindings: fakePublishedDreamBindingLister{items: []publishedDreamWorkflowBinding{{WorkflowID: "workflow-secret", WorkflowVersion: 7, WorkflowName: "企业梦境整理", OutputSpaceID: "space-secret", OutputName: "研发知识"}}}}
 	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "editor-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes"}, Permissions: []string{"dream:read"}}, FamilyID: "binding-family", UpstreamAccessToken: "bearer"}
 	rec := httptest.NewRecorder()
 	h.listWorkflowBindings(rec, browserDreamRequest(http.MethodGet, "/api/dream/workflow-bindings?org_unit_id=pg_mes", session, ""))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "企业梦境整理") || !strings.Contains(rec.Body.String(), "研发知识") || !strings.Contains(rec.Body.String(), `"handle"`) || strings.Contains(rec.Body.String(), "workflow-secret") || strings.Contains(rec.Body.String(), "space-secret") {
 		t.Fatalf("bindings=%d %s", rec.Code, rec.Body.String())
+	}
+	if auth.last.ResourceType != "workflow" || auth.last.ResourceID != "pg_mes" || auth.last.Action != "workflow.read" {
+		t.Fatalf("binding authorization tuple=%+v", auth.last)
 	}
 }
 
@@ -316,7 +416,7 @@ func TestBrowserDreamPolicyGovernedLifecycleAndBackfill(t *testing.T) {
 	policies := dream.NewPolicyService(policyStore)
 	backfiller := &fakeDreamRerunner{}
 	h := &browserDreamHandler{authorizer: nx, evidence: nx, operations: policies, backfill: backfiller, handles: browserDreamTestCodec(t)}
-	creator := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent_1", UserID: "creator-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes"}, Permissions: []string{"edit", "dream:read"}}, FamilyID: "family-lifecycle", UpstreamAccessToken: "bearer-session"}
+	creator := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent_1", UserID: "creator-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes"}, Permissions: []string{"edit", "dream:read"}, AdvancedModeAllowed: true}, FamilyID: "family-lifecycle", UpstreamAccessToken: "bearer-session"}
 	reviewer := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent_1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes"}, Permissions: []string{"approve_high_risk"}}, FamilyID: "family-lifecycle", UpstreamAccessToken: "bearer-reviewer"}
 	body := browserBasicPolicyBody(t, h, creator)
 	created := callBrowserPolicy(t, h.createPolicy, http.MethodPost, "/api/dream/policies", creator, "", "lifecycle-create-0001", string(body))
@@ -329,6 +429,12 @@ func TestBrowserDreamPolicyGovernedLifecycleAndBackfill(t *testing.T) {
 		t.Fatal(err)
 	}
 	policyHandle := summary.Handle
+	nonAdvanced := creator
+	nonAdvanced.AdvancedModeAllowed = false
+	deniedAdvanced := callBrowserPolicy(t, h.backfillPolicy, http.MethodPost, "/api/dream/policies/"+policyHandle+"/backfills", nonAdvanced, policyHandle, "denied-advanced-backfill", `{"window_start":"2026-07-01T00:00:00Z","window_end":"2026-07-02T00:00:00Z"}`)
+	if deniedAdvanced.Code != http.StatusForbidden || backfiller.backfillCalls != 0 {
+		t.Fatalf("advanced gate status=%d calls=%d body=%s", deniedAdvanced.Code, backfiller.backfillCalls, deniedAdvanced.Body.String())
+	}
 	view, err := policies.GetLifecycle(context.Background(), creator.EnterpriseID, claim.ResourceID)
 	if err != nil {
 		t.Fatal(err)
@@ -336,6 +442,9 @@ func TestBrowserDreamPolicyGovernedLifecycleAndBackfill(t *testing.T) {
 	listed := callBrowserPolicy(t, h.listPolicies, http.MethodGet, "/api/dream/policies?org_unit_id=pg_mes", creator, "", "", "")
 	if listed.Code != http.StatusOK || !containsBytes(listed.Body.Bytes(), []byte(`"status":"draft"`)) {
 		t.Fatalf("draft list=%d %s", listed.Code, listed.Body.String())
+	}
+	if nx.last.ResourceType != "dream_policy" || nx.last.ResourceID != "pg_mes" || nx.last.Action != "dream.policy.read" {
+		t.Fatalf("policy list authorization tuple=%+v", nx.last)
 	}
 	intruder := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent_1", UserID: "viewer-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes"}, Permissions: []string{"dream:read"}}, UpstreamAccessToken: "bearer-viewer"}
 	intruder.FamilyID = creator.FamilyID
@@ -380,7 +489,7 @@ func TestBrowserDreamBackfillFailsBeforeWorkWithoutAuditClient(t *testing.T) {
 	nx := &fakeBrowserDreamNexus{}
 	runner := &fakeDreamRerunner{}
 	h := &browserDreamHandler{authorizer: nx, evidence: nx, operations: policies, backfill: runner, handles: browserDreamTestCodec(t)}
-	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "editor-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes"}, Permissions: []string{"edit"}}, FamilyID: "family-no-audit", UpstreamAccessToken: "bearer"}
+	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "editor-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes"}, Permissions: []string{"edit"}, AdvancedModeAllowed: true}, FamilyID: "family-no-audit", UpstreamAccessToken: "bearer"}
 	body := browserBasicPolicyBody(t, h, session)
 	created := callBrowserPolicy(t, h.createPolicy, http.MethodPost, "/api/dream/policies", session, "", "create-no-audit-0001", string(body))
 	var summary browserDreamPolicySummary
@@ -422,6 +531,9 @@ func TestBrowserDreamSuggestionAdoptionCreatesImmutableDirectEditLineageAndRepla
 	var adopted browserDreamPolicySummary
 	if adopt.Code != http.StatusCreated || json.Unmarshal(adopt.Body.Bytes(), &adopted) != nil || adopted.PermissionMode != "direct_edit" || adopted.Handle == handle {
 		t.Fatalf("adopt=%d %s", adopt.Code, adopt.Body.String())
+	}
+	if nx.last.ResourceType != "dream_policy" || nx.last.ResourceID != sourceClaim.ResourceID || nx.last.Action != "dream.policy.adopt" {
+		t.Fatalf("adoption authorization tuple=%+v", nx.last)
 	}
 	if source := store.policies[sourceClaim.ResourceID]; source.PermissionMode != "suggestion_only" || source.RequesterUserID != "employee-1" {
 		t.Fatalf("source suggestion mutated: %+v", source)
@@ -500,6 +612,7 @@ type fakeBrowserDreamNexus struct {
 	detail                 string
 	route                  nexus.ApprovalRoute
 	locates, reads, audits int
+	last                   nexus.BrowserAuthorizationRequest
 }
 
 type browserPolicyStore struct {
@@ -546,6 +659,7 @@ func (s *browserPolicyStore) ListDreamPolicyLifecyclesByOrgBounded(_ context.Con
 }
 
 func (f *fakeBrowserDreamNexus) AuthorizeBrowserOperation(_ context.Context, _ string, req nexus.BrowserAuthorizationRequest) (nexus.BrowserAuthorizationDecision, error) {
+	f.last = req
 	return nexus.BrowserAuthorizationDecision{Decision: "allow", OrgVersion: req.OrgVersion, OrgUnitIDs: []string{req.OrgUnitID}}, nil
 }
 func (f *fakeBrowserDreamNexus) ResolveApprovalRouteWithBearer(context.Context, string, nexus.ApprovalResolveRequest) (nexus.ApprovalRoute, error) {

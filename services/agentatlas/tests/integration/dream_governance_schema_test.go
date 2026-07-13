@@ -439,6 +439,50 @@ func TestDreamMigrationDownContracts(t *testing.T) {
 	if dsn == "" {
 		t.Skip("set ATLAS_TEST_POSTGRES_DSN (production-standard postgres from deploy/compose)")
 	}
+	t.Run("000013 empty round trip", func(t *testing.T) {
+		ctx, db := openDreamMigrationDB(t, dsn, 13)
+		defer db.Close()
+		if err := goose.DownToContext(ctx, db, "migrations", 12); err != nil {
+			t.Fatalf("empty 000013 down: %v", err)
+		}
+		if err := goose.UpToContext(ctx, db, "migrations", 13); err != nil {
+			t.Fatalf("empty 000013 up after down: %v", err)
+		}
+	})
+	t.Run("000013 populated fail closed", func(t *testing.T) {
+		ctx, db := openDreamMigrationDB(t, dsn, 13)
+		defer db.Close()
+		if _, err := db.ExecContext(ctx, `
+			insert into enterprises(id,name) values('down13-ent','Down 13');
+			insert into dream_policies(id,enterprise_id,org_scope,status,draft,requester_user_id,permission_mode,audit_ref_id) values
+				('down13-source','down13-ent','team','draft','{}','employee','suggestion_only','source-audit'),
+				('down13-target','down13-ent','team','draft','{}','editor','direct_edit','target-audit');
+			insert into dream_policy_operations(enterprise_id,operation_key,operation_kind,policy_id,actor_user_id,request_hash,facts_nonce,audit_ref_id)
+			values('down13-ent','down13-adopt-operation','adopt','down13-source','editor',repeat('a',64),'down13-facts-nonce','operation-audit');
+			insert into dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
+			values('down13-ent','down13-target',0,'adopt','down13-adopt-operation','transition-audit','editor');
+			insert into dream_policy_adoptions(enterprise_id,source_policy_id,source_requester_user_id,source_revision,target_policy_id,adopter_user_id,audit_ref_id,operation_key)
+			values('down13-ent','down13-source','employee',0,'down13-target','editor','adoption-audit','down13-adopt-operation');
+		`); err != nil {
+			t.Fatal(err)
+		}
+		if err := goose.DownToContext(ctx, db, "migrations", 12); err == nil {
+			t.Fatal("000013 down discarded populated adoption lineage")
+		} else if !strings.Contains(err.Error(), "cannot downgrade 000013") {
+			t.Fatalf("000013 down failed for the wrong reason: %v", err)
+		}
+		for name, query := range map[string]string{
+			"lineage":    `select count(*) from dream_policy_adoptions where enterprise_id='down13-ent'`,
+			"descendant": `select count(*) from dream_policies where enterprise_id='down13-ent' and id='down13-target'`,
+			"audit":      `select count(*) from dream_policy_transition_audits where enterprise_id='down13-ent' and policy_id='down13-target'`,
+			"operation":  `select count(*) from dream_policy_operations where enterprise_id='down13-ent' and operation_key='down13-adopt-operation'`,
+		} {
+			var count int
+			if err := db.QueryRowContext(ctx, query).Scan(&count); err != nil || count != 1 {
+				t.Fatalf("%s was not preserved: count=%d err=%v", name, count, err)
+			}
+		}
+	})
 	t.Run("000008 safe", func(t *testing.T) {
 		ctx, db := openDreamMigrationDB(t, dsn, 8)
 		if err := goose.DownToContext(ctx, db, "migrations", 7); err != nil {

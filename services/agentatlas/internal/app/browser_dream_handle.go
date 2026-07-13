@@ -71,8 +71,5 @@ func (c *browserDreamHandleCodec) resolve(session browsersession.Session, kind, 
 }
 
 func browserDreamSessionBinding(session browsersession.Session) string {
-	if session.FamilyID != "" {
-		return session.FamilyID
-	}
-	return session.UserID
+	return session.FamilyID
 }

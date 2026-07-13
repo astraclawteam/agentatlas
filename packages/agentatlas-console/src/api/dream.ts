@@ -11,6 +11,8 @@ export interface DreamLineage { organization_name: string; relation: string; han
 export interface DreamRun {
   handle: string;
   organization_id?: string;
+  organization_name?: string;
+  rerun_relation?: string;
   status: DreamRunStatus;
   window_start: string;
   window_end: string;
@@ -42,6 +44,7 @@ export interface BasicDreamPolicy {
 export interface DreamWorkflowBinding { handle: string; name: string; version_label: string; output_name: string; organization_id?: string }
 export interface DreamPolicyLifecycle {
   handle: string;
+  organization_id?: string;
   status: "draft" | "review_pending" | "approved" | "rejected" | "published" | "disabled";
   revision: number;
   version: number;
@@ -58,6 +61,7 @@ export interface DreamPolicyLifecycle {
   can_adopt: boolean;
   can_decide?: boolean;
 }
+export interface AdvancedDreamPolicy { revision: number; timezone: string; schedule: string; masking_rules: string[]; risk_signal_rules: string[]; evidence_retention: "pointer_only" | "pointer_plus_display_summary"; max_attempts: number; allow_partial_children: boolean }
 
 export function listDreamRuns(orgUnitID: string, window?: string, signal?: AbortSignal) {
   const query = new URLSearchParams({ org_unit_id: orgUnitID });
@@ -69,7 +73,7 @@ export function annotateDreamRun(handle: string, action: DreamAnnotation["action
 export function rerunDreamRun(handle: string, key = operationKey("rerun", handle, "pinned")) { return api<{ handle: string }>(`/api/dream/runs/${encodeURIComponent(handle)}/reruns`, { method: "POST", headers: { "Idempotency-Key": key }, body: "{}" }); }
 export function accessDreamEvidence(handle: string) { return api<{ sanitized_detail: string }>(`/api/dream/runs/${encodeURIComponent(handle)}/evidence-access`, { method: "POST", body: "{}" }); }
 
-export function listDreamPolicies(orgUnitID: string, signal?: AbortSignal) { return api<{ dream_policies: DreamPolicyLifecycle[] }>(`/api/dream/policies?org_unit_id=${encodeURIComponent(orgUnitID)}`, { signal }).then((value) => value.dream_policies ?? []); }
+export function listDreamPolicies(orgUnitID: string, signal?: AbortSignal) { return api<{ dream_policies: DreamPolicyLifecycle[] }>(`/api/dream/policies?org_unit_id=${encodeURIComponent(orgUnitID)}`, { signal }).then((value) => (value.dream_policies ?? []).map((policy) => ({ ...policy, organization_id: orgUnitID }))); }
 export function listDreamWorkflowBindings(orgUnitID: string, signal?: AbortSignal) { return api<{ bindings: DreamWorkflowBinding[] }>(`/api/dream/workflow-bindings?org_unit_id=${encodeURIComponent(orgUnitID)}`, { signal }).then((value) => (value.bindings ?? []).map((binding) => ({ ...binding, organization_id: orgUnitID }))); }
 export function createDreamPolicy(policy: BasicDreamPolicy, key = operationKey("policy", policy.organization, JSON.stringify(policy))) { return api<DreamPolicyLifecycle>("/api/dream/policies", { method: "POST", headers: { "Idempotency-Key": key }, body: JSON.stringify({ org_unit_id: policy.organization, cadence: policy.cadence, input_sources: policy.inputSources, visibility: policy.visibility, confirmation: policy.confirmation, binding_handle: policy.bindingHandle }) }); }
 export function updateDreamPolicy(handle: string, revision: number, policy: BasicDreamPolicy) { return policyAction(handle, "", "PUT", { revision, org_unit_id: policy.organization, cadence: policy.cadence, input_sources: policy.inputSources, visibility: policy.visibility, confirmation: policy.confirmation, binding_handle: policy.bindingHandle }, operationKey("policy-update", handle, `${revision}:${JSON.stringify(policy)}`)); }
@@ -80,6 +84,8 @@ export function decideDreamPolicy(handle: string, revision: number, decision: "a
 export function publishDreamPolicy(handle: string, revision: number) { return policyAction(handle, "publish", "POST", { revision }, operationKey("policy-publish", handle, String(revision))); }
 export function disableDreamPolicy(handle: string, revision: number) { return policyAction(handle, "disable", "POST", { revision }, operationKey("policy-disable", handle, String(revision))); }
 export function backfillDreamPolicy(handle: string, windowStart: string, windowEnd: string) { return api<{ handle: string }>(`${policyPath(handle)}/backfills`, { method: "POST", headers: { "Idempotency-Key": operationKey("policy-backfill", handle, `${windowStart}:${windowEnd}`) }, body: JSON.stringify({ window_start: windowStart, window_end: windowEnd }) }); }
+export function getAdvancedDreamPolicy(handle: string, signal?: AbortSignal) { return api<AdvancedDreamPolicy>(`${policyPath(handle)}/advanced`, { signal, headers: { "X-Atlas-Advanced-Mode": "enabled" } }); }
+export function updateAdvancedDreamPolicy(handle: string, value: AdvancedDreamPolicy) { return api<DreamPolicyLifecycle>(`${policyPath(handle)}/advanced`, { method: "PUT", headers: { "X-Atlas-Advanced-Mode": "enabled", "Idempotency-Key": operationKey("policy-advanced", handle, `${value.revision}:${JSON.stringify(value)}`) }, body: JSON.stringify(value) }); }
 function policyAction(handle: string, suffix: string, method: "POST" | "PUT", body: unknown, key: string) { return api<DreamPolicyLifecycle>(`${policyPath(handle)}${suffix ? `/${suffix}` : ""}`, { method, headers: { "Idempotency-Key": key }, body: JSON.stringify(body) }); }
 function policyPath(handle: string) { return `/api/dream/policies/${encodeURIComponent(handle)}`; }
 

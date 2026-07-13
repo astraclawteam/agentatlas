@@ -62,6 +62,24 @@ func (e AgentRunStatus) Valid() bool {
 	}
 }
 
+// Defines values for BrowserDreamAdvancedPolicyEvidenceRetention.
+const (
+	PointerOnly               BrowserDreamAdvancedPolicyEvidenceRetention = "pointer_only"
+	PointerPlusDisplaySummary BrowserDreamAdvancedPolicyEvidenceRetention = "pointer_plus_display_summary"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamAdvancedPolicyEvidenceRetention enum.
+func (e BrowserDreamAdvancedPolicyEvidenceRetention) Valid() bool {
+	switch e {
+	case PointerOnly:
+		return true
+	case PointerPlusDisplaySummary:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for BrowserDreamAnnotationAction.
 const (
 	BrowserDreamAnnotationActionComment       BrowserDreamAnnotationAction = "comment"
@@ -1457,6 +1475,36 @@ func (e VisibilitySnapshotSummaryVisibilityLevel) Valid() bool {
 	}
 }
 
+// Defines values for GetBrowserDreamAdvancedPolicyParamsXAtlasAdvancedMode.
+const (
+	GetBrowserDreamAdvancedPolicyParamsXAtlasAdvancedModeEnabled GetBrowserDreamAdvancedPolicyParamsXAtlasAdvancedMode = "enabled"
+)
+
+// Valid indicates whether the value is a known member of the GetBrowserDreamAdvancedPolicyParamsXAtlasAdvancedMode enum.
+func (e GetBrowserDreamAdvancedPolicyParamsXAtlasAdvancedMode) Valid() bool {
+	switch e {
+	case GetBrowserDreamAdvancedPolicyParamsXAtlasAdvancedModeEnabled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateBrowserDreamAdvancedPolicyParamsXAtlasAdvancedMode.
+const (
+	UpdateBrowserDreamAdvancedPolicyParamsXAtlasAdvancedModeEnabled UpdateBrowserDreamAdvancedPolicyParamsXAtlasAdvancedMode = "enabled"
+)
+
+// Valid indicates whether the value is a known member of the UpdateBrowserDreamAdvancedPolicyParamsXAtlasAdvancedMode enum.
+func (e UpdateBrowserDreamAdvancedPolicyParamsXAtlasAdvancedMode) Valid() bool {
+	switch e {
+	case UpdateBrowserDreamAdvancedPolicyParamsXAtlasAdvancedModeEnabled:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DecideBrowserDreamPolicyJSONBodyDecision.
 const (
 	DecideBrowserDreamPolicyJSONBodyDecisionApprove DecideBrowserDreamPolicyJSONBodyDecision = "approve"
@@ -1700,6 +1748,21 @@ type AgentRunPendingConfirmationRiskLevel string
 // AgentRunStatus defines model for AgentRun.Status.
 type AgentRunStatus string
 
+// BrowserDreamAdvancedPolicy defines model for BrowserDreamAdvancedPolicy.
+type BrowserDreamAdvancedPolicy struct {
+	AllowPartialChildren bool                                        `json:"allow_partial_children"`
+	EvidenceRetention    BrowserDreamAdvancedPolicyEvidenceRetention `json:"evidence_retention"`
+	MaskingRules         []string                                    `json:"masking_rules"`
+	MaxAttempts          int                                         `json:"max_attempts"`
+	Revision             int                                         `json:"revision"`
+	RiskSignalRules      []string                                    `json:"risk_signal_rules"`
+	Schedule             string                                      `json:"schedule"`
+	Timezone             string                                      `json:"timezone"`
+}
+
+// BrowserDreamAdvancedPolicyEvidenceRetention defines model for BrowserDreamAdvancedPolicy.EvidenceRetention.
+type BrowserDreamAdvancedPolicyEvidenceRetention string
+
 // BrowserDreamAnnotation defines model for BrowserDreamAnnotation.
 type BrowserDreamAnnotation struct {
 	Action    BrowserDreamAnnotationAction `json:"action"`
@@ -1711,9 +1774,18 @@ type BrowserDreamAnnotation struct {
 // BrowserDreamAnnotationAction defines model for BrowserDreamAnnotation.Action.
 type BrowserDreamAnnotationAction string
 
+// BrowserDreamBackfillRequest defines model for BrowserDreamBackfillRequest.
+type BrowserDreamBackfillRequest struct {
+	// RerunHandle Opaque, encrypted, browser-session-family-bound Dream resource handle.
+	RerunHandle *OpaqueDreamHandle `json:"rerun_handle,omitempty"`
+	WindowEnd   time.Time          `json:"window_end"`
+	WindowStart time.Time          `json:"window_start"`
+}
+
 // BrowserDreamBasicPolicyInput defines model for BrowserDreamBasicPolicyInput.
 type BrowserDreamBasicPolicyInput struct {
-	BindingHandle string                                     `json:"binding_handle"`
+	// BindingHandle Opaque, encrypted, browser-session-family-bound Dream resource handle.
+	BindingHandle OpaqueDreamHandle                          `json:"binding_handle"`
 	Cadence       BrowserDreamBasicPolicyInputCadence        `json:"cadence"`
 	Confirmation  BrowserDreamBasicPolicyInputConfirmation   `json:"confirmation"`
 	InputSources  []BrowserDreamBasicPolicyInputInputSources `json:"input_sources"`
@@ -1735,7 +1807,8 @@ type BrowserDreamBasicPolicyInputVisibility string
 
 // BrowserDreamBasicPolicyUpdate defines model for BrowserDreamBasicPolicyUpdate.
 type BrowserDreamBasicPolicyUpdate struct {
-	BindingHandle string                                      `json:"binding_handle"`
+	// BindingHandle Opaque, encrypted, browser-session-family-bound Dream resource handle.
+	BindingHandle OpaqueDreamHandle                           `json:"binding_handle"`
 	Cadence       BrowserDreamBasicPolicyUpdateCadence        `json:"cadence"`
 	Confirmation  BrowserDreamBasicPolicyUpdateConfirmation   `json:"confirmation"`
 	InputSources  []BrowserDreamBasicPolicyUpdateInputSources `json:"input_sources"`
@@ -1758,18 +1831,21 @@ type BrowserDreamBasicPolicyUpdateVisibility string
 
 // BrowserDreamLineage defines model for BrowserDreamLineage.
 type BrowserDreamLineage struct {
-	Handle           *string `json:"handle,omitempty"`
-	OrganizationName string  `json:"organization_name"`
-	Relation         string  `json:"relation"`
+	// Handle Opaque, encrypted, browser-session-family-bound Dream resource handle.
+	Handle           *OpaqueDreamHandle `json:"handle,omitempty"`
+	OrganizationName string             `json:"organization_name"`
+	Relation         string             `json:"relation"`
 }
 
 // BrowserDreamPolicyLifecycle defines model for BrowserDreamPolicyLifecycle.
 type BrowserDreamPolicyLifecycle struct {
-	Cadence        BrowserDreamPolicyLifecycleCadence        `json:"cadence"`
-	CanAdopt       bool                                      `json:"can_adopt"`
-	CanDecide      bool                                      `json:"can_decide"`
-	Confirmation   BrowserDreamPolicyLifecycleConfirmation   `json:"confirmation"`
-	Handle         string                                    `json:"handle"`
+	Cadence      BrowserDreamPolicyLifecycleCadence      `json:"cadence"`
+	CanAdopt     bool                                    `json:"can_adopt"`
+	CanDecide    bool                                    `json:"can_decide"`
+	Confirmation BrowserDreamPolicyLifecycleConfirmation `json:"confirmation"`
+
+	// Handle Opaque, encrypted, browser-session-family-bound Dream resource handle.
+	Handle         OpaqueDreamHandle                         `json:"handle"`
 	InputSources   []string                                  `json:"input_sources"`
 	PendingAction  *BrowserDreamPolicyLifecyclePendingAction `json:"pending_action,omitempty"`
 	PermissionMode BrowserDreamPolicyLifecyclePermissionMode `json:"permission_mode"`
@@ -1810,6 +1886,12 @@ type BrowserDreamPolicyLifecycleStatus string
 // BrowserDreamPolicyLifecycleVisibility defines model for BrowserDreamPolicyLifecycle.Visibility.
 type BrowserDreamPolicyLifecycleVisibility string
 
+// BrowserDreamRunHandleResponse defines model for BrowserDreamRunHandleResponse.
+type BrowserDreamRunHandleResponse struct {
+	// Handle Opaque, encrypted, browser-session-family-bound Dream resource handle.
+	Handle OpaqueDreamHandle `json:"handle"`
+}
+
 // BrowserDreamRunView defines model for BrowserDreamRunView.
 type BrowserDreamRunView struct {
 	Annotations             *[]BrowserDreamAnnotation `json:"annotations,omitempty"`
@@ -1818,18 +1900,22 @@ type BrowserDreamRunView struct {
 	DownstreamOrganizations *[]BrowserDreamLineage    `json:"downstream_organizations,omitempty"`
 	Facts                   []BrowserDreamSignal      `json:"facts"`
 	FailureStage            *string                   `json:"failure_stage,omitempty"`
-	Handle                  string                    `json:"handle"`
-	InputCount              int                       `json:"input_count"`
-	InputOrganizations      *[]BrowserDreamLineage    `json:"input_organizations,omitempty"`
-	MissingInputReasons     []string                  `json:"missing_input_reasons"`
-	Rerun                   bool                      `json:"rerun"`
-	Risks                   []BrowserDreamSignal      `json:"risks"`
-	Status                  BrowserDreamRunViewStatus `json:"status"`
-	Themes                  []BrowserDreamSignal      `json:"themes"`
-	Todos                   []BrowserDreamSignal      `json:"todos"`
-	Trends                  []BrowserDreamSignal      `json:"trends"`
-	WindowEnd               time.Time                 `json:"window_end"`
-	WindowStart             time.Time                 `json:"window_start"`
+
+	// Handle Opaque, encrypted, browser-session-family-bound Dream resource handle.
+	Handle              OpaqueDreamHandle         `json:"handle"`
+	InputCount          int                       `json:"input_count"`
+	InputOrganizations  *[]BrowserDreamLineage    `json:"input_organizations,omitempty"`
+	MissingInputReasons []string                  `json:"missing_input_reasons"`
+	OrganizationName    *string                   `json:"organization_name,omitempty"`
+	Rerun               bool                      `json:"rerun"`
+	RerunRelation       *string                   `json:"rerun_relation,omitempty"`
+	Risks               []BrowserDreamSignal      `json:"risks"`
+	Status              BrowserDreamRunViewStatus `json:"status"`
+	Themes              []BrowserDreamSignal      `json:"themes"`
+	Todos               []BrowserDreamSignal      `json:"todos"`
+	Trends              []BrowserDreamSignal      `json:"trends"`
+	WindowEnd           time.Time                 `json:"window_end"`
+	WindowStart         time.Time                 `json:"window_start"`
 }
 
 // BrowserDreamRunViewStatus defines model for BrowserDreamRunView.Status.
@@ -1844,6 +1930,20 @@ type BrowserDreamSignal struct {
 
 // BrowserDreamSignalSeverity defines model for BrowserDreamSignal.Severity.
 type BrowserDreamSignalSeverity string
+
+// BrowserDreamWorkflowBinding defines model for BrowserDreamWorkflowBinding.
+type BrowserDreamWorkflowBinding struct {
+	// Handle Opaque, encrypted, browser-session-family-bound Dream resource handle.
+	Handle       OpaqueDreamHandle `json:"handle"`
+	Name         string            `json:"name"`
+	OutputName   string            `json:"output_name"`
+	VersionLabel string            `json:"version_label"`
+}
+
+// BrowserDreamWorkflowBindingList defines model for BrowserDreamWorkflowBindingList.
+type BrowserDreamWorkflowBindingList struct {
+	Bindings []BrowserDreamWorkflowBinding `json:"bindings"`
+}
 
 // BrowserKnowledgeHome defines model for BrowserKnowledgeHome.
 type BrowserKnowledgeHome struct {
@@ -2152,6 +2252,9 @@ type MissingInputReason string
 // MissingInputSourceType defines model for MissingInput.SourceType.
 type MissingInputSourceType string
 
+// OpaqueDreamHandle Opaque, encrypted, browser-session-family-bound Dream resource handle.
+type OpaqueDreamHandle = string
+
 // PublishedChangeVersion defines model for PublishedChangeVersion.
 type PublishedChangeVersion struct {
 	AuditRefId string `json:"audit_ref_id"`
@@ -2355,12 +2458,22 @@ type AdoptBrowserDreamPolicySuggestionParams struct {
 	IdempotencyKey string `json:"Idempotency-Key"`
 }
 
-// BackfillBrowserDreamPolicyJSONBody defines parameters for BackfillBrowserDreamPolicy.
-type BackfillBrowserDreamPolicyJSONBody struct {
-	RerunOfRunId *string   `json:"rerun_of_run_id,omitempty"`
-	WindowEnd    time.Time `json:"window_end"`
-	WindowStart  time.Time `json:"window_start"`
+// GetBrowserDreamAdvancedPolicyParams defines parameters for GetBrowserDreamAdvancedPolicy.
+type GetBrowserDreamAdvancedPolicyParams struct {
+	XAtlasAdvancedMode GetBrowserDreamAdvancedPolicyParamsXAtlasAdvancedMode `json:"X-Atlas-Advanced-Mode"`
 }
+
+// GetBrowserDreamAdvancedPolicyParamsXAtlasAdvancedMode defines parameters for GetBrowserDreamAdvancedPolicy.
+type GetBrowserDreamAdvancedPolicyParamsXAtlasAdvancedMode string
+
+// UpdateBrowserDreamAdvancedPolicyParams defines parameters for UpdateBrowserDreamAdvancedPolicy.
+type UpdateBrowserDreamAdvancedPolicyParams struct {
+	XAtlasAdvancedMode UpdateBrowserDreamAdvancedPolicyParamsXAtlasAdvancedMode `json:"X-Atlas-Advanced-Mode"`
+	IdempotencyKey     string                                                   `json:"Idempotency-Key"`
+}
+
+// UpdateBrowserDreamAdvancedPolicyParamsXAtlasAdvancedMode defines parameters for UpdateBrowserDreamAdvancedPolicy.
+type UpdateBrowserDreamAdvancedPolicyParamsXAtlasAdvancedMode string
 
 // BackfillBrowserDreamPolicyParams defines parameters for BackfillBrowserDreamPolicy.
 type BackfillBrowserDreamPolicyParams struct {
@@ -2650,8 +2763,11 @@ type UpdateBrowserDreamPolicyDraftJSONRequestBody = BrowserDreamBasicPolicyUpdat
 // AdoptBrowserDreamPolicySuggestionJSONRequestBody defines body for AdoptBrowserDreamPolicySuggestion for application/json ContentType.
 type AdoptBrowserDreamPolicySuggestionJSONRequestBody AdoptBrowserDreamPolicySuggestionJSONBody
 
+// UpdateBrowserDreamAdvancedPolicyJSONRequestBody defines body for UpdateBrowserDreamAdvancedPolicy for application/json ContentType.
+type UpdateBrowserDreamAdvancedPolicyJSONRequestBody = BrowserDreamAdvancedPolicy
+
 // BackfillBrowserDreamPolicyJSONRequestBody defines body for BackfillBrowserDreamPolicy for application/json ContentType.
-type BackfillBrowserDreamPolicyJSONRequestBody BackfillBrowserDreamPolicyJSONBody
+type BackfillBrowserDreamPolicyJSONRequestBody = BrowserDreamBackfillRequest
 
 // CheckBrowserDreamPolicyRiskJSONRequestBody defines body for CheckBrowserDreamPolicyRisk for application/json ContentType.
 type CheckBrowserDreamPolicyRiskJSONRequestBody CheckBrowserDreamPolicyRiskJSONBody

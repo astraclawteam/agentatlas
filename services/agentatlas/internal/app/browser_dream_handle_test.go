@@ -63,3 +63,21 @@ func TestBrowserDreamHandleIsOpaqueRestartSafeAndStrictlyBound(t *testing.T) {
 		t.Fatal("expired handle was accepted")
 	}
 }
+
+func TestBrowserDreamHandleFailsClosedWithoutSessionFamily(t *testing.T) {
+	protector, _ := browsersession.NewProtector(bytes.Repeat([]byte{8}, 32))
+	codec := newBrowserDreamHandleCodec(protector, time.Now)
+	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent", UserID: "same-user"}}
+	if _, err := codec.issue(session, "run", "org", "run"); err == nil {
+		t.Fatal("handle issued without a session family")
+	}
+	withFamily := session
+	withFamily.FamilyID = "family"
+	handle, err := codec.issue(withFamily, "run", "org", "run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := codec.resolve(session, "run", handle); err == nil {
+		t.Fatal("handle resolved without a session family")
+	}
+}

@@ -15,6 +15,7 @@ async function mockDream(page: Page) {
 }
 
 async function assertNoHorizontalOverflow(page: Page) { expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBeTruthy(); }
+async function assertCompactViewport(page: Page) { await page.setViewportSize({ width: 640, height: 360 }); await assertNoHorizontalOverflow(page); await expect(page.locator("main").first()).toBeVisible(); }
 
 test.beforeEach(async ({ page }) => { await page.setViewportSize({ width: 1280, height: 720 }); await mockDream(page); });
 
@@ -22,9 +23,10 @@ test("Dream overview is readable and navigates by opaque handle", async ({ page 
   await page.goto("/dream");
   await expect(page.getByRole("heading", { name: "梦境全景" })).toBeVisible();
   await expect(page.getByText("覆盖 2/3 个下级组织")).toBeVisible();
+  await assertCompactViewport(page);
   await page.getByRole("link", { name: "查看运行详情" }).click();
   await expect(page).toHaveURL(new RegExp(`/dream/runs/${handle}$`));
-  await assertNoHorizontalOverflow(page);
+  await assertCompactViewport(page);
 });
 
 test("Dream timeline exposes structured results and detail navigation", async ({ page }) => {
@@ -33,7 +35,7 @@ test("Dream timeline exposes structured results and detail navigation", async ({
   await expect(page.getByText("交付加快")).toBeVisible();
   await expect(page.getByText("测试记录待补齐")).toBeVisible();
   await expect(page.getByRole("link", { name: "查看运行详情" })).toHaveAttribute("href", `/dream/runs/${handle}`);
-  await assertNoHorizontalOverflow(page);
+  await assertCompactViewport(page);
 });
 
 test("Dream workflow bootstraps from human published binding without advanced internals", async ({ page }) => {
@@ -42,7 +44,7 @@ test("Dream workflow bootstraps from human published binding without advanced in
   await expect(page.getByLabel("已发布梦境工作流")).toContainText("企业梦境整理");
   await expect(page.getByText(/cron|timezone|workflow_id|output_space_id/i)).toHaveCount(0);
   await expect(page.getByRole("button", { name: "保存梦境工作流" })).toBeEnabled();
-  await assertNoHorizontalOverflow(page);
+  await assertCompactViewport(page);
 });
 
 test("Dream detail renders immutable annotations and human lineage", async ({ page }) => {
@@ -52,5 +54,5 @@ test("Dream detail renders immutable annotations and human lineage", async ({ pa
   await expect(page.getByText("研发二组")).toBeVisible();
   await expect(page.getByText("已安排负责人跟进")).toBeVisible();
   await expect(page.getByText(/run-hidden|pointer-hidden|workflow-hidden/i)).toHaveCount(0);
-  await assertNoHorizontalOverflow(page);
+  await assertCompactViewport(page);
 });

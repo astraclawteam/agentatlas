@@ -16,6 +16,7 @@ import { DreamPolicyLifecycleControls } from "../../DreamPolicyPanel";
 const run: DreamRun = {
   handle: "opaque-run-handle-abcdefghijklmnopqrstuvwxyz",
   organization_id: "dept-rd",
+  organization_name: "研发事业部",
   status: "succeeded",
   window_start: "2026-07-11T14:00:00Z",
   window_end: "2026-07-12T14:00:00Z",
@@ -30,6 +31,7 @@ const run: DreamRun = {
   display_summary: "研发一部本周交付稳定，但一个下级组织的输入尚未完成。",
   rerun: false,
   input_organizations: [{ organization_name: "研发二组", relation: "下级组织汇总" }],
+  downstream_organizations: [{ organization_name: "公司层", relation: "汇总到上级梦境" }],
   annotations: [],
 };
 
@@ -114,6 +116,8 @@ describe("enterprise Dream pages", () => {
     const annotate = vi.fn(async () => undefined);
     const rerun = vi.fn(async (_key: string) => ({ handle: "new-opaque-handle" }));
     render(<DreamRunDetailPage run={run} organizationName="研发事业部" onAnnotate={annotate} onRerun={rerun} />);
+    expect(screen.getByText("下级组织尚未完成整理")).toBeVisible();
+    expect(screen.getByText("公司层")).toBeVisible();
     expect(screen.queryByRole("button", { name: /编辑摘要/ })).not.toBeInTheDocument();
     expect(screen.getByText("这是历史运行结果，不能直接修改")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "标记结果有误" }));
