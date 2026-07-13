@@ -60,6 +60,48 @@ SELECT * FROM dream_policies WHERE id = $1;
 -- name: GetEnterpriseDreamPolicy :one
 SELECT * FROM dream_policies WHERE enterprise_id = sqlc.arg(enterprise_id) AND id = sqlc.arg(id);
 
+-- name: AdoptDreamPolicySuggestion :one
+WITH op AS (
+  SELECT operation.* FROM dream_policy_operations operation
+  WHERE operation.enterprise_id=sqlc.arg(enterprise_id) AND operation.operation_key=sqlc.arg(operation_key)
+    AND operation.operation_kind='adopt' AND operation.policy_id=sqlc.arg(source_policy_id)
+    AND operation.actor_user_id=sqlc.arg(adopter_user_id) AND operation.status='pending'
+    AND operation.audit_ref_id=sqlc.arg(audit_ref_id)
+  FOR UPDATE
+), source AS (
+  SELECT policy.* FROM dream_policies policy, op
+  WHERE policy.enterprise_id=sqlc.arg(enterprise_id) AND policy.id=sqlc.arg(source_policy_id)
+    AND policy.permission_mode='suggestion_only' AND policy.status='draft'
+    AND policy.revision=sqlc.arg(source_revision)
+  FOR UPDATE
+), created AS (
+  INSERT INTO dream_policies(id,enterprise_id,org_scope,status,draft,requester_user_id,permission_mode,audit_ref_id)
+  SELECT sqlc.arg(target_policy_id),source.enterprise_id,source.org_scope,'draft',source.draft,sqlc.arg(adopter_user_id),'direct_edit',sqlc.arg(audit_ref_id)
+  FROM source
+  RETURNING *
+), lineage AS (
+  INSERT INTO dream_policy_adoptions(enterprise_id,source_policy_id,source_requester_user_id,source_revision,target_policy_id,adopter_user_id,audit_ref_id,operation_key)
+  SELECT source.enterprise_id,source.id,source.requester_user_id,source.revision,created.id,sqlc.arg(adopter_user_id),sqlc.arg(audit_ref_id),sqlc.arg(operation_key)
+  FROM source JOIN created ON true
+  RETURNING target_policy_id
+), audit AS (
+  INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
+  SELECT created.enterprise_id,created.id,0,'adopt',sqlc.arg(operation_key),sqlc.arg(audit_ref_id),sqlc.arg(adopter_user_id)
+  FROM created JOIN lineage ON lineage.target_policy_id=created.id
+  RETURNING policy_id
+), receipt AS (
+  UPDATE dream_policy_operations operation SET status='completed',result=dream_policy_lifecycle_result(created,0),updated_at=now()
+  FROM created JOIN audit ON audit.policy_id=created.id
+  WHERE operation.enterprise_id=created.enterprise_id AND operation.operation_key=sqlc.arg(operation_key)
+  RETURNING operation.operation_key
+)
+SELECT created.* FROM created JOIN audit ON audit.policy_id=created.id JOIN receipt ON true;
+
+-- name: GetDreamPolicyAdoptionBySource :one
+SELECT * FROM dream_policy_adoptions
+WHERE enterprise_id=sqlc.arg(enterprise_id) AND source_policy_id=sqlc.arg(source_policy_id)
+  AND source_revision=sqlc.arg(source_revision);
+
 -- name: UpdateDreamPolicyDraftIfRevision :one
 WITH op AS (
   SELECT * FROM dream_policy_operations op
@@ -638,3 +680,17 @@ VALUES (
     sqlc.arg(annotation_type), sqlc.arg(body), sqlc.arg(created_by)
 )
 RETURNING *;
+
+-- name: ListDreamRunAnnotationsByRunBounded :many
+SELECT * FROM dream_run_annotations
+WHERE enterprise_id = sqlc.arg(enterprise_id) AND run_id = sqlc.arg(run_id)
+ORDER BY created_at, id
+LIMIT sqlc.arg(result_limit);
+
+-- name: ListDreamRunChildrenByParentBounded :many
+SELECT child.* FROM dream_run_lineage lineage
+JOIN dream_runs child ON child.id = lineage.run_id
+WHERE child.enterprise_id = sqlc.arg(enterprise_id)
+  AND lineage.parent_run_id = sqlc.arg(parent_run_id)
+ORDER BY child.created_at, child.id
+LIMIT sqlc.arg(result_limit);

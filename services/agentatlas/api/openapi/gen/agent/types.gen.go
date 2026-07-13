@@ -62,18 +62,471 @@ func (e AgentRunStatus) Valid() bool {
 	}
 }
 
+// Defines values for BrowserDreamAnnotationAction.
+const (
+	BrowserDreamAnnotationActionComment       BrowserDreamAnnotationAction = "comment"
+	BrowserDreamAnnotationActionConfirm       BrowserDreamAnnotationAction = "confirm"
+	BrowserDreamAnnotationActionMarkIncorrect BrowserDreamAnnotationAction = "mark_incorrect"
+	BrowserDreamAnnotationActionReject        BrowserDreamAnnotationAction = "reject"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamAnnotationAction enum.
+func (e BrowserDreamAnnotationAction) Valid() bool {
+	switch e {
+	case BrowserDreamAnnotationActionComment:
+		return true
+	case BrowserDreamAnnotationActionConfirm:
+		return true
+	case BrowserDreamAnnotationActionMarkIncorrect:
+		return true
+	case BrowserDreamAnnotationActionReject:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserDreamBasicPolicyInputCadence.
+const (
+	BrowserDreamBasicPolicyInputCadenceNightly BrowserDreamBasicPolicyInputCadence = "nightly"
+	BrowserDreamBasicPolicyInputCadenceWeekly  BrowserDreamBasicPolicyInputCadence = "weekly"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamBasicPolicyInputCadence enum.
+func (e BrowserDreamBasicPolicyInputCadence) Valid() bool {
+	switch e {
+	case BrowserDreamBasicPolicyInputCadenceNightly:
+		return true
+	case BrowserDreamBasicPolicyInputCadenceWeekly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserDreamBasicPolicyInputConfirmation.
+const (
+	BrowserDreamBasicPolicyInputConfirmationAlways       BrowserDreamBasicPolicyInputConfirmation = "always"
+	BrowserDreamBasicPolicyInputConfirmationHighRiskOnly BrowserDreamBasicPolicyInputConfirmation = "high_risk_only"
+	BrowserDreamBasicPolicyInputConfirmationNever        BrowserDreamBasicPolicyInputConfirmation = "never"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamBasicPolicyInputConfirmation enum.
+func (e BrowserDreamBasicPolicyInputConfirmation) Valid() bool {
+	switch e {
+	case BrowserDreamBasicPolicyInputConfirmationAlways:
+		return true
+	case BrowserDreamBasicPolicyInputConfirmationHighRiskOnly:
+		return true
+	case BrowserDreamBasicPolicyInputConfirmationNever:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserDreamBasicPolicyInputInputSources.
+const (
+	BrowserDreamBasicPolicyInputInputSourcesAgentAnswer       BrowserDreamBasicPolicyInputInputSources = "agent_answer"
+	BrowserDreamBasicPolicyInputInputSourcesChildDreamSummary BrowserDreamBasicPolicyInputInputSources = "child_dream_summary"
+	BrowserDreamBasicPolicyInputInputSourcesCompletedTask     BrowserDreamBasicPolicyInputInputSources = "completed_task"
+	BrowserDreamBasicPolicyInputInputSourcesExternalEvidence  BrowserDreamBasicPolicyInputInputSources = "external_evidence"
+	BrowserDreamBasicPolicyInputInputSourcesProjectRecord     BrowserDreamBasicPolicyInputInputSources = "project_record"
+	BrowserDreamBasicPolicyInputInputSourcesRiskEvent         BrowserDreamBasicPolicyInputInputSources = "risk_event"
+	BrowserDreamBasicPolicyInputInputSourcesSopUpdate         BrowserDreamBasicPolicyInputInputSources = "sop_update"
+	BrowserDreamBasicPolicyInputInputSourcesWorkBrief         BrowserDreamBasicPolicyInputInputSources = "work_brief"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamBasicPolicyInputInputSources enum.
+func (e BrowserDreamBasicPolicyInputInputSources) Valid() bool {
+	switch e {
+	case BrowserDreamBasicPolicyInputInputSourcesAgentAnswer:
+		return true
+	case BrowserDreamBasicPolicyInputInputSourcesChildDreamSummary:
+		return true
+	case BrowserDreamBasicPolicyInputInputSourcesCompletedTask:
+		return true
+	case BrowserDreamBasicPolicyInputInputSourcesExternalEvidence:
+		return true
+	case BrowserDreamBasicPolicyInputInputSourcesProjectRecord:
+		return true
+	case BrowserDreamBasicPolicyInputInputSourcesRiskEvent:
+		return true
+	case BrowserDreamBasicPolicyInputInputSourcesSopUpdate:
+		return true
+	case BrowserDreamBasicPolicyInputInputSourcesWorkBrief:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserDreamBasicPolicyInputVisibility.
+const (
+	BrowserDreamBasicPolicyInputVisibilityCompanySanitized BrowserDreamBasicPolicyInputVisibility = "company_sanitized"
+	BrowserDreamBasicPolicyInputVisibilityManagers         BrowserDreamBasicPolicyInputVisibility = "managers"
+	BrowserDreamBasicPolicyInputVisibilityMembers          BrowserDreamBasicPolicyInputVisibility = "members"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamBasicPolicyInputVisibility enum.
+func (e BrowserDreamBasicPolicyInputVisibility) Valid() bool {
+	switch e {
+	case BrowserDreamBasicPolicyInputVisibilityCompanySanitized:
+		return true
+	case BrowserDreamBasicPolicyInputVisibilityManagers:
+		return true
+	case BrowserDreamBasicPolicyInputVisibilityMembers:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserDreamBasicPolicyUpdateCadence.
+const (
+	BrowserDreamBasicPolicyUpdateCadenceNightly BrowserDreamBasicPolicyUpdateCadence = "nightly"
+	BrowserDreamBasicPolicyUpdateCadenceWeekly  BrowserDreamBasicPolicyUpdateCadence = "weekly"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamBasicPolicyUpdateCadence enum.
+func (e BrowserDreamBasicPolicyUpdateCadence) Valid() bool {
+	switch e {
+	case BrowserDreamBasicPolicyUpdateCadenceNightly:
+		return true
+	case BrowserDreamBasicPolicyUpdateCadenceWeekly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserDreamBasicPolicyUpdateConfirmation.
+const (
+	BrowserDreamBasicPolicyUpdateConfirmationAlways       BrowserDreamBasicPolicyUpdateConfirmation = "always"
+	BrowserDreamBasicPolicyUpdateConfirmationHighRiskOnly BrowserDreamBasicPolicyUpdateConfirmation = "high_risk_only"
+	BrowserDreamBasicPolicyUpdateConfirmationNever        BrowserDreamBasicPolicyUpdateConfirmation = "never"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamBasicPolicyUpdateConfirmation enum.
+func (e BrowserDreamBasicPolicyUpdateConfirmation) Valid() bool {
+	switch e {
+	case BrowserDreamBasicPolicyUpdateConfirmationAlways:
+		return true
+	case BrowserDreamBasicPolicyUpdateConfirmationHighRiskOnly:
+		return true
+	case BrowserDreamBasicPolicyUpdateConfirmationNever:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserDreamBasicPolicyUpdateInputSources.
+const (
+	BrowserDreamBasicPolicyUpdateInputSourcesAgentAnswer       BrowserDreamBasicPolicyUpdateInputSources = "agent_answer"
+	BrowserDreamBasicPolicyUpdateInputSourcesChildDreamSummary BrowserDreamBasicPolicyUpdateInputSources = "child_dream_summary"
+	BrowserDreamBasicPolicyUpdateInputSourcesCompletedTask     BrowserDreamBasicPolicyUpdateInputSources = "completed_task"
+	BrowserDreamBasicPolicyUpdateInputSourcesExternalEvidence  BrowserDreamBasicPolicyUpdateInputSources = "external_evidence"
+	BrowserDreamBasicPolicyUpdateInputSourcesProjectRecord     BrowserDreamBasicPolicyUpdateInputSources = "project_record"
+	BrowserDreamBasicPolicyUpdateInputSourcesRiskEvent         BrowserDreamBasicPolicyUpdateInputSources = "risk_event"
+	BrowserDreamBasicPolicyUpdateInputSourcesSopUpdate         BrowserDreamBasicPolicyUpdateInputSources = "sop_update"
+	BrowserDreamBasicPolicyUpdateInputSourcesWorkBrief         BrowserDreamBasicPolicyUpdateInputSources = "work_brief"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamBasicPolicyUpdateInputSources enum.
+func (e BrowserDreamBasicPolicyUpdateInputSources) Valid() bool {
+	switch e {
+	case BrowserDreamBasicPolicyUpdateInputSourcesAgentAnswer:
+		return true
+	case BrowserDreamBasicPolicyUpdateInputSourcesChildDreamSummary:
+		return true
+	case BrowserDreamBasicPolicyUpdateInputSourcesCompletedTask:
+		return true
+	case BrowserDreamBasicPolicyUpdateInputSourcesExternalEvidence:
+		return true
+	case BrowserDreamBasicPolicyUpdateInputSourcesProjectRecord:
+		return true
+	case BrowserDreamBasicPolicyUpdateInputSourcesRiskEvent:
+		return true
+	case BrowserDreamBasicPolicyUpdateInputSourcesSopUpdate:
+		return true
+	case BrowserDreamBasicPolicyUpdateInputSourcesWorkBrief:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserDreamBasicPolicyUpdateVisibility.
+const (
+	BrowserDreamBasicPolicyUpdateVisibilityCompanySanitized BrowserDreamBasicPolicyUpdateVisibility = "company_sanitized"
+	BrowserDreamBasicPolicyUpdateVisibilityManagers         BrowserDreamBasicPolicyUpdateVisibility = "managers"
+	BrowserDreamBasicPolicyUpdateVisibilityMembers          BrowserDreamBasicPolicyUpdateVisibility = "members"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamBasicPolicyUpdateVisibility enum.
+func (e BrowserDreamBasicPolicyUpdateVisibility) Valid() bool {
+	switch e {
+	case BrowserDreamBasicPolicyUpdateVisibilityCompanySanitized:
+		return true
+	case BrowserDreamBasicPolicyUpdateVisibilityManagers:
+		return true
+	case BrowserDreamBasicPolicyUpdateVisibilityMembers:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserDreamPolicyLifecycleCadence.
+const (
+	Custom  BrowserDreamPolicyLifecycleCadence = "custom"
+	Nightly BrowserDreamPolicyLifecycleCadence = "nightly"
+	Weekly  BrowserDreamPolicyLifecycleCadence = "weekly"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamPolicyLifecycleCadence enum.
+func (e BrowserDreamPolicyLifecycleCadence) Valid() bool {
+	switch e {
+	case Custom:
+		return true
+	case Nightly:
+		return true
+	case Weekly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserDreamPolicyLifecycleConfirmation.
+const (
+	Always       BrowserDreamPolicyLifecycleConfirmation = "always"
+	HighRiskOnly BrowserDreamPolicyLifecycleConfirmation = "high_risk_only"
+	Never        BrowserDreamPolicyLifecycleConfirmation = "never"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamPolicyLifecycleConfirmation enum.
+func (e BrowserDreamPolicyLifecycleConfirmation) Valid() bool {
+	switch e {
+	case Always:
+		return true
+	case HighRiskOnly:
+		return true
+	case Never:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserDreamPolicyLifecyclePendingAction.
+const (
+	BrowserDreamPolicyLifecyclePendingActionDisable BrowserDreamPolicyLifecyclePendingAction = "disable"
+	BrowserDreamPolicyLifecyclePendingActionPublish BrowserDreamPolicyLifecyclePendingAction = "publish"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamPolicyLifecyclePendingAction enum.
+func (e BrowserDreamPolicyLifecyclePendingAction) Valid() bool {
+	switch e {
+	case BrowserDreamPolicyLifecyclePendingActionDisable:
+		return true
+	case BrowserDreamPolicyLifecyclePendingActionPublish:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserDreamPolicyLifecyclePermissionMode.
+const (
+	BrowserDreamPolicyLifecyclePermissionModeDirectEdit     BrowserDreamPolicyLifecyclePermissionMode = "direct_edit"
+	BrowserDreamPolicyLifecyclePermissionModeSuggestionOnly BrowserDreamPolicyLifecyclePermissionMode = "suggestion_only"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamPolicyLifecyclePermissionMode enum.
+func (e BrowserDreamPolicyLifecyclePermissionMode) Valid() bool {
+	switch e {
+	case BrowserDreamPolicyLifecyclePermissionModeDirectEdit:
+		return true
+	case BrowserDreamPolicyLifecyclePermissionModeSuggestionOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserDreamPolicyLifecycleReviewMode.
+const (
+	BrowserDreamPolicyLifecycleReviewModeEnterpriseKnowledgeAdminQueue BrowserDreamPolicyLifecycleReviewMode = "enterprise_knowledge_admin_queue"
+	BrowserDreamPolicyLifecycleReviewModeSingleConfirmation            BrowserDreamPolicyLifecycleReviewMode = "single_confirmation"
+	BrowserDreamPolicyLifecycleReviewModeUpwardReview                  BrowserDreamPolicyLifecycleReviewMode = "upward_review"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamPolicyLifecycleReviewMode enum.
+func (e BrowserDreamPolicyLifecycleReviewMode) Valid() bool {
+	switch e {
+	case BrowserDreamPolicyLifecycleReviewModeEnterpriseKnowledgeAdminQueue:
+		return true
+	case BrowserDreamPolicyLifecycleReviewModeSingleConfirmation:
+		return true
+	case BrowserDreamPolicyLifecycleReviewModeUpwardReview:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserDreamPolicyLifecycleReviewState.
+const (
+	BrowserDreamPolicyLifecycleReviewStateApproved BrowserDreamPolicyLifecycleReviewState = "approved"
+	BrowserDreamPolicyLifecycleReviewStatePending  BrowserDreamPolicyLifecycleReviewState = "pending"
+	BrowserDreamPolicyLifecycleReviewStateRejected BrowserDreamPolicyLifecycleReviewState = "rejected"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamPolicyLifecycleReviewState enum.
+func (e BrowserDreamPolicyLifecycleReviewState) Valid() bool {
+	switch e {
+	case BrowserDreamPolicyLifecycleReviewStateApproved:
+		return true
+	case BrowserDreamPolicyLifecycleReviewStatePending:
+		return true
+	case BrowserDreamPolicyLifecycleReviewStateRejected:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserDreamPolicyLifecycleRiskLevel.
+const (
+	BrowserDreamPolicyLifecycleRiskLevelHigh BrowserDreamPolicyLifecycleRiskLevel = "high"
+	BrowserDreamPolicyLifecycleRiskLevelLow  BrowserDreamPolicyLifecycleRiskLevel = "low"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamPolicyLifecycleRiskLevel enum.
+func (e BrowserDreamPolicyLifecycleRiskLevel) Valid() bool {
+	switch e {
+	case BrowserDreamPolicyLifecycleRiskLevelHigh:
+		return true
+	case BrowserDreamPolicyLifecycleRiskLevelLow:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserDreamPolicyLifecycleStatus.
+const (
+	BrowserDreamPolicyLifecycleStatusApproved      BrowserDreamPolicyLifecycleStatus = "approved"
+	BrowserDreamPolicyLifecycleStatusDisabled      BrowserDreamPolicyLifecycleStatus = "disabled"
+	BrowserDreamPolicyLifecycleStatusDraft         BrowserDreamPolicyLifecycleStatus = "draft"
+	BrowserDreamPolicyLifecycleStatusPublished     BrowserDreamPolicyLifecycleStatus = "published"
+	BrowserDreamPolicyLifecycleStatusRejected      BrowserDreamPolicyLifecycleStatus = "rejected"
+	BrowserDreamPolicyLifecycleStatusReviewPending BrowserDreamPolicyLifecycleStatus = "review_pending"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamPolicyLifecycleStatus enum.
+func (e BrowserDreamPolicyLifecycleStatus) Valid() bool {
+	switch e {
+	case BrowserDreamPolicyLifecycleStatusApproved:
+		return true
+	case BrowserDreamPolicyLifecycleStatusDisabled:
+		return true
+	case BrowserDreamPolicyLifecycleStatusDraft:
+		return true
+	case BrowserDreamPolicyLifecycleStatusPublished:
+		return true
+	case BrowserDreamPolicyLifecycleStatusRejected:
+		return true
+	case BrowserDreamPolicyLifecycleStatusReviewPending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserDreamPolicyLifecycleVisibility.
+const (
+	BrowserDreamPolicyLifecycleVisibilityCompanySanitized BrowserDreamPolicyLifecycleVisibility = "company_sanitized"
+	BrowserDreamPolicyLifecycleVisibilityManagers         BrowserDreamPolicyLifecycleVisibility = "managers"
+	BrowserDreamPolicyLifecycleVisibilityMembers          BrowserDreamPolicyLifecycleVisibility = "members"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamPolicyLifecycleVisibility enum.
+func (e BrowserDreamPolicyLifecycleVisibility) Valid() bool {
+	switch e {
+	case BrowserDreamPolicyLifecycleVisibilityCompanySanitized:
+		return true
+	case BrowserDreamPolicyLifecycleVisibilityManagers:
+		return true
+	case BrowserDreamPolicyLifecycleVisibilityMembers:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserDreamRunViewStatus.
+const (
+	BrowserDreamRunViewStatusFailed              BrowserDreamRunViewStatus = "failed"
+	BrowserDreamRunViewStatusPending             BrowserDreamRunViewStatus = "pending"
+	BrowserDreamRunViewStatusRunning             BrowserDreamRunViewStatus = "running"
+	BrowserDreamRunViewStatusSucceeded           BrowserDreamRunViewStatus = "succeeded"
+	BrowserDreamRunViewStatusWaitingConfirmation BrowserDreamRunViewStatus = "waiting_confirmation"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamRunViewStatus enum.
+func (e BrowserDreamRunViewStatus) Valid() bool {
+	switch e {
+	case BrowserDreamRunViewStatusFailed:
+		return true
+	case BrowserDreamRunViewStatusPending:
+		return true
+	case BrowserDreamRunViewStatusRunning:
+		return true
+	case BrowserDreamRunViewStatusSucceeded:
+		return true
+	case BrowserDreamRunViewStatusWaitingConfirmation:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserDreamSignalSeverity.
+const (
+	BrowserDreamSignalSeverityCritical BrowserDreamSignalSeverity = "critical"
+	BrowserDreamSignalSeverityInfo     BrowserDreamSignalSeverity = "info"
+	BrowserDreamSignalSeverityWarning  BrowserDreamSignalSeverity = "warning"
+)
+
+// Valid indicates whether the value is a known member of the BrowserDreamSignalSeverity enum.
+func (e BrowserDreamSignalSeverity) Valid() bool {
+	switch e {
+	case BrowserDreamSignalSeverityCritical:
+		return true
+	case BrowserDreamSignalSeverityInfo:
+		return true
+	case BrowserDreamSignalSeverityWarning:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for BrowserKnowledgeHomeStatusKnowledgeRuntime.
 const (
-	BrowserKnowledgeHomeStatusKnowledgeRuntimeChecking BrowserKnowledgeHomeStatusKnowledgeRuntime = "checking"
-	BrowserKnowledgeHomeStatusKnowledgeRuntimeRunning  BrowserKnowledgeHomeStatusKnowledgeRuntime = "running"
+	Checking BrowserKnowledgeHomeStatusKnowledgeRuntime = "checking"
+	Running  BrowserKnowledgeHomeStatusKnowledgeRuntime = "running"
 )
 
 // Valid indicates whether the value is a known member of the BrowserKnowledgeHomeStatusKnowledgeRuntime enum.
 func (e BrowserKnowledgeHomeStatusKnowledgeRuntime) Valid() bool {
 	switch e {
-	case BrowserKnowledgeHomeStatusKnowledgeRuntimeChecking:
+	case Checking:
 		return true
-	case BrowserKnowledgeHomeStatusKnowledgeRuntimeRunning:
+	case Running:
 		return true
 	default:
 		return false
@@ -781,13 +1234,13 @@ func (e ReviewRouteState) Valid() bool {
 
 // Defines values for ReviewRoute0Mode.
 const (
-	ReviewRoute0ModeSingleConfirmation ReviewRoute0Mode = "single_confirmation"
+	SingleConfirmation ReviewRoute0Mode = "single_confirmation"
 )
 
 // Valid indicates whether the value is a known member of the ReviewRoute0Mode enum.
 func (e ReviewRoute0Mode) Valid() bool {
 	switch e {
-	case ReviewRoute0ModeSingleConfirmation:
+	case SingleConfirmation:
 		return true
 	default:
 		return false
@@ -910,19 +1363,19 @@ func (e RiskAssessmentRiskLevel) Valid() bool {
 
 // Defines values for StructuredSignalSeverity.
 const (
-	Critical StructuredSignalSeverity = "critical"
-	Info     StructuredSignalSeverity = "info"
-	Warning  StructuredSignalSeverity = "warning"
+	StructuredSignalSeverityCritical StructuredSignalSeverity = "critical"
+	StructuredSignalSeverityInfo     StructuredSignalSeverity = "info"
+	StructuredSignalSeverityWarning  StructuredSignalSeverity = "warning"
 )
 
 // Valid indicates whether the value is a known member of the StructuredSignalSeverity enum.
 func (e StructuredSignalSeverity) Valid() bool {
 	switch e {
-	case Critical:
+	case StructuredSignalSeverityCritical:
 		return true
-	case Info:
+	case StructuredSignalSeverityInfo:
 		return true
-	case Warning:
+	case StructuredSignalSeverityWarning:
 		return true
 	default:
 		return false
@@ -985,19 +1438,19 @@ func (e SuggestionInputResourceType) Valid() bool {
 
 // Defines values for VisibilitySnapshotSummaryVisibilityLevel.
 const (
-	CompanySanitized VisibilitySnapshotSummaryVisibilityLevel = "company_sanitized"
-	Managers         VisibilitySnapshotSummaryVisibilityLevel = "managers"
-	Members          VisibilitySnapshotSummaryVisibilityLevel = "members"
+	VisibilitySnapshotSummaryVisibilityLevelCompanySanitized VisibilitySnapshotSummaryVisibilityLevel = "company_sanitized"
+	VisibilitySnapshotSummaryVisibilityLevelManagers         VisibilitySnapshotSummaryVisibilityLevel = "managers"
+	VisibilitySnapshotSummaryVisibilityLevelMembers          VisibilitySnapshotSummaryVisibilityLevel = "members"
 )
 
 // Valid indicates whether the value is a known member of the VisibilitySnapshotSummaryVisibilityLevel enum.
 func (e VisibilitySnapshotSummaryVisibilityLevel) Valid() bool {
 	switch e {
-	case CompanySanitized:
+	case VisibilitySnapshotSummaryVisibilityLevelCompanySanitized:
 		return true
-	case Managers:
+	case VisibilitySnapshotSummaryVisibilityLevelManagers:
 		return true
-	case Members:
+	case VisibilitySnapshotSummaryVisibilityLevelMembers:
 		return true
 	default:
 		return false
@@ -1084,16 +1537,16 @@ func (e PostAgentRunConfirmationJSONBodyDecision) Valid() bool {
 
 // Defines values for CreateDreamPolicy201JSONResponseBodyPermissionMode.
 const (
-	DirectEdit     CreateDreamPolicy201JSONResponseBodyPermissionMode = "direct_edit"
-	SuggestionOnly CreateDreamPolicy201JSONResponseBodyPermissionMode = "suggestion_only"
+	CreateDreamPolicy201JSONResponseBodyPermissionModeDirectEdit     CreateDreamPolicy201JSONResponseBodyPermissionMode = "direct_edit"
+	CreateDreamPolicy201JSONResponseBodyPermissionModeSuggestionOnly CreateDreamPolicy201JSONResponseBodyPermissionMode = "suggestion_only"
 )
 
 // Valid indicates whether the value is a known member of the CreateDreamPolicy201JSONResponseBodyPermissionMode enum.
 func (e CreateDreamPolicy201JSONResponseBodyPermissionMode) Valid() bool {
 	switch e {
-	case DirectEdit:
+	case CreateDreamPolicy201JSONResponseBodyPermissionModeDirectEdit:
 		return true
-	case SuggestionOnly:
+	case CreateDreamPolicy201JSONResponseBodyPermissionModeSuggestionOnly:
 		return true
 	default:
 		return false
@@ -1132,16 +1585,16 @@ func (e CreateDreamPolicy201JSONResponseBodyVersion) Valid() bool {
 
 // Defines values for CheckDreamPolicyRisk200JSONResponseBodyRiskLevel.
 const (
-	High CheckDreamPolicyRisk200JSONResponseBodyRiskLevel = "high"
-	Low  CheckDreamPolicyRisk200JSONResponseBodyRiskLevel = "low"
+	CheckDreamPolicyRisk200JSONResponseBodyRiskLevelHigh CheckDreamPolicyRisk200JSONResponseBodyRiskLevel = "high"
+	CheckDreamPolicyRisk200JSONResponseBodyRiskLevelLow  CheckDreamPolicyRisk200JSONResponseBodyRiskLevel = "low"
 )
 
 // Valid indicates whether the value is a known member of the CheckDreamPolicyRisk200JSONResponseBodyRiskLevel enum.
 func (e CheckDreamPolicyRisk200JSONResponseBodyRiskLevel) Valid() bool {
 	switch e {
-	case High:
+	case CheckDreamPolicyRisk200JSONResponseBodyRiskLevelHigh:
 		return true
-	case Low:
+	case CheckDreamPolicyRisk200JSONResponseBodyRiskLevelLow:
 		return true
 	default:
 		return false
@@ -1168,16 +1621,16 @@ func (e DecideDreamPolicyJSONBodyDecision) Valid() bool {
 
 // Defines values for SubmitDreamPolicyReviewJSONBodyAction.
 const (
-	SubmitDreamPolicyReviewJSONBodyActionDisable SubmitDreamPolicyReviewJSONBodyAction = "disable"
-	SubmitDreamPolicyReviewJSONBodyActionPublish SubmitDreamPolicyReviewJSONBodyAction = "publish"
+	Disable SubmitDreamPolicyReviewJSONBodyAction = "disable"
+	Publish SubmitDreamPolicyReviewJSONBodyAction = "publish"
 )
 
 // Valid indicates whether the value is a known member of the SubmitDreamPolicyReviewJSONBodyAction enum.
 func (e SubmitDreamPolicyReviewJSONBodyAction) Valid() bool {
 	switch e {
-	case SubmitDreamPolicyReviewJSONBodyActionDisable:
+	case Disable:
 		return true
-	case SubmitDreamPolicyReviewJSONBodyActionPublish:
+	case Publish:
 		return true
 	default:
 		return false
@@ -1246,6 +1699,151 @@ type AgentRunPendingConfirmationRiskLevel string
 
 // AgentRunStatus defines model for AgentRun.Status.
 type AgentRunStatus string
+
+// BrowserDreamAnnotation defines model for BrowserDreamAnnotation.
+type BrowserDreamAnnotation struct {
+	Action    BrowserDreamAnnotationAction `json:"action"`
+	ActorName string                       `json:"actor_name"`
+	Comment   *string                      `json:"comment,omitempty"`
+	CreatedAt *time.Time                   `json:"created_at,omitempty"`
+}
+
+// BrowserDreamAnnotationAction defines model for BrowserDreamAnnotation.Action.
+type BrowserDreamAnnotationAction string
+
+// BrowserDreamBasicPolicyInput defines model for BrowserDreamBasicPolicyInput.
+type BrowserDreamBasicPolicyInput struct {
+	BindingHandle string                                     `json:"binding_handle"`
+	Cadence       BrowserDreamBasicPolicyInputCadence        `json:"cadence"`
+	Confirmation  BrowserDreamBasicPolicyInputConfirmation   `json:"confirmation"`
+	InputSources  []BrowserDreamBasicPolicyInputInputSources `json:"input_sources"`
+	OrgUnitId     string                                     `json:"org_unit_id"`
+	Visibility    BrowserDreamBasicPolicyInputVisibility     `json:"visibility"`
+}
+
+// BrowserDreamBasicPolicyInputCadence defines model for BrowserDreamBasicPolicyInput.Cadence.
+type BrowserDreamBasicPolicyInputCadence string
+
+// BrowserDreamBasicPolicyInputConfirmation defines model for BrowserDreamBasicPolicyInput.Confirmation.
+type BrowserDreamBasicPolicyInputConfirmation string
+
+// BrowserDreamBasicPolicyInputInputSources defines model for BrowserDreamBasicPolicyInput.InputSources.
+type BrowserDreamBasicPolicyInputInputSources string
+
+// BrowserDreamBasicPolicyInputVisibility defines model for BrowserDreamBasicPolicyInput.Visibility.
+type BrowserDreamBasicPolicyInputVisibility string
+
+// BrowserDreamBasicPolicyUpdate defines model for BrowserDreamBasicPolicyUpdate.
+type BrowserDreamBasicPolicyUpdate struct {
+	BindingHandle string                                      `json:"binding_handle"`
+	Cadence       BrowserDreamBasicPolicyUpdateCadence        `json:"cadence"`
+	Confirmation  BrowserDreamBasicPolicyUpdateConfirmation   `json:"confirmation"`
+	InputSources  []BrowserDreamBasicPolicyUpdateInputSources `json:"input_sources"`
+	OrgUnitId     string                                      `json:"org_unit_id"`
+	Revision      int                                         `json:"revision"`
+	Visibility    BrowserDreamBasicPolicyUpdateVisibility     `json:"visibility"`
+}
+
+// BrowserDreamBasicPolicyUpdateCadence defines model for BrowserDreamBasicPolicyUpdate.Cadence.
+type BrowserDreamBasicPolicyUpdateCadence string
+
+// BrowserDreamBasicPolicyUpdateConfirmation defines model for BrowserDreamBasicPolicyUpdate.Confirmation.
+type BrowserDreamBasicPolicyUpdateConfirmation string
+
+// BrowserDreamBasicPolicyUpdateInputSources defines model for BrowserDreamBasicPolicyUpdate.InputSources.
+type BrowserDreamBasicPolicyUpdateInputSources string
+
+// BrowserDreamBasicPolicyUpdateVisibility defines model for BrowserDreamBasicPolicyUpdate.Visibility.
+type BrowserDreamBasicPolicyUpdateVisibility string
+
+// BrowserDreamLineage defines model for BrowserDreamLineage.
+type BrowserDreamLineage struct {
+	Handle           *string `json:"handle,omitempty"`
+	OrganizationName string  `json:"organization_name"`
+	Relation         string  `json:"relation"`
+}
+
+// BrowserDreamPolicyLifecycle defines model for BrowserDreamPolicyLifecycle.
+type BrowserDreamPolicyLifecycle struct {
+	Cadence        BrowserDreamPolicyLifecycleCadence        `json:"cadence"`
+	CanAdopt       bool                                      `json:"can_adopt"`
+	CanDecide      bool                                      `json:"can_decide"`
+	Confirmation   BrowserDreamPolicyLifecycleConfirmation   `json:"confirmation"`
+	Handle         string                                    `json:"handle"`
+	InputSources   []string                                  `json:"input_sources"`
+	PendingAction  *BrowserDreamPolicyLifecyclePendingAction `json:"pending_action,omitempty"`
+	PermissionMode BrowserDreamPolicyLifecyclePermissionMode `json:"permission_mode"`
+	ReviewMode     *BrowserDreamPolicyLifecycleReviewMode    `json:"review_mode,omitempty"`
+	ReviewState    *BrowserDreamPolicyLifecycleReviewState   `json:"review_state,omitempty"`
+	Revision       int                                       `json:"revision"`
+	RiskLevel      *BrowserDreamPolicyLifecycleRiskLevel     `json:"risk_level,omitempty"`
+	RiskReasons    []string                                  `json:"risk_reasons"`
+	Status         BrowserDreamPolicyLifecycleStatus         `json:"status"`
+	Version        int                                       `json:"version"`
+	Visibility     BrowserDreamPolicyLifecycleVisibility     `json:"visibility"`
+}
+
+// BrowserDreamPolicyLifecycleCadence defines model for BrowserDreamPolicyLifecycle.Cadence.
+type BrowserDreamPolicyLifecycleCadence string
+
+// BrowserDreamPolicyLifecycleConfirmation defines model for BrowserDreamPolicyLifecycle.Confirmation.
+type BrowserDreamPolicyLifecycleConfirmation string
+
+// BrowserDreamPolicyLifecyclePendingAction defines model for BrowserDreamPolicyLifecycle.PendingAction.
+type BrowserDreamPolicyLifecyclePendingAction string
+
+// BrowserDreamPolicyLifecyclePermissionMode defines model for BrowserDreamPolicyLifecycle.PermissionMode.
+type BrowserDreamPolicyLifecyclePermissionMode string
+
+// BrowserDreamPolicyLifecycleReviewMode defines model for BrowserDreamPolicyLifecycle.ReviewMode.
+type BrowserDreamPolicyLifecycleReviewMode string
+
+// BrowserDreamPolicyLifecycleReviewState defines model for BrowserDreamPolicyLifecycle.ReviewState.
+type BrowserDreamPolicyLifecycleReviewState string
+
+// BrowserDreamPolicyLifecycleRiskLevel defines model for BrowserDreamPolicyLifecycle.RiskLevel.
+type BrowserDreamPolicyLifecycleRiskLevel string
+
+// BrowserDreamPolicyLifecycleStatus defines model for BrowserDreamPolicyLifecycle.Status.
+type BrowserDreamPolicyLifecycleStatus string
+
+// BrowserDreamPolicyLifecycleVisibility defines model for BrowserDreamPolicyLifecycle.Visibility.
+type BrowserDreamPolicyLifecycleVisibility string
+
+// BrowserDreamRunView defines model for BrowserDreamRunView.
+type BrowserDreamRunView struct {
+	Annotations             *[]BrowserDreamAnnotation `json:"annotations,omitempty"`
+	Coverage                Coverage                  `json:"coverage"`
+	DisplaySummary          string                    `json:"display_summary"`
+	DownstreamOrganizations *[]BrowserDreamLineage    `json:"downstream_organizations,omitempty"`
+	Facts                   []BrowserDreamSignal      `json:"facts"`
+	FailureStage            *string                   `json:"failure_stage,omitempty"`
+	Handle                  string                    `json:"handle"`
+	InputCount              int                       `json:"input_count"`
+	InputOrganizations      *[]BrowserDreamLineage    `json:"input_organizations,omitempty"`
+	MissingInputReasons     []string                  `json:"missing_input_reasons"`
+	Rerun                   bool                      `json:"rerun"`
+	Risks                   []BrowserDreamSignal      `json:"risks"`
+	Status                  BrowserDreamRunViewStatus `json:"status"`
+	Themes                  []BrowserDreamSignal      `json:"themes"`
+	Todos                   []BrowserDreamSignal      `json:"todos"`
+	Trends                  []BrowserDreamSignal      `json:"trends"`
+	WindowEnd               time.Time                 `json:"window_end"`
+	WindowStart             time.Time                 `json:"window_start"`
+}
+
+// BrowserDreamRunViewStatus defines model for BrowserDreamRunView.Status.
+type BrowserDreamRunViewStatus string
+
+// BrowserDreamSignal defines model for BrowserDreamSignal.
+type BrowserDreamSignal struct {
+	Detail   string                     `json:"detail"`
+	Severity BrowserDreamSignalSeverity `json:"severity"`
+	Title    string                     `json:"title"`
+}
+
+// BrowserDreamSignalSeverity defines model for BrowserDreamSignal.Severity.
+type BrowserDreamSignalSeverity string
 
 // BrowserKnowledgeHome defines model for BrowserKnowledgeHome.
 type BrowserKnowledgeHome struct {
@@ -1464,7 +2062,7 @@ type DreamPolicyRevision struct {
 
 // DreamRunList defines model for DreamRunList.
 type DreamRunList struct {
-	Runs []DreamRunView `json:"runs"`
+	Runs []BrowserDreamRunView `json:"runs"`
 }
 
 // DreamRunView defines model for DreamRunView.
@@ -1742,14 +2340,18 @@ type CreateBrowserDreamPolicyDraftParams struct {
 	IdempotencyKey string `json:"Idempotency-Key"`
 }
 
-// UpdateBrowserDreamPolicyDraftJSONBody defines parameters for UpdateBrowserDreamPolicyDraft.
-type UpdateBrowserDreamPolicyDraftJSONBody struct {
-	Policy   DreamPolicyDefinition `json:"policy"`
-	Revision int                   `json:"revision"`
-}
-
 // UpdateBrowserDreamPolicyDraftParams defines parameters for UpdateBrowserDreamPolicyDraft.
 type UpdateBrowserDreamPolicyDraftParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
+// AdoptBrowserDreamPolicySuggestionJSONBody defines parameters for AdoptBrowserDreamPolicySuggestion.
+type AdoptBrowserDreamPolicySuggestionJSONBody struct {
+	Revision int `json:"revision"`
+}
+
+// AdoptBrowserDreamPolicySuggestionParams defines parameters for AdoptBrowserDreamPolicySuggestion.
+type AdoptBrowserDreamPolicySuggestionParams struct {
 	IdempotencyKey string `json:"Idempotency-Key"`
 }
 
@@ -1842,6 +2444,11 @@ type AnnotateBrowserDreamRunJSONBodyAction string
 // RerunBrowserDreamRunParams defines parameters for RerunBrowserDreamRun.
 type RerunBrowserDreamRunParams struct {
 	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
+// ListBrowserDreamWorkflowBindingsParams defines parameters for ListBrowserDreamWorkflowBindings.
+type ListBrowserDreamWorkflowBindingsParams struct {
+	OrgUnitId string `form:"org_unit_id" json:"org_unit_id"`
 }
 
 // ListBrowserKnowledgeHomeParams defines parameters for ListBrowserKnowledgeHome.
@@ -2035,10 +2642,13 @@ type UpdateGovernedChangeJSONRequestBody = UpdateChangeInput
 type DecideGovernedChangeJSONRequestBody = ChangeDecisionInput
 
 // CreateBrowserDreamPolicyDraftJSONRequestBody defines body for CreateBrowserDreamPolicyDraft for application/json ContentType.
-type CreateBrowserDreamPolicyDraftJSONRequestBody = DreamPolicyDefinition
+type CreateBrowserDreamPolicyDraftJSONRequestBody = BrowserDreamBasicPolicyInput
 
 // UpdateBrowserDreamPolicyDraftJSONRequestBody defines body for UpdateBrowserDreamPolicyDraft for application/json ContentType.
-type UpdateBrowserDreamPolicyDraftJSONRequestBody UpdateBrowserDreamPolicyDraftJSONBody
+type UpdateBrowserDreamPolicyDraftJSONRequestBody = BrowserDreamBasicPolicyUpdate
+
+// AdoptBrowserDreamPolicySuggestionJSONRequestBody defines body for AdoptBrowserDreamPolicySuggestion for application/json ContentType.
+type AdoptBrowserDreamPolicySuggestionJSONRequestBody AdoptBrowserDreamPolicySuggestionJSONBody
 
 // BackfillBrowserDreamPolicyJSONRequestBody defines body for BackfillBrowserDreamPolicy for application/json ContentType.
 type BackfillBrowserDreamPolicyJSONRequestBody BackfillBrowserDreamPolicyJSONBody

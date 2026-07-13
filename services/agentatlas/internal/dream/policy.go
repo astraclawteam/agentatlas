@@ -148,6 +148,11 @@ type policyLifecycleLister interface {
 	ListDreamPolicyLifecyclesByOrgBounded(context.Context, db.ListDreamPolicyLifecyclesByOrgBoundedParams) ([]db.DreamPolicy, error)
 }
 
+type policyAdoptionStore interface {
+	AdoptDreamPolicySuggestion(context.Context, db.AdoptDreamPolicySuggestionParams) (db.AdoptDreamPolicySuggestionRow, error)
+	GetDreamPolicyAdoptionBySource(context.Context, db.GetDreamPolicyAdoptionBySourceParams) (db.DreamPolicyAdoption, error)
+}
+
 type LifecycleView struct {
 	ID              string                    `json:"dream_policy_id"`
 	Status          string                    `json:"status"`
@@ -409,6 +414,21 @@ func (s *PolicyService) GetLifecycle(ctx context.Context, enterpriseID, policyID
 		version = latest.Version
 	}
 	return lifecycleView(row, version)
+}
+
+func (s *PolicyService) AdoptSuggestion(ctx context.Context, enterpriseID, sourcePolicyID, targetPolicyID, adopter, auditRef, operationKey string, sourceRevision int32) (LifecycleView, error) {
+	store, ok := s.store.(policyAdoptionStore)
+	if !ok || enterpriseID == "" || sourcePolicyID == "" || targetPolicyID == "" || adopter == "" || auditRef == "" || operationKey == "" {
+		return LifecycleView{}, fmt.Errorf("Dream suggestion adoption unavailable")
+	}
+	_, err := store.AdoptDreamPolicySuggestion(ctx, db.AdoptDreamPolicySuggestionParams{EnterpriseID: enterpriseID, OperationKey: operationKey, SourcePolicyID: sourcePolicyID, AdopterUserID: adopter, AuditRefID: text(auditRef), SourceRevision: sourceRevision, TargetPolicyID: targetPolicyID})
+	if err != nil {
+		if lineage, lookupErr := store.GetDreamPolicyAdoptionBySource(ctx, db.GetDreamPolicyAdoptionBySourceParams{EnterpriseID: enterpriseID, SourcePolicyID: sourcePolicyID, SourceRevision: sourceRevision}); lookupErr == nil && lineage.OperationKey == operationKey && lineage.AdopterUserID == adopter {
+			return s.operationLifecycleResult(ctx, enterpriseID, lineage.TargetPolicyID, operationKey)
+		}
+		return LifecycleView{}, err
+	}
+	return s.GetLifecycle(ctx, enterpriseID, targetPolicyID)
 }
 
 func (s *PolicyService) OrgVersion(ctx context.Context, enterpriseID string) (int64, error) {

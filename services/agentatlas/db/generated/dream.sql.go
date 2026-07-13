@@ -11,6 +11,113 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const adoptDreamPolicySuggestion = `-- name: AdoptDreamPolicySuggestion :one
+WITH op AS (
+  SELECT operation.enterprise_id, operation.operation_key, operation.operation_kind, operation.policy_id, operation.actor_user_id, operation.request_hash, operation.facts_nonce, operation.facts_issued_at, operation.facts_expires_at, operation.audit_ref_id, operation.status, operation.result, operation.created_at, operation.updated_at FROM dream_policy_operations operation
+  WHERE operation.enterprise_id=$1 AND operation.operation_key=$2
+    AND operation.operation_kind='adopt' AND operation.policy_id=$3
+    AND operation.actor_user_id=$4 AND operation.status='pending'
+    AND operation.audit_ref_id=$5
+  FOR UPDATE
+), source AS (
+  SELECT policy.id, policy.enterprise_id, policy.org_scope, policy.status, policy.draft, policy.created_at, policy.updated_at, policy.revision, policy.requester_user_id, policy.permission_mode, policy.pending_action, policy.review_state, policy.risk_level, policy.risk_reasons, policy.review_mode, policy.reviewer_user_id, policy.review_org_path, policy.review_queue, policy.decision, policy.audit_ref_id FROM dream_policies policy, op
+  WHERE policy.enterprise_id=$1 AND policy.id=$3
+    AND policy.permission_mode='suggestion_only' AND policy.status='draft'
+    AND policy.revision=$6
+  FOR UPDATE
+), created AS (
+  INSERT INTO dream_policies(id,enterprise_id,org_scope,status,draft,requester_user_id,permission_mode,audit_ref_id)
+  SELECT $7,source.enterprise_id,source.org_scope,'draft',source.draft,$4,'direct_edit',$5
+  FROM source
+  RETURNING id, enterprise_id, org_scope, status, draft, created_at, updated_at, revision, requester_user_id, permission_mode, pending_action, review_state, risk_level, risk_reasons, review_mode, reviewer_user_id, review_org_path, review_queue, decision, audit_ref_id
+), lineage AS (
+  INSERT INTO dream_policy_adoptions(enterprise_id,source_policy_id,source_requester_user_id,source_revision,target_policy_id,adopter_user_id,audit_ref_id,operation_key)
+  SELECT source.enterprise_id,source.id,source.requester_user_id,source.revision,created.id,$4,$5,$2
+  FROM source JOIN created ON true
+  RETURNING target_policy_id
+), audit AS (
+  INSERT INTO dream_policy_transition_audits(enterprise_id,policy_id,revision,transition,operation_key,audit_ref_id,actor_user_id)
+  SELECT created.enterprise_id,created.id,0,'adopt',$2,$5,$4
+  FROM created JOIN lineage ON lineage.target_policy_id=created.id
+  RETURNING policy_id
+), receipt AS (
+  UPDATE dream_policy_operations operation SET status='completed',result=dream_policy_lifecycle_result(created,0),updated_at=now()
+  FROM created JOIN audit ON audit.policy_id=created.id
+  WHERE operation.enterprise_id=created.enterprise_id AND operation.operation_key=$2
+  RETURNING operation.operation_key
+)
+SELECT created.id, created.enterprise_id, created.org_scope, created.status, created.draft, created.created_at, created.updated_at, created.revision, created.requester_user_id, created.permission_mode, created.pending_action, created.review_state, created.risk_level, created.risk_reasons, created.review_mode, created.reviewer_user_id, created.review_org_path, created.review_queue, created.decision, created.audit_ref_id FROM created JOIN audit ON audit.policy_id=created.id JOIN receipt ON true
+`
+
+type AdoptDreamPolicySuggestionParams struct {
+	EnterpriseID   string      `json:"enterprise_id"`
+	OperationKey   string      `json:"operation_key"`
+	SourcePolicyID string      `json:"source_policy_id"`
+	AdopterUserID  string      `json:"adopter_user_id"`
+	AuditRefID     pgtype.Text `json:"audit_ref_id"`
+	SourceRevision int32       `json:"source_revision"`
+	TargetPolicyID string      `json:"target_policy_id"`
+}
+
+type AdoptDreamPolicySuggestionRow struct {
+	ID              string             `json:"id"`
+	EnterpriseID    string             `json:"enterprise_id"`
+	OrgScope        string             `json:"org_scope"`
+	Status          string             `json:"status"`
+	Draft           []byte             `json:"draft"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	Revision        int32              `json:"revision"`
+	RequesterUserID string             `json:"requester_user_id"`
+	PermissionMode  string             `json:"permission_mode"`
+	PendingAction   string             `json:"pending_action"`
+	ReviewState     string             `json:"review_state"`
+	RiskLevel       string             `json:"risk_level"`
+	RiskReasons     []byte             `json:"risk_reasons"`
+	ReviewMode      string             `json:"review_mode"`
+	ReviewerUserID  pgtype.Text        `json:"reviewer_user_id"`
+	ReviewOrgPath   []byte             `json:"review_org_path"`
+	ReviewQueue     pgtype.Text        `json:"review_queue"`
+	Decision        string             `json:"decision"`
+	AuditRefID      string             `json:"audit_ref_id"`
+}
+
+func (q *Queries) AdoptDreamPolicySuggestion(ctx context.Context, arg AdoptDreamPolicySuggestionParams) (AdoptDreamPolicySuggestionRow, error) {
+	row := q.db.QueryRow(ctx, adoptDreamPolicySuggestion,
+		arg.EnterpriseID,
+		arg.OperationKey,
+		arg.SourcePolicyID,
+		arg.AdopterUserID,
+		arg.AuditRefID,
+		arg.SourceRevision,
+		arg.TargetPolicyID,
+	)
+	var i AdoptDreamPolicySuggestionRow
+	err := row.Scan(
+		&i.ID,
+		&i.EnterpriseID,
+		&i.OrgScope,
+		&i.Status,
+		&i.Draft,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Revision,
+		&i.RequesterUserID,
+		&i.PermissionMode,
+		&i.PendingAction,
+		&i.ReviewState,
+		&i.RiskLevel,
+		&i.RiskReasons,
+		&i.ReviewMode,
+		&i.ReviewerUserID,
+		&i.ReviewOrgPath,
+		&i.ReviewQueue,
+		&i.Decision,
+		&i.AuditRefID,
+	)
+	return i, err
+}
+
 const bindDreamWorkflowRun = `-- name: BindDreamWorkflowRun :one
 UPDATE dream_runs SET workflow_run_id = $1
 WHERE enterprise_id = $2 AND id = $3
@@ -908,6 +1015,35 @@ func (q *Queries) GetDreamPolicy(ctx context.Context, id string) (DreamPolicy, e
 		&i.ReviewQueue,
 		&i.Decision,
 		&i.AuditRefID,
+	)
+	return i, err
+}
+
+const getDreamPolicyAdoptionBySource = `-- name: GetDreamPolicyAdoptionBySource :one
+SELECT enterprise_id, source_policy_id, source_requester_user_id, source_revision, target_policy_id, adopter_user_id, audit_ref_id, operation_key, created_at FROM dream_policy_adoptions
+WHERE enterprise_id=$1 AND source_policy_id=$2
+  AND source_revision=$3
+`
+
+type GetDreamPolicyAdoptionBySourceParams struct {
+	EnterpriseID   string `json:"enterprise_id"`
+	SourcePolicyID string `json:"source_policy_id"`
+	SourceRevision int32  `json:"source_revision"`
+}
+
+func (q *Queries) GetDreamPolicyAdoptionBySource(ctx context.Context, arg GetDreamPolicyAdoptionBySourceParams) (DreamPolicyAdoption, error) {
+	row := q.db.QueryRow(ctx, getDreamPolicyAdoptionBySource, arg.EnterpriseID, arg.SourcePolicyID, arg.SourceRevision)
+	var i DreamPolicyAdoption
+	err := row.Scan(
+		&i.EnterpriseID,
+		&i.SourcePolicyID,
+		&i.SourceRequesterUserID,
+		&i.SourceRevision,
+		&i.TargetPolicyID,
+		&i.AdopterUserID,
+		&i.AuditRefID,
+		&i.OperationKey,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -1973,6 +2109,114 @@ func (q *Queries) ListDreamPolicyLifecyclesByOrgBounded(ctx context.Context, arg
 			&i.ReviewOrgPath,
 			&i.ReviewQueue,
 			&i.Decision,
+			&i.AuditRefID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDreamRunAnnotationsByRunBounded = `-- name: ListDreamRunAnnotationsByRunBounded :many
+SELECT id, enterprise_id, run_id, annotation_type, body, created_by, created_at FROM dream_run_annotations
+WHERE enterprise_id = $1 AND run_id = $2
+ORDER BY created_at, id
+LIMIT $3
+`
+
+type ListDreamRunAnnotationsByRunBoundedParams struct {
+	EnterpriseID string `json:"enterprise_id"`
+	RunID        string `json:"run_id"`
+	ResultLimit  int32  `json:"result_limit"`
+}
+
+func (q *Queries) ListDreamRunAnnotationsByRunBounded(ctx context.Context, arg ListDreamRunAnnotationsByRunBoundedParams) ([]DreamRunAnnotation, error) {
+	rows, err := q.db.Query(ctx, listDreamRunAnnotationsByRunBounded, arg.EnterpriseID, arg.RunID, arg.ResultLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DreamRunAnnotation
+	for rows.Next() {
+		var i DreamRunAnnotation
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnterpriseID,
+			&i.RunID,
+			&i.AnnotationType,
+			&i.Body,
+			&i.CreatedBy,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDreamRunChildrenByParentBounded = `-- name: ListDreamRunChildrenByParentBounded :many
+SELECT child.id, child.policy_id, child.version, child.enterprise_id, child.status, child.window_start, child.window_end, child.error, child.created_at, child.finished_at, child.org_unit_id, child.policy_version, child.workflow_id, child.workflow_version, child.timezone, child.input_snapshot, child.visibility_snapshot, child.model_route, child.model_version, child.attempt, child.rerun_of_run_id, child.coverage, child.missing_inputs, child.idempotency_key, child.workflow_run_id, child.output_hash, child.execution_owner, child.execution_lease_expires_at, child.org_version, child.operation_kind, child.audit_ref_id FROM dream_run_lineage lineage
+JOIN dream_runs child ON child.id = lineage.run_id
+WHERE child.enterprise_id = $1
+  AND lineage.parent_run_id = $2
+ORDER BY child.created_at, child.id
+LIMIT $3
+`
+
+type ListDreamRunChildrenByParentBoundedParams struct {
+	EnterpriseID string `json:"enterprise_id"`
+	ParentRunID  string `json:"parent_run_id"`
+	ResultLimit  int32  `json:"result_limit"`
+}
+
+func (q *Queries) ListDreamRunChildrenByParentBounded(ctx context.Context, arg ListDreamRunChildrenByParentBoundedParams) ([]DreamRun, error) {
+	rows, err := q.db.Query(ctx, listDreamRunChildrenByParentBounded, arg.EnterpriseID, arg.ParentRunID, arg.ResultLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DreamRun
+	for rows.Next() {
+		var i DreamRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.PolicyID,
+			&i.Version,
+			&i.EnterpriseID,
+			&i.Status,
+			&i.WindowStart,
+			&i.WindowEnd,
+			&i.Error,
+			&i.CreatedAt,
+			&i.FinishedAt,
+			&i.OrgUnitID,
+			&i.PolicyVersion,
+			&i.WorkflowID,
+			&i.WorkflowVersion,
+			&i.Timezone,
+			&i.InputSnapshot,
+			&i.VisibilitySnapshot,
+			&i.ModelRoute,
+			&i.ModelVersion,
+			&i.Attempt,
+			&i.RerunOfRunID,
+			&i.Coverage,
+			&i.MissingInputs,
+			&i.IdempotencyKey,
+			&i.WorkflowRunID,
+			&i.OutputHash,
+			&i.ExecutionOwner,
+			&i.ExecutionLeaseExpiresAt,
+			&i.OrgVersion,
+			&i.OperationKind,
 			&i.AuditRefID,
 		); err != nil {
 			return nil, err

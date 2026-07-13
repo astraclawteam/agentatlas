@@ -21,22 +21,23 @@ import (
 // plane (api/openapi/atlas-agent.yaml): Knowledge Agent runs, workflow
 // draft/publish, dream policies, confirmations.
 type AgentRouterDeps struct {
-	Nexus                 nexus.Client
-	Agent                 *agent.Runner
-	Workflows             *workflow.Service
-	Runtime               *workflow.Runtime
-	Dreams                *dream.PolicyService
-	DreamRuns             dreamRunStore
-	DreamRerun            dreamRerunner
-	Store                 *db.Queries
-	Outlines              MethodOutlineStore // optional; defaults to Store
-	Runner                *tasks.Runner
-	Metrics               *observability.Metrics  // optional; enables /metrics + latency histograms
-	BrowserSessions       *browsersession.Service // optional; enables Console BFF routes
-	BrowserOrgStore       browserSessionOrgStore  // optional; defaults to Store
-	BrowserKnowledgeStore browserKnowledgeStore   // optional; defaults to Store
-	BrowserAuthorizer     nexus.BrowserBFFClient  // optional; required by advanced legacy BFF routes
-	Changes               *governance.Service     // optional; enables governed maintenance routes
+	Nexus                  nexus.Client
+	Agent                  *agent.Runner
+	Workflows              *workflow.Service
+	Runtime                *workflow.Runtime
+	Dreams                 *dream.PolicyService
+	DreamRuns              dreamRunStore
+	DreamRerun             dreamRerunner
+	Store                  *db.Queries
+	Outlines               MethodOutlineStore // optional; defaults to Store
+	Runner                 *tasks.Runner
+	Metrics                *observability.Metrics    // optional; enables /metrics + latency histograms
+	BrowserSessions        *browsersession.Service   // optional; enables Console BFF routes
+	BrowserHandleProtector *browsersession.Protector // required for restart-safe opaque Console resource handles
+	BrowserOrgStore        browserSessionOrgStore    // optional; defaults to Store
+	BrowserKnowledgeStore  browserKnowledgeStore     // optional; defaults to Store
+	BrowserAuthorizer      nexus.BrowserBFFClient    // optional; required by advanced legacy BFF routes
+	Changes                *governance.Service       // optional; enables governed maintenance routes
 }
 
 type dreamBackfiller interface {
@@ -165,7 +166,7 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 		if candidate, ok := deps.DreamRerun.(dreamBackfiller); ok {
 			browserBackfill = candidate
 		}
-		browserDream := &browserDreamHandler{store: dreamRuns, authorizer: deps.BrowserAuthorizer, evidence: browserDreamEvidence, rerun: deps.DreamRerun, backfill: browserBackfill, operations: deps.Dreams}
+		browserDream := &browserDreamHandler{store: dreamRuns, orgs: orgStore, authorizer: deps.BrowserAuthorizer, evidence: browserDreamEvidence, rerun: deps.DreamRerun, backfill: browserBackfill, operations: deps.Dreams, handles: newBrowserDreamHandleCodec(deps.BrowserHandleProtector, nil), bindings: workflowDreamBindingLister{workflows: deps.Workflows, orgs: orgStore}}
 		if deps.Changes != nil {
 			knowledge.changes = deps.Changes
 		}
@@ -191,12 +192,14 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 			r.Get("/runs", browserDream.list)
 			r.Get("/runs/{id}", browserDream.detail)
 			r.Get("/policies", browserDream.listPolicies)
+			r.Get("/workflow-bindings", browserDream.listWorkflowBindings)
 			r.Group(func(r chi.Router) {
 				r.Use(sameOriginCSRF)
 				r.Post("/runs/{id}/annotations", browserDream.annotate)
 				r.Post("/runs/{id}/reruns", browserDream.rerunRun)
 				r.Post("/runs/{id}/evidence-access", browserDream.evidenceAccess)
 				r.Post("/policies", browserDream.createPolicy)
+				r.Post("/policies/{id}/adoptions", browserDream.adoptPolicy)
 				r.Put("/policies/{id}", browserDream.updatePolicy)
 				r.Post("/policies/{id}/check", browserDream.checkPolicy)
 				r.Post("/policies/{id}/review", browserDream.reviewPolicy)

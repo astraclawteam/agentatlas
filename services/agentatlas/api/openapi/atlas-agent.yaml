@@ -64,7 +64,7 @@ paths:
       operationId: getBrowserDreamRun
       parameters: [{name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}]
       responses:
-        '200': {description: Immutable Dream run, content: {application/json: {schema: {$ref: '#/components/schemas/DreamRunView'}}}}
+        '200': {description: Immutable sanitized Dream run, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserDreamRunView'}}}}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {description: Browser session or AgentNexus denied the exact run organization.}
         '404': {$ref: '#/components/responses/NotFound'}
@@ -102,14 +102,24 @@ paths:
       security: [{AtlasSession: []}]
       operationId: listBrowserDreamPolicies
       parameters: [{name: org_unit_id, in: query, required: true, schema: {type: string, minLength: 1, maxLength: 128}}]
-      responses: {'200': {description: Bounded draft, review, published, and disabled policy lifecycle views for one exactly authorized organization.}, '403': {description: Exact policy read authorization denied.}}
+      responses: {'200': {description: Bounded sanitized lifecycle views, content: {application/json: {schema: {type: object, additionalProperties: false, required: [dream_policies], properties: {dream_policies: {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/BrowserDreamPolicyLifecycle'}}}}}}}, '403': {description: Exact policy read authorization denied.}}
     post:
       security: [{AtlasSession: []}]
       operationId: createBrowserDreamPolicyDraft
       description: Creates an audited governed draft only; this route never publishes.
       parameters: [{name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 256}}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/DreamPolicyDefinition'}}}}
-      responses: {'201': {description: Governed Dream policy draft created.}, '403': {description: Exact edit or suggestion authorization denied.}, '409': {description: Idempotency conflict.}, '422': {description: Public policy definition invalid.}}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserDreamBasicPolicyInput'}}}}
+      responses: {'201': {description: Governed Dream policy draft created, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserDreamPolicyLifecycle'}}}}, '403': {description: Exact edit or suggestion authorization denied.}, '409': {description: Idempotency conflict.}, '422': {description: Basic policy input invalid.}}
+  /api/dream/workflow-bindings:
+    get:
+      security: [{AtlasSession: []}]
+      operationId: listBrowserDreamWorkflowBindings
+      description: Lists human-readable published Dream workflows with opaque session-bound binding handles; workflow and output-space identifiers are never returned.
+      parameters: [{name: org_unit_id, in: query, required: true, schema: {type: string, minLength: 1, maxLength: 128}}]
+      responses:
+        '200': {description: Bounded published Dream workflow bindings.}
+        '403': {description: Exact organization authorization denied.}
+        '503': {description: Published workflow or authoritative output binding unavailable.}
   /api/dream/policies/{id}:
     put:
       security: [{AtlasSession: []}]
@@ -117,8 +127,8 @@ paths:
       parameters:
         - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
         - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [revision, policy], properties: {revision: {type: integer, minimum: 0}, policy: {$ref: '#/components/schemas/DreamPolicyDefinition'}}}}}}
-      responses: {'200': {description: Draft updated without publication.}, '403': {description: Exact edit authorization denied.}, '409': {description: Revision or idempotency conflict.}}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserDreamBasicPolicyUpdate'}}}}
+      responses: {'200': {description: Draft updated without publication, content: {application/json: {schema: {$ref: '#/components/schemas/BrowserDreamPolicyLifecycle'}}}}, '403': {description: Exact edit authorization denied.}, '409': {description: Revision or idempotency conflict.}}
   /api/dream/policies/{id}/check:
     post:
       security: [{AtlasSession: []}]
@@ -126,6 +136,19 @@ paths:
       parameters: [{name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [revision], properties: {revision: {type: integer, minimum: 0}}}}}}
       responses: {'200': {description: Deterministic risk and changed fields.}, '403': {description: Exact edit authorization denied.}, '409': {description: Stale revision.}}
+  /api/dream/policies/{id}/adoptions:
+    post:
+      security: [{AtlasSession: []}]
+      operationId: adoptBrowserDreamPolicySuggestion
+      description: Creates a new direct-edit draft from an immutable employee suggestion and records durable source lineage; the source suggestion is never mutated.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, minLength: 32, maxLength: 4096}}
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, required: [revision], properties: {revision: {type: integer, minimum: 0}}}}}}
+      responses:
+        '201': {description: New direct-edit draft created with immutable adoption lineage.}
+        '403': {description: Exact edit or organization authorization denied.}
+        '409': {description: Suggestion state, revision, concurrency, or idempotency conflict.}
   /api/dream/policies/{id}/review:
     post:
       security: [{AtlasSession: []}]
@@ -606,7 +629,7 @@ paths:
               additionalProperties: false
               required: [action]
               properties:
-                action: { type: string, enum: [confirm, reject, mark_incorrect, comment] }
+                action: { type: string, enum: [confirm, reject, mark_incorrect, comment], x-enum-varnames: [AnnotateDreamRunJSONBodyActionConfirm, AnnotateDreamRunJSONBodyActionReject, AnnotateDreamRunJSONBodyActionMarkIncorrect, AnnotateDreamRunJSONBodyActionComment] }
                 comment: { type: string, maxLength: 4000 }
       responses:
         '201': { description: Annotation appended }
@@ -888,7 +911,99 @@ components:
         runs:
           type: array
           maxItems: 100
-          items: { $ref: '#/components/schemas/DreamRunView' }
+          items: { $ref: '#/components/schemas/BrowserDreamRunView' }
+    BrowserDreamSignal:
+      type: object
+      additionalProperties: false
+      required: [title, detail, severity]
+      properties:
+        title: {type: string, maxLength: 200}
+        detail: {type: string, maxLength: 2000}
+        severity: {type: string, enum: [info, warning, critical]}
+    BrowserDreamRunView:
+      type: object
+      additionalProperties: false
+      required: [handle, status, window_start, window_end, input_count, coverage, missing_input_reasons, facts, themes, trends, risks, todos, display_summary, rerun]
+      properties:
+        handle: {type: string, minLength: 32, maxLength: 4096}
+        status: {type: string, enum: [pending, running, waiting_confirmation, succeeded, failed]}
+        window_start: {type: string, format: date-time}
+        window_end: {type: string, format: date-time}
+        input_count: {type: integer, minimum: 0}
+        coverage: {$ref: '#/components/schemas/Coverage'}
+        missing_input_reasons: {type: array, maxItems: 1000, items: {type: string, maxLength: 200}}
+        facts: {type: array, maxItems: 500, items: {$ref: '#/components/schemas/BrowserDreamSignal'}}
+        themes: {type: array, maxItems: 500, items: {$ref: '#/components/schemas/BrowserDreamSignal'}}
+        trends: {type: array, maxItems: 500, items: {$ref: '#/components/schemas/BrowserDreamSignal'}}
+        risks: {type: array, maxItems: 500, items: {$ref: '#/components/schemas/BrowserDreamSignal'}}
+        todos: {type: array, maxItems: 500, items: {$ref: '#/components/schemas/BrowserDreamSignal'}}
+        display_summary: {type: string, maxLength: 10000}
+        rerun: {type: boolean}
+        failure_stage: {type: string, maxLength: 100}
+        annotations: {type: array, maxItems: 500, items: {$ref: '#/components/schemas/BrowserDreamAnnotation'}}
+        input_organizations: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/BrowserDreamLineage'}}
+        downstream_organizations: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/BrowserDreamLineage'}}
+    BrowserDreamAnnotation:
+      type: object
+      additionalProperties: false
+      required: [action, actor_name]
+      properties:
+        action: {type: string, enum: [confirm, reject, mark_incorrect, comment]}
+        comment: {type: string, maxLength: 4000}
+        actor_name: {type: string, maxLength: 200}
+        created_at: {type: string, format: date-time}
+    BrowserDreamLineage:
+      type: object
+      additionalProperties: false
+      required: [organization_name, relation]
+      properties:
+        organization_name: {type: string, maxLength: 200}
+        relation: {type: string, maxLength: 100}
+        handle: {type: string, minLength: 32, maxLength: 4096}
+    BrowserDreamPolicyLifecycle:
+      type: object
+      additionalProperties: false
+      required: [handle, status, revision, version, permission_mode, risk_reasons, cadence, input_sources, visibility, confirmation, can_adopt, can_decide]
+      properties:
+        handle: {type: string, minLength: 32, maxLength: 4096}
+        status: {type: string, enum: [draft, review_pending, approved, rejected, published, disabled]}
+        revision: {type: integer, minimum: 0}
+        version: {type: integer, minimum: 0}
+        permission_mode: {type: string, enum: [direct_edit, suggestion_only]}
+        risk_level: {type: string, enum: [low, high]}
+        risk_reasons: {type: array, maxItems: 100, items: {type: string, maxLength: 200}}
+        review_mode: {type: string, enum: [single_confirmation, upward_review, enterprise_knowledge_admin_queue]}
+        pending_action: {type: string, enum: [publish, disable]}
+        review_state: {type: string, enum: [pending, approved, rejected]}
+        cadence: {type: string, enum: [nightly, weekly, custom]}
+        input_sources: {type: array, maxItems: 16, items: {type: string}}
+        visibility: {type: string, enum: [members, managers, company_sanitized]}
+        confirmation: {type: string, enum: [always, high_risk_only, never]}
+        can_adopt: {type: boolean}
+        can_decide: {type: boolean}
+    BrowserDreamBasicPolicyInput:
+      type: object
+      additionalProperties: false
+      required: [org_unit_id, cadence, input_sources, visibility, confirmation, binding_handle]
+      properties:
+        org_unit_id: {type: string, minLength: 1, maxLength: 128}
+        cadence: {type: string, enum: [nightly, weekly]}
+        input_sources: {type: array, minItems: 1, maxItems: 16, uniqueItems: true, items: {type: string, enum: [work_brief, child_dream_summary, project_record, sop_update, agent_answer, external_evidence, completed_task, risk_event]}}
+        visibility: {type: string, enum: [members, managers, company_sanitized]}
+        confirmation: {type: string, enum: [always, high_risk_only, never]}
+        binding_handle: {type: string, minLength: 32, maxLength: 4096}
+    BrowserDreamBasicPolicyUpdate:
+      type: object
+      additionalProperties: false
+      required: [revision, org_unit_id, cadence, input_sources, visibility, confirmation, binding_handle]
+      properties:
+        revision: {type: integer, minimum: 0}
+        org_unit_id: {type: string, minLength: 1, maxLength: 128}
+        cadence: {type: string, enum: [nightly, weekly]}
+        input_sources: {type: array, minItems: 1, maxItems: 16, uniqueItems: true, items: {type: string, enum: [work_brief, child_dream_summary, project_record, sop_update, agent_answer, external_evidence, completed_task, risk_event]}}
+        visibility: {type: string, enum: [members, managers, company_sanitized]}
+        confirmation: {type: string, enum: [always, high_risk_only, never]}
+        binding_handle: {type: string, minLength: 32, maxLength: 4096}
     Error:
       type: object
       required: [code, message]

@@ -20,12 +20,17 @@ import (
 
 type fakeDreamRunStore struct {
 	run         db.GetDreamRunViewRow
+	views       map[string]db.GetDreamRunViewRow
 	runs        []db.DreamRun
+	children    []db.DreamRun
 	annotations []db.CreateDreamAnnotationParams
 	listCalls   int
 }
 
 func (f *fakeDreamRunStore) GetDreamRunView(_ context.Context, p db.GetDreamRunViewParams) (db.GetDreamRunViewRow, error) {
+	if row, ok := f.views[p.RunID]; ok && row.EnterpriseID == p.EnterpriseID {
+		return row, nil
+	}
 	if p.EnterpriseID != f.run.EnterpriseID || p.RunID != f.run.ID {
 		return db.GetDreamRunViewRow{}, errors.New("not found")
 	}
@@ -41,6 +46,26 @@ func (f *fakeDreamRunStore) ListDreamRunsByOrg(_ context.Context, p db.ListDream
 func (f *fakeDreamRunStore) CreateDreamAnnotation(_ context.Context, p db.CreateDreamAnnotationParams) (db.DreamRunAnnotation, error) {
 	f.annotations = append(f.annotations, p)
 	return db.DreamRunAnnotation{ID: p.ID, EnterpriseID: p.EnterpriseID, RunID: p.RunID, AnnotationType: p.AnnotationType, Body: p.Body, CreatedBy: p.CreatedBy}, nil
+}
+
+func (f *fakeDreamRunStore) ListDreamRunAnnotationsByRunBounded(_ context.Context, p db.ListDreamRunAnnotationsByRunBoundedParams) ([]db.DreamRunAnnotation, error) {
+	out := make([]db.DreamRunAnnotation, 0, len(f.annotations))
+	for _, item := range f.annotations {
+		if item.EnterpriseID == p.EnterpriseID && item.RunID == p.RunID {
+			out = append(out, db.DreamRunAnnotation{ID: item.ID, EnterpriseID: item.EnterpriseID, RunID: item.RunID, AnnotationType: item.AnnotationType, Body: item.Body, CreatedBy: item.CreatedBy})
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeDreamRunStore) ListDreamRunChildrenByParentBounded(_ context.Context, p db.ListDreamRunChildrenByParentBoundedParams) ([]db.DreamRun, error) {
+	out := make([]db.DreamRun, 0, len(f.children))
+	for _, child := range f.children {
+		if child.EnterpriseID == p.EnterpriseID {
+			out = append(out, child)
+		}
+	}
+	return out, nil
 }
 
 type evidenceNexus struct {

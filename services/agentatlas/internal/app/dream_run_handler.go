@@ -24,6 +24,8 @@ type dreamRunStore interface {
 	GetDreamRunView(context.Context, db.GetDreamRunViewParams) (db.GetDreamRunViewRow, error)
 	ListDreamRunsByOrg(context.Context, db.ListDreamRunsByOrgParams) ([]db.DreamRun, error)
 	CreateDreamAnnotation(context.Context, db.CreateDreamAnnotationParams) (db.DreamRunAnnotation, error)
+	ListDreamRunAnnotationsByRunBounded(context.Context, db.ListDreamRunAnnotationsByRunBoundedParams) ([]db.DreamRunAnnotation, error)
+	ListDreamRunChildrenByParentBounded(context.Context, db.ListDreamRunChildrenByParentBoundedParams) ([]db.DreamRun, error)
 }
 
 type dreamRerunner interface {

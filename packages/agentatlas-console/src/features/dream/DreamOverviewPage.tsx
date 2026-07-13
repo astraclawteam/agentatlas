@@ -16,11 +16,11 @@ export function DreamOverviewPage({ data = [], state = data.length ? "ready" : "
 function TreeNode({ node }: { node: DreamHierarchyNode }) {
   const run = node.run;
   const coverage = run?.coverage;
-  const missing = run?.missing_inputs.length ?? 0;
+  const missing = run?.missing_input_reasons.length ?? 0;
   const attention = !run || run.status === "failed" || missing > 0 || (run.risks?.length ?? 0) > 0;
   return <li>
     <article className="glass-rest dream-org-card">
-      <div className="dream-org-name"><strong>{node.org.name}</strong><small>{run ? humanWindow(run) : "还没有整理记录"}</small></div>
+      <div className="dream-org-name"><strong>{node.org.name}</strong><small>{run ? humanWindow(run) : "还没有整理记录"}</small>{run ? <DreamNavLink to={`/dream/runs/${encodeURIComponent(run.handle)}`} current={false}>查看运行详情</DreamNavLink> : null}</div>
       <Metric label="最近一次">{run ? freshness(run.window_end) : "尚未运行"}</Metric>
       <Metric label="覆盖情况">{coverage?.expected_children ? `覆盖 ${coverage.completed_children}/${coverage.expected_children} 个下级组织` : "本层记录"}</Metric>
       <Metric label="缺失输入">{missing ? `有 ${missing} 项输入未完成` : "输入完整"}</Metric>
@@ -32,7 +32,7 @@ function TreeNode({ node }: { node: DreamHierarchyNode }) {
 }
 
 function Metric({ label, children }: { label: string; children: React.ReactNode }) { return <div className="dream-org-metric"><span className="dream-meta-label">{label}</span><span>{children}</span></div>; }
-function statusLabel(run?: DreamRun) { if (!run) return "等待首次整理"; if (run.status === "failed") return "整理失败"; if (run.status === "waiting_confirmation") return "等待确认"; if (run.missing_inputs.length || run.risks.length) return "需要留意"; if (run.status === "succeeded") return "结果完整"; return "正在整理"; }
+function statusLabel(run?: DreamRun) { if (!run) return "等待首次整理"; if (run.status === "failed") return "整理失败"; if (run.status === "waiting_confirmation") return "等待确认"; if (run.missing_input_reasons.length || run.risks.length) return "需要留意"; if (run.status === "succeeded") return "结果完整"; return "正在整理"; }
 function humanWindow(run: DreamRun) { return `${new Date(run.window_start).toLocaleDateString("zh-CN")} 至 ${new Date(run.window_end).toLocaleDateString("zh-CN")}`; }
 function freshness(value: string) { const days = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 86_400_000)); return days === 0 ? "今天" : days === 1 ? "昨天" : `${days} 天前`; }
 function OverviewState({ state }: { state: Exclude<DreamPageState, "ready"> }) {

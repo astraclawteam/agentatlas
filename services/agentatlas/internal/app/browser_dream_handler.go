@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -29,11 +30,143 @@ type browserDreamEvidenceClient interface {
 
 type browserDreamHandler struct {
 	store      dreamRunStore
+	orgs       browserSessionOrgStore
 	authorizer nexus.BrowserBFFClient
 	evidence   browserDreamEvidenceClient
 	rerun      dreamRerunner
 	backfill   dreamBackfiller
 	operations *dream.PolicyService
+	handles    *browserDreamHandleCodec
+	bindings   publishedDreamWorkflowBindingLister
+}
+
+type browserDreamWorkflowBinding struct {
+	Handle       string `json:"handle"`
+	Name         string `json:"name"`
+	VersionLabel string `json:"version_label"`
+	OutputName   string `json:"output_name"`
+}
+
+type browserDreamBasicPolicyInput struct {
+	OrgUnitID     string                    `json:"org_unit_id"`
+	Cadence       string                    `json:"cadence"`
+	InputSources  []sdkdream.Source         `json:"input_sources"`
+	Visibility    sdkdream.VisibilityLevel  `json:"visibility"`
+	Confirmation  sdkdream.ConfirmationMode `json:"confirmation"`
+	BindingHandle string                    `json:"binding_handle"`
+}
+
+func (h *browserDreamHandler) resolveBasicPolicy(session browsersession.Session, input browserDreamBasicPolicyInput) (sdkdream.DreamPolicyDefinition, error) {
+	if h.handles == nil || input.OrgUnitID == "" || !containsExactOrganization(session.OrgUnitIDs, input.OrgUnitID) || (input.Cadence != "nightly" && input.Cadence != "weekly") || len(input.InputSources) == 0 || len(input.InputSources) > 16 {
+		return sdkdream.DreamPolicyDefinition{}, errors.New("invalid basic Dream policy")
+	}
+	claim, err := h.handles.resolve(session, "binding", input.BindingHandle)
+	if err != nil || claim.OrgUnitID != input.OrgUnitID {
+		return sdkdream.DreamPolicyDefinition{}, errors.New("invalid published Dream workflow binding")
+	}
+	var binding publishedDreamWorkflowBinding
+	if json.Unmarshal([]byte(claim.ResourceID), &binding) != nil || binding.WorkflowID == "" || binding.WorkflowVersion < 1 || binding.OutputSpaceID == "" {
+		return sdkdream.DreamPolicyDefinition{}, errors.New("invalid published Dream workflow binding")
+	}
+	schedule := "0 22 * * *"
+	if input.Cadence == "weekly" {
+		schedule = "0 22 * * 0"
+	}
+	policy := sdkdream.DreamPolicyDefinition{OrgUnitID: input.OrgUnitID, Timezone: "Asia/Shanghai", Schedule: schedule, InputSources: input.InputSources, Workflow: sdkdream.WorkflowRef{ID: binding.WorkflowID, Version: binding.WorkflowVersion}, OutputSpaceID: binding.OutputSpaceID, VisibilityLevel: input.Visibility, EvidenceRetention: sdkdream.EvidencePointerOnly, ConfirmationMode: input.Confirmation, MaxAttempts: 3}
+	if err := dream.Policy(policy).Validate(); err != nil {
+		return sdkdream.DreamPolicyDefinition{}, err
+	}
+	return policy, nil
+}
+
+func (h *browserDreamHandler) listWorkflowBindings(w http.ResponseWriter, r *http.Request) {
+	session, org, ok := h.authorizeQuery(w, r, "dream:read", "dream.policy.read")
+	if !ok {
+		return
+	}
+	if h.bindings == nil || h.handles == nil {
+		writeError(w, http.StatusServiceUnavailable, "dream_binding_unavailable", "Published Dream workflows are unavailable")
+		return
+	}
+	items, err := h.bindings.ListPublishedDreamWorkflowBindings(r.Context(), session.EnterpriseID, org, 101)
+	if err != nil || len(items) > 100 {
+		writeError(w, http.StatusServiceUnavailable, "dream_binding_unavailable", "Published Dream workflows are unavailable")
+		return
+	}
+	out := make([]browserDreamWorkflowBinding, 0, len(items))
+	for _, item := range items {
+		payload, _ := json.Marshal(item)
+		handle, err := h.handles.issue(session, "binding", org, string(payload))
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "dream_binding_unavailable", "Published Dream workflows are unavailable")
+			return
+		}
+		out = append(out, browserDreamWorkflowBinding{Handle: handle, Name: item.WorkflowName, VersionLabel: fmt.Sprintf("第 %d 版", item.WorkflowVersion), OutputName: item.OutputName})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"bindings": out})
+}
+
+type browserDreamSignal struct {
+	Title    string `json:"title"`
+	Detail   string `json:"detail"`
+	Severity string `json:"severity"`
+}
+
+type browserDreamRunSummary struct {
+	Handle              string               `json:"handle"`
+	Status              sdkdream.RunStatus   `json:"status"`
+	WindowStart         time.Time            `json:"window_start"`
+	WindowEnd           time.Time            `json:"window_end"`
+	InputCount          int32                `json:"input_count"`
+	Coverage            sdkdream.Coverage    `json:"coverage"`
+	MissingInputReasons []string             `json:"missing_input_reasons"`
+	Facts               []browserDreamSignal `json:"facts"`
+	Themes              []browserDreamSignal `json:"themes"`
+	Trends              []browserDreamSignal `json:"trends"`
+	Risks               []browserDreamSignal `json:"risks"`
+	Todos               []browserDreamSignal `json:"todos"`
+	DisplaySummary      string               `json:"display_summary"`
+	Rerun               bool                 `json:"rerun"`
+}
+
+type browserDreamPolicySummary struct {
+	Handle         string                       `json:"handle"`
+	Status         string                       `json:"status"`
+	Revision       int32                        `json:"revision"`
+	Version        int32                        `json:"version"`
+	PermissionMode sdkgovernance.PermissionMode `json:"permission_mode"`
+	RiskLevel      sdkgovernance.RiskLevel      `json:"risk_level,omitempty"`
+	RiskReasons    []string                     `json:"risk_reasons"`
+	ReviewMode     sdkgovernance.ReviewMode     `json:"review_mode,omitempty"`
+	PendingAction  string                       `json:"pending_action,omitempty"`
+	ReviewState    string                       `json:"review_state,omitempty"`
+	Cadence        string                       `json:"cadence"`
+	InputSources   []sdkdream.Source            `json:"input_sources"`
+	Visibility     sdkdream.VisibilityLevel     `json:"visibility"`
+	Confirmation   sdkdream.ConfirmationMode    `json:"confirmation"`
+	CanAdopt       bool                         `json:"can_adopt"`
+	CanDecide      bool                         `json:"can_decide"`
+}
+
+type browserDreamAnnotation struct {
+	Action    string     `json:"action"`
+	Comment   string     `json:"comment,omitempty"`
+	ActorName string     `json:"actor_name"`
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+}
+
+type browserDreamRunDetail struct {
+	browserDreamRunSummary
+	Annotations             []browserDreamAnnotation `json:"annotations"`
+	InputOrganizations      []browserDreamLineage    `json:"input_organizations"`
+	DownstreamOrganizations []browserDreamLineage    `json:"downstream_organizations"`
+	FailureStage            string                   `json:"failure_stage,omitempty"`
+}
+
+type browserDreamLineage struct {
+	OrganizationName string `json:"organization_name"`
+	Relation         string `json:"relation"`
+	Handle           string `json:"handle,omitempty"`
 }
 
 func (h *browserDreamHandler) list(w http.ResponseWriter, r *http.Request) {
@@ -50,7 +183,7 @@ func (h *browserDreamHandler) list(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "dream_unavailable", "Dream workspace is unavailable")
 		return
 	}
-	views := make([]sdkdream.DreamRunView, 0, len(runs))
+	views := make([]browserDreamRunSummary, 0, len(runs))
 	window := strings.TrimSpace(r.URL.Query().Get("window"))
 	for _, run := range runs {
 		row, err := h.store.GetDreamRunView(r.Context(), db.GetDreamRunViewParams{EnterpriseID: session.EnterpriseID, RunID: run.ID})
@@ -64,17 +197,127 @@ func (h *browserDreamHandler) list(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if window == "" || view.WindowEnd.Format("2006-01-02") == window {
-			views = append(views, view)
+			if h.handles == nil {
+				writeError(w, http.StatusServiceUnavailable, "dream_unavailable", "Dream workspace is unavailable")
+				return
+			}
+			handle, err := h.handles.issue(session, "run", org, view.RunID)
+			if err != nil {
+				writeError(w, http.StatusServiceUnavailable, "dream_unavailable", "Dream workspace is unavailable")
+				return
+			}
+			views = append(views, sanitizeBrowserDreamRun(view, handle))
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"runs": views})
 }
 
 func (h *browserDreamHandler) detail(w http.ResponseWriter, r *http.Request) {
-	_, view, ok := h.loadAuthorized(w, r, "dream:read", "dream.read")
-	if ok {
-		writeJSON(w, http.StatusOK, view)
+	session, view, ok := h.loadAuthorized(w, r, "dream:read", "dream.read")
+	if !ok {
+		return
 	}
+	rows, err := h.store.ListDreamRunAnnotationsByRunBounded(r.Context(), db.ListDreamRunAnnotationsByRunBoundedParams{EnterpriseID: session.EnterpriseID, RunID: view.RunID, ResultLimit: 501})
+	if err != nil || len(rows) > 500 {
+		writeError(w, http.StatusServiceUnavailable, "dream_unavailable", "Dream workspace is unavailable")
+		return
+	}
+	annotations := make([]browserDreamAnnotation, 0, len(rows))
+	for _, row := range rows {
+		actor := "其他维护人员"
+		if row.CreatedBy == session.UserID && strings.TrimSpace(session.DisplayName) != "" {
+			actor = session.DisplayName
+		}
+		item := browserDreamAnnotation{Action: row.AnnotationType, Comment: row.Body, ActorName: actor}
+		if row.CreatedAt.Valid {
+			created := row.CreatedAt.Time
+			item.CreatedAt = &created
+		}
+		annotations = append(annotations, item)
+	}
+	inputs, err := h.relatedRuns(r, session, view.ParentRunIDs, "下级组织汇总")
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "dream_unavailable", "Dream workspace is unavailable")
+		return
+	}
+	children, err := h.store.ListDreamRunChildrenByParentBounded(r.Context(), db.ListDreamRunChildrenByParentBoundedParams{EnterpriseID: session.EnterpriseID, ParentRunID: view.RunID, ResultLimit: 101})
+	if err != nil || len(children) > 100 {
+		writeError(w, http.StatusServiceUnavailable, "dream_unavailable", "Dream workspace is unavailable")
+		return
+	}
+	childIDs := make([]string, 0, len(children))
+	for _, child := range children {
+		childIDs = append(childIDs, child.ID)
+	}
+	downstream, err := h.relatedRuns(r, session, childIDs, "上级组织汇总")
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "dream_unavailable", "Dream workspace is unavailable")
+		return
+	}
+	detail := browserDreamRunDetail{browserDreamRunSummary: sanitizeBrowserDreamRun(view, chi.URLParam(r, "id")), Annotations: annotations, InputOrganizations: inputs, DownstreamOrganizations: downstream}
+	if view.Status == sdkdream.RunFailed {
+		detail.FailureStage = "运行处理阶段"
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (h *browserDreamHandler) relatedRuns(r *http.Request, session browsersession.Session, runIDs []string, relation string) ([]browserDreamLineage, error) {
+	if len(runIDs) > 100 || h.handles == nil || h.authorizer == nil {
+		return nil, errors.New("Dream lineage is unavailable")
+	}
+	out := make([]browserDreamLineage, 0, len(runIDs))
+	for _, runID := range runIDs {
+		row, err := h.store.GetDreamRunView(r.Context(), db.GetDreamRunViewParams{EnterpriseID: session.EnterpriseID, RunID: runID})
+		if err != nil {
+			return nil, err
+		}
+		view, err := dreamRunView(row)
+		if err != nil || !containsExactOrganization(session.OrgUnitIDs, view.OrgUnitID) {
+			return nil, errors.New("Dream lineage is not authorized")
+		}
+		decision, err := h.authorizer.AuthorizeBrowserOperation(r.Context(), session.UpstreamAccessToken, nexus.BrowserAuthorizationRequest{OrgUnitID: view.OrgUnitID, OrgVersion: session.OrgVersion, ResourceType: "dream_run", ResourceID: view.RunID, Action: "dream.read"})
+		if err != nil || decision.Decision != "allow" || decision.OrgVersion != session.OrgVersion || !containsExactOrganization(decision.OrgUnitIDs, view.OrgUnitID) {
+			return nil, errors.New("Dream lineage is not authorized")
+		}
+		handle, err := h.handles.issue(session, "run", view.OrgUnitID, view.RunID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, browserDreamLineage{OrganizationName: h.organizationName(r.Context(), session, view.OrgUnitID), Relation: relation, Handle: handle})
+	}
+	return out, nil
+}
+
+func (h *browserDreamHandler) organizationName(ctx context.Context, session browsersession.Session, org string) string {
+	if h.orgs == nil {
+		return "授权组织"
+	}
+	spaces, err := h.orgs.ListBrowserKnowledgeSpacesByEnterprise(ctx, session.EnterpriseID)
+	if err != nil || len(spaces) > 1000 {
+		return "授权组织"
+	}
+	for _, space := range spaces {
+		if space.EnterpriseID == session.EnterpriseID && space.OrgVersion <= session.OrgVersion && (space.OrgScope == org || strings.HasSuffix(space.OrgScope, ":"+org)) {
+			return safeKnowledgeSpaceName(space, org)
+		}
+	}
+	return "授权组织"
+}
+
+func sanitizeBrowserDreamRun(view sdkdream.DreamRunView, handle string) browserDreamRunSummary {
+	missing := make([]string, 0, len(view.MissingInputs))
+	for _, item := range view.MissingInputs {
+		missing = append(missing, string(item.Reason))
+	}
+	return browserDreamRunSummary{Handle: handle, Status: view.Status, WindowStart: view.WindowStart, WindowEnd: view.WindowEnd, InputCount: view.InputCount, Coverage: view.Coverage, MissingInputReasons: missing, Facts: sanitizeBrowserDreamSignals(view.Facts), Themes: sanitizeBrowserDreamSignals(view.Themes), Trends: sanitizeBrowserDreamSignals(view.Trends), Risks: sanitizeBrowserDreamSignals(view.Risks), Todos: sanitizeBrowserDreamSignals(view.Todos), DisplaySummary: view.DisplaySummary, Rerun: view.RerunOfRunID != ""}
+}
+
+func sanitizeBrowserDreamSignals(items []sdkdream.StructuredSignal) []browserDreamSignal {
+	out := make([]browserDreamSignal, 0, len(items))
+	for _, item := range items {
+		out = append(out, browserDreamSignal{Title: item.Title, Detail: item.Detail, Severity: string(item.Severity)})
+	}
+	return out
 }
 
 func (h *browserDreamHandler) annotate(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +329,7 @@ func (h *browserDreamHandler) annotate(w http.ResponseWriter, r *http.Request) {
 		Action  string `json:"action"`
 		Comment string `json:"comment"`
 	}
-	if !decodeJSON(w, r, &input) {
+	if !decodeBrowserDreamJSON(w, r, &input) {
 		return
 	}
 	if !validAnnotation(input.Action) || len([]rune(input.Comment)) > 4000 || (input.Action == "comment" && strings.TrimSpace(input.Comment) == "") {
@@ -103,7 +346,11 @@ func (h *browserDreamHandler) annotate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "annotation_failed", "The annotation was already recorded or could not be appended")
 		return
 	}
-	writeJSON(w, http.StatusCreated, row)
+	response := map[string]any{"action": row.AnnotationType, "comment": row.Body, "actor_name": session.DisplayName}
+	if row.CreatedAt.Valid {
+		response["created_at"] = row.CreatedAt.Time
+	}
+	writeJSON(w, http.StatusCreated, response)
 }
 
 func (h *browserDreamHandler) evidenceAccess(w http.ResponseWriter, r *http.Request) {
@@ -166,7 +413,7 @@ func (h *browserDreamHandler) rerunRun(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, "rerun_failed", "Dream rerun receipt is unavailable")
 			return
 		}
-		writeJSON(w, http.StatusAccepted, result)
+		h.writeRunHandle(w, session, view.OrgUnitID, result["run_id"], http.StatusAccepted)
 		return
 	}
 	if id, found, lookupErr := h.rerun.LookupRerun(r.Context(), session.EnterpriseID, view.RunID, key); lookupErr != nil {
@@ -178,7 +425,7 @@ func (h *browserDreamHandler) rerunRun(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, "rerun_failed", err.Error())
 			return
 		}
-		writeJSON(w, http.StatusAccepted, result)
+		h.writeRunHandle(w, session, view.OrgUnitID, id, http.StatusAccepted)
 		return
 	}
 	audit, err := h.evidence.AppendAuditEvidenceWithBearer(r.Context(), session.UpstreamAccessToken, nexus.AppendAuditEvidenceRequest{IdempotencyKey: auditIdempotencyKey(session.EnterpriseID, key), EnterpriseID: session.EnterpriseID, OrgVersion: session.OrgVersion, OrgUnitID: view.OrgUnitID, AuthorizedAction: "dream.rerun", Action: nexus.AuditDreamJobRun, ResourceType: "dream_run", ResourceID: view.RunID, Details: map[string]any{"org_unit_id": view.OrgUnitID, "idempotency_key": key, "phase": "manual_rerun_attempt"}})
@@ -200,7 +447,20 @@ func (h *browserDreamHandler) rerunRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "rerun_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusAccepted, result)
+	h.writeRunHandle(w, session, view.OrgUnitID, id, http.StatusAccepted)
+}
+
+func (h *browserDreamHandler) writeRunHandle(w http.ResponseWriter, session browsersession.Session, org, runID string, status int) {
+	if h.handles == nil || strings.TrimSpace(runID) == "" {
+		writeError(w, http.StatusServiceUnavailable, "dream_unavailable", "Dream workspace is unavailable")
+		return
+	}
+	handle, err := h.handles.issue(session, "run", org, runID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "dream_unavailable", "Dream workspace is unavailable")
+		return
+	}
+	writeJSON(w, status, map[string]string{"handle": handle})
 }
 
 func (h *browserDreamHandler) listPolicies(w http.ResponseWriter, r *http.Request) {
@@ -217,7 +477,16 @@ func (h *browserDreamHandler) listPolicies(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusServiceUnavailable, "dream_policy_unavailable", "Dream policies are unavailable")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"dream_policies": items})
+	summaries := make([]browserDreamPolicySummary, 0, len(items))
+	for _, item := range items {
+		summary, err := h.sanitizePolicy(session, item)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "dream_policy_unavailable", "Dream policies are unavailable")
+			return
+		}
+		summaries = append(summaries, summary)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"dream_policies": summaries})
 }
 
 func (h *browserDreamHandler) createPolicy(w http.ResponseWriter, r *http.Request) {
@@ -230,15 +499,16 @@ func (h *browserDreamHandler) createPolicy(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusServiceUnavailable, "dream_policy_unavailable", "Dream policies are unavailable")
 		return
 	}
-	var input sdkdream.DreamPolicyDefinition
-	if !decodeJSON(w, r, &input) {
+	var basic browserDreamBasicPolicyInput
+	if !decodeBrowserDreamJSON(w, r, &basic) {
 		return
 	}
-	policy := dream.Policy(input)
-	if err := policy.Validate(); err != nil {
+	input, err := h.resolveBasicPolicy(session, basic)
+	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "invalid_policy", err.Error())
 		return
 	}
+	policy := dream.Policy(input)
 	mode, permission, action := sdkgovernance.PermissionSuggestionOnly, "suggest", "dream.policy.suggest"
 	if browserDreamPermission(session.Permissions, "edit") {
 		mode, permission, action = sdkgovernance.PermissionDirectEdit, "edit", "dream.policy.edit"
@@ -262,7 +532,7 @@ func (h *browserDreamHandler) createPolicy(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if op.Replay != nil {
-		writeJSON(w, http.StatusCreated, op.Replay)
+		h.writePolicy(w, session, *op.Replay, http.StatusCreated)
 		return
 	}
 	audit, err := h.evidence.AppendAuditEvidenceWithBearer(r.Context(), session.UpstreamAccessToken, nexus.AppendAuditEvidenceRequest{IdempotencyKey: auditIdempotencyKey(session.EnterpriseID, key), EnterpriseID: session.EnterpriseID, OrgVersion: session.OrgVersion, OrgUnitID: input.OrgUnitID, AuthorizedAction: action, Action: nexus.AuditDreamPolicyCreateRequested, ResourceType: "dream_policy", ResourceID: policyID, Details: map[string]any{"phase": "create", "org_unit_id": input.OrgUnitID}})
@@ -284,7 +554,78 @@ func (h *browserDreamHandler) createPolicy(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusServiceUnavailable, "policy_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, view)
+	h.writePolicy(w, session, view, http.StatusCreated)
+}
+
+func (h *browserDreamHandler) sanitizePolicy(session browsersession.Session, view dream.LifecycleView) (browserDreamPolicySummary, error) {
+	if h.handles == nil {
+		return browserDreamPolicySummary{}, errInvalidBrowserDreamHandle
+	}
+	handle, err := h.handles.issue(session, "policy", view.Policy.OrgUnitID, view.ID)
+	if err != nil {
+		return browserDreamPolicySummary{}, err
+	}
+	cadence := "custom"
+	switch view.Policy.Schedule {
+	case "0 22 * * *":
+		cadence = "nightly"
+	case "0 22 * * 0":
+		cadence = "weekly"
+	}
+	reasons := []string{}
+	if len(view.RiskReasons) > 0 {
+		reasons = append(reasons, "此变更涉及需要复核的配置")
+	}
+	canDecide := view.ReviewState == "pending" && ((view.ReviewMode == sdkgovernance.ReviewUpward && view.ReviewerUserID == session.UserID && view.RequesterUserID != session.UserID) || (view.ReviewMode == sdkgovernance.ReviewSingleConfirmation && view.RequesterUserID == session.UserID))
+	return browserDreamPolicySummary{Handle: handle, Status: view.Status, Revision: view.Revision, Version: view.Version, PermissionMode: view.PermissionMode, RiskLevel: view.RiskLevel, RiskReasons: reasons, ReviewMode: view.ReviewMode, PendingAction: view.PendingAction, ReviewState: view.ReviewState, Cadence: cadence, InputSources: view.Policy.InputSources, Visibility: view.Policy.VisibilityLevel, Confirmation: view.Policy.ConfirmationMode, CanAdopt: view.PermissionMode == sdkgovernance.PermissionSuggestionOnly && browserDreamPermission(session.Permissions, "edit"), CanDecide: canDecide}, nil
+}
+
+func (h *browserDreamHandler) adoptPolicy(w http.ResponseWriter, r *http.Request) {
+	session, source, ok := h.authorizePolicy(w, r, "edit", "dream.policy.edit")
+	if !ok {
+		return
+	}
+	if source.PermissionMode != sdkgovernance.PermissionSuggestionOnly || source.Status != "draft" || h.evidence == nil {
+		writeError(w, http.StatusConflict, "adoption_failed", "Only an unchanged suggestion can be adopted")
+		return
+	}
+	var input struct {
+		Revision int32 `json:"revision"`
+	}
+	if !decodeBrowserDreamJSON(w, r, &input) || input.Revision != source.Revision {
+		if input.Revision != source.Revision {
+			writeError(w, http.StatusConflict, "revision_conflict", "Suggestion changed before adoption")
+		}
+		return
+	}
+	op, key, ok := h.beginPolicyOperation(w, r, session, "adopt", source.ID, input)
+	if !ok {
+		return
+	}
+	if op.Replay != nil {
+		h.writePolicy(w, session, *op.Replay, http.StatusCreated)
+		return
+	}
+	audit, ok := h.auditPolicy(w, r, session, op, source, "adopt", map[string]any{"source_revision": source.Revision})
+	if !ok {
+		return
+	}
+	targetID := policyIDForOperation(session.EnterpriseID, key+":adopted")
+	view, err := h.operations.AdoptSuggestion(r.Context(), session.EnterpriseID, source.ID, targetID, session.UserID, audit, key, source.Revision)
+	if err != nil {
+		writeError(w, http.StatusConflict, "adoption_failed", err.Error())
+		return
+	}
+	h.writePolicy(w, session, view, http.StatusCreated)
+}
+
+func (h *browserDreamHandler) writePolicy(w http.ResponseWriter, session browsersession.Session, view dream.LifecycleView, status int) {
+	summary, err := h.sanitizePolicy(session, view)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "dream_policy_unavailable", "Dream policies are unavailable")
+		return
+	}
+	writeJSON(w, status, summary)
 }
 
 func (h *browserDreamHandler) updatePolicy(w http.ResponseWriter, r *http.Request) {
@@ -297,13 +638,18 @@ func (h *browserDreamHandler) updatePolicy(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var input struct {
-		Revision int32                          `json:"revision"`
-		Policy   sdkdream.DreamPolicyDefinition `json:"policy"`
+		Revision int32 `json:"revision"`
+		browserDreamBasicPolicyInput
 	}
-	if !decodeJSON(w, r, &input) {
+	if !decodeBrowserDreamJSON(w, r, &input) {
 		return
 	}
-	if !containsExactOrganization(session.OrgUnitIDs, input.Policy.OrgUnitID) || !h.authorize(w, r, session, input.Policy.OrgUnitID, "dream_policy", current.ID, "dream.policy.edit") {
+	policy, err := h.resolveBasicPolicy(session, input.browserDreamBasicPolicyInput)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "invalid_policy", err.Error())
+		return
+	}
+	if !h.authorize(w, r, session, policy.OrgUnitID, "dream_policy", current.ID, "dream.policy.edit") {
 		return
 	}
 	op, key, ok := h.beginPolicyOperation(w, r, session, "update", current.ID, input)
@@ -311,14 +657,14 @@ func (h *browserDreamHandler) updatePolicy(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if op.Replay != nil {
-		writeJSON(w, http.StatusOK, op.Replay)
+		h.writePolicy(w, session, *op.Replay, http.StatusOK)
 		return
 	}
 	audit, ok := h.auditPolicy(w, r, session, op, current, "update", map[string]any{"revision": input.Revision})
 	if !ok {
 		return
 	}
-	view, err := h.operations.UpdateGovernedDraft(r.Context(), session.EnterpriseID, current.ID, session.UserID, audit, key, input.Revision, dream.Policy(input.Policy))
+	view, err := h.operations.UpdateGovernedDraft(r.Context(), session.EnterpriseID, current.ID, session.UserID, audit, key, input.Revision, dream.Policy(policy))
 	if err != nil {
 		writeError(w, http.StatusConflict, "revision_conflict", err.Error())
 		return
@@ -334,7 +680,7 @@ func (h *browserDreamHandler) checkPolicy(w http.ResponseWriter, r *http.Request
 	var input struct {
 		Revision int32 `json:"revision"`
 	}
-	if !decodeJSON(w, r, &input) {
+	if !decodeBrowserDreamJSON(w, r, &input) {
 		return
 	}
 	assessment, changed, view, err := h.operations.Assess(r.Context(), session.EnterpriseID, current.ID)
@@ -358,7 +704,7 @@ func (h *browserDreamHandler) reviewPolicy(w http.ResponseWriter, r *http.Reques
 		Revision int32  `json:"revision"`
 		Action   string `json:"action"`
 	}
-	if !decodeJSON(w, r, &input) {
+	if !decodeBrowserDreamJSON(w, r, &input) {
 		return
 	}
 	if input.Action == "" {
@@ -391,7 +737,7 @@ func (h *browserDreamHandler) reviewPolicy(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if op.Replay != nil {
-		writeJSON(w, http.StatusOK, op.Replay)
+		h.writePolicy(w, session, *op.Replay, http.StatusOK)
 		return
 	}
 	resolved, err := h.authorizer.ResolveApprovalRouteWithBearer(r.Context(), session.UpstreamAccessToken, nexus.ApprovalResolveRequest{EnterpriseID: session.EnterpriseID, ActorUserID: current.RequesterUserID, IdempotencyKey: key, OrgVersion: session.OrgVersion, OrgUnitID: current.Policy.OrgUnitID, ResourceType: "dream_policy", ResourceID: current.ID, Action: "dream_policy." + input.Action, ChangedFields: changed, ImpactedOrgUnitIDs: []string{current.Policy.OrgUnitID}, RequestedRisk: string(assessment.RiskLevel), FactsIssuedAt: op.Row.FactsIssuedAt.Time, FactsExpiresAt: op.Row.FactsExpiresAt.Time, FactsNonce: op.Row.FactsNonce})
@@ -434,7 +780,7 @@ func (h *browserDreamHandler) decidePolicy(w http.ResponseWriter, r *http.Reques
 		Decision string `json:"decision"`
 		Comment  string `json:"comment"`
 	}
-	if !decodeJSON(w, r, &input) {
+	if !decodeBrowserDreamJSON(w, r, &input) {
 		return
 	}
 	if current.Revision != input.Revision || current.ReviewState != "pending" {
@@ -469,7 +815,7 @@ func (h *browserDreamHandler) decidePolicy(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if op.Replay != nil {
-		writeJSON(w, http.StatusOK, op.Replay)
+		h.writePolicy(w, session, *op.Replay, http.StatusOK)
 		return
 	}
 	audit, ok := h.auditPolicy(w, r, session, op, current, "decision", map[string]any{"revision": input.Revision, "decision": input.Decision, "comment": input.Comment})
@@ -498,7 +844,7 @@ func (h *browserDreamHandler) finalizePolicy(w http.ResponseWriter, r *http.Requ
 	var input struct {
 		Revision int32 `json:"revision"`
 	}
-	if !decodeJSON(w, r, &input) {
+	if !decodeBrowserDreamJSON(w, r, &input) {
 		return
 	}
 	if current.PermissionMode == sdkgovernance.PermissionSuggestionOnly || current.Revision != input.Revision || current.ReviewState != "approved" || current.PendingAction != action {
@@ -510,7 +856,7 @@ func (h *browserDreamHandler) finalizePolicy(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if op.Replay != nil {
-		writeJSON(w, http.StatusOK, op.Replay)
+		h.writePolicy(w, session, *op.Replay, http.StatusOK)
 		return
 	}
 	audit, ok := h.auditPolicy(w, r, session, op, current, action, map[string]any{"revision": input.Revision})
@@ -536,7 +882,7 @@ func (h *browserDreamHandler) backfillPolicy(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	if h.backfill == nil {
+	if h.backfill == nil || h.evidence == nil {
 		writeError(w, http.StatusServiceUnavailable, "backfill_unavailable", "Dream backfill is unavailable")
 		return
 	}
@@ -545,7 +891,7 @@ func (h *browserDreamHandler) backfillPolicy(w http.ResponseWriter, r *http.Requ
 		WindowEnd    time.Time `json:"window_end"`
 		RerunOfRunID string    `json:"rerun_of_run_id"`
 	}
-	if !decodeJSON(w, r, &input) {
+	if !decodeBrowserDreamJSON(w, r, &input) {
 		return
 	}
 	key, err := operationKey(r)
@@ -565,7 +911,7 @@ func (h *browserDreamHandler) backfillPolicy(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusServiceUnavailable, "backfill_failed", "Backfill receipt is unavailable")
 			return
 		}
-		writeJSON(w, http.StatusAccepted, result)
+		h.writeRunHandle(w, session, current.Policy.OrgUnitID, result["run_id"], http.StatusAccepted)
 		return
 	}
 	if id, found, err := h.backfill.LookupBackfill(r.Context(), request); err != nil {
@@ -577,7 +923,7 @@ func (h *browserDreamHandler) backfillPolicy(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusServiceUnavailable, "backfill_failed", err.Error())
 			return
 		}
-		writeJSON(w, http.StatusAccepted, result)
+		h.writeRunHandle(w, session, current.Policy.OrgUnitID, id, http.StatusAccepted)
 		return
 	}
 	audit, err := h.evidence.AppendAuditEvidenceWithBearer(r.Context(), session.UpstreamAccessToken, nexus.AppendAuditEvidenceRequest{IdempotencyKey: auditIdempotencyKey(session.EnterpriseID, key), EnterpriseID: session.EnterpriseID, OrgVersion: session.OrgVersion, OrgUnitID: current.Policy.OrgUnitID, AuthorizedAction: "dream.policy.backfill", Action: nexus.AuditDreamJobRun, ResourceType: "dream_policy", ResourceID: current.ID, Details: map[string]any{"window_start": input.WindowStart, "window_end": input.WindowEnd, "rerun_of_run_id": input.RerunOfRunID, "phase": "backfill_attempt"}})
@@ -600,7 +946,7 @@ func (h *browserDreamHandler) backfillPolicy(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusServiceUnavailable, "backfill_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusAccepted, result)
+	h.writeRunHandle(w, session, current.Policy.OrgUnitID, id, http.StatusAccepted)
 }
 
 func (h *browserDreamHandler) loadPolicy(w http.ResponseWriter, r *http.Request) (browsersession.Session, dream.LifecycleView, bool) {
@@ -613,12 +959,21 @@ func (h *browserDreamHandler) loadPolicy(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusServiceUnavailable, "dream_policy_unavailable", "Dream policies are unavailable")
 		return session, dream.LifecycleView{}, false
 	}
-	view, err := h.operations.GetLifecycle(r.Context(), session.EnterpriseID, chi.URLParam(r, "id"))
+	if h.handles == nil {
+		writeError(w, http.StatusServiceUnavailable, "dream_policy_unavailable", "Dream policies are unavailable")
+		return session, dream.LifecycleView{}, false
+	}
+	claim, err := h.handles.resolve(session, "policy", chi.URLParam(r, "id"))
+	if err != nil || !containsExactOrganization(session.OrgUnitIDs, claim.OrgUnitID) {
+		writeError(w, http.StatusNotFound, "not_found", "Dream policy was not found")
+		return session, dream.LifecycleView{}, false
+	}
+	view, err := h.operations.GetLifecycle(r.Context(), session.EnterpriseID, claim.ResourceID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "Dream policy was not found")
 		return session, view, false
 	}
-	if !containsExactOrganization(session.OrgUnitIDs, view.Policy.OrgUnitID) {
+	if view.Policy.OrgUnitID != claim.OrgUnitID || !containsExactOrganization(session.OrgUnitIDs, view.Policy.OrgUnitID) {
 		writeError(w, http.StatusForbidden, "forbidden", "Dream policy organization is not authorized")
 		return session, view, false
 	}
@@ -670,7 +1025,7 @@ func (h *browserDreamHandler) finishPolicyOperation(w http.ResponseWriter, r *ht
 		writeError(w, http.StatusServiceUnavailable, "operation_failed", err.Error())
 		return
 	}
-	writeJSON(w, status, completed)
+	h.writePolicy(w, session, completed, status)
 }
 
 func (h *browserDreamHandler) authorizeQuery(w http.ResponseWriter, r *http.Request, permission, action string) (browsersession.Session, string, bool) {
@@ -704,7 +1059,16 @@ func (h *browserDreamHandler) loadAuthorized(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusServiceUnavailable, "dream_unavailable", "Dream workspace is unavailable")
 		return session, sdkdream.DreamRunView{}, false
 	}
-	row, err := h.store.GetDreamRunView(r.Context(), db.GetDreamRunViewParams{EnterpriseID: session.EnterpriseID, RunID: chi.URLParam(r, "id")})
+	if h.handles == nil {
+		writeError(w, http.StatusServiceUnavailable, "dream_unavailable", "Dream workspace is unavailable")
+		return session, sdkdream.DreamRunView{}, false
+	}
+	claim, err := h.handles.resolve(session, "run", chi.URLParam(r, "id"))
+	if err != nil || !containsExactOrganization(session.OrgUnitIDs, claim.OrgUnitID) {
+		writeError(w, http.StatusNotFound, "dream_run_not_found", "Dream run was not found")
+		return session, sdkdream.DreamRunView{}, false
+	}
+	row, err := h.store.GetDreamRunView(r.Context(), db.GetDreamRunViewParams{EnterpriseID: session.EnterpriseID, RunID: claim.ResourceID})
 	if err != nil {
 		writeError(w, http.StatusNotFound, "dream_run_not_found", "Dream run was not found")
 		return session, sdkdream.DreamRunView{}, false
@@ -714,7 +1078,7 @@ func (h *browserDreamHandler) loadAuthorized(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusServiceUnavailable, "dream_unavailable", "Dream workspace is unavailable")
 		return session, sdkdream.DreamRunView{}, false
 	}
-	if !containsExactOrganization(session.OrgUnitIDs, view.OrgUnitID) {
+	if view.OrgUnitID != claim.OrgUnitID || !containsExactOrganization(session.OrgUnitIDs, view.OrgUnitID) {
 		writeError(w, http.StatusForbidden, "forbidden", "Dream organization is not authorized")
 		return session, sdkdream.DreamRunView{}, false
 	}
@@ -747,6 +1111,36 @@ func (h *browserDreamHandler) evidenceError(w http.ResponseWriter, err error) {
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, "evidence_unavailable", "Evidence access is unavailable")
+}
+
+func decodeBrowserDreamJSON(w http.ResponseWriter, r *http.Request, target any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request_too_large", "Dream request body exceeds 1 MiB")
+			return false
+		}
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "request body must contain exactly one JSON value")
+			return false
+		}
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request_too_large", "Dream request body exceeds 1 MiB")
+			return false
+		}
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return false
+	}
+	return true
 }
 func browserDreamPermission(values []string, required string) bool {
 	for _, value := range values {

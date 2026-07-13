@@ -271,6 +271,18 @@ type DreamPolicy struct {
 	AuditRefID      string             `json:"audit_ref_id"`
 }
 
+type DreamPolicyAdoption struct {
+	EnterpriseID          string             `json:"enterprise_id"`
+	SourcePolicyID        string             `json:"source_policy_id"`
+	SourceRequesterUserID string             `json:"source_requester_user_id"`
+	SourceRevision        int32              `json:"source_revision"`
+	TargetPolicyID        string             `json:"target_policy_id"`
+	AdopterUserID         string             `json:"adopter_user_id"`
+	AuditRefID            string             `json:"audit_ref_id"`
+	OperationKey          string             `json:"operation_key"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+}
+
 type DreamPolicyOperation struct {
 	EnterpriseID   string             `json:"enterprise_id"`
 	OperationKey   string             `json:"operation_key"`

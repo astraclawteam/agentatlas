@@ -175,7 +175,7 @@ func run() error {
 		Nexus: nexusClient, Agent: agentRunner, Workflows: workflowSvc,
 		Runtime: workflowRuntime, Dreams: dreamPolicies, Store: queries,
 		DreamRerun: dreamScheduler, Runner: taskRunner, Metrics: metrics,
-		BrowserSessions: browserSessions, Changes: changes, BrowserAuthorizer: rawNexusClient,
+		BrowserSessions: browserSessions, BrowserHandleProtector: protector, Changes: changes, BrowserAuthorizer: rawNexusClient,
 	})
 
 	addr := os.Getenv("ATLAS_AGENT_ADDR")
