@@ -11,6 +11,8 @@ import {
 } from "@flowgram.ai/free-layout-editor";
 import { LegacyButton as ClawButton } from "./app/runtime-ui-adapters";
 import type { AtlasWorkflow, AtlasWorkflowNode } from "./types";
+export { toWorkflowJSON } from "./features/workflows/flowgram-adapter";
+import { toWorkflowJSON } from "./features/workflows/flowgram-adapter";
 
 const NODE_TYPES: string[] = [
   "input.manual", "input.evidence_pointer", "parser.document", "parser.image",
@@ -30,45 +32,6 @@ const CATEGORY_COLOR: Record<string, string> = {
   answer: "var(--claw-success-soft)",
   trace: "var(--claw-accent-soft)",
 };
-
-/** Layered layout: BFS depth -> column, order within depth -> row. */
-export function toWorkflowJSON(workflow: AtlasWorkflow): WorkflowJSON {
-  const depth = new Map<string, number>();
-  const incoming = new Map<string, number>();
-  workflow.nodes.forEach((n) => incoming.set(n.id, 0));
-  workflow.edges.forEach((e) => incoming.set(e.to, (incoming.get(e.to) ?? 0) + 1));
-  const queue = workflow.nodes.filter((n) => (incoming.get(n.id) ?? 0) === 0).map((n) => n.id);
-  queue.forEach((id) => depth.set(id, 0));
-  while (queue.length > 0) {
-    const id = queue.shift()!;
-    for (const e of workflow.edges.filter((e) => e.from === id)) {
-      const d = Math.max(depth.get(e.to) ?? 0, (depth.get(id) ?? 0) + 1);
-      if (d !== depth.get(e.to)) {
-        depth.set(e.to, d);
-        queue.push(e.to);
-      }
-    }
-  }
-  const rows = new Map<number, number>();
-  return {
-    nodes: workflow.nodes.map((n) => {
-      const d = depth.get(n.id) ?? 0;
-      const row = rows.get(d) ?? 0;
-      rows.set(d, row + 1);
-      return {
-        id: n.id,
-        type: n.type,
-        meta: { position: { x: 80 + d * 260, y: 80 + row * 130 } },
-        data: {
-          title: n.name || n.type,
-          atlasType: n.type,
-          requiresConfirmation: n.requires_confirmation ?? false,
-        },
-      };
-    }),
-    edges: workflow.edges.map((e) => ({ sourceNodeID: e.from, targetNodeID: e.to })),
-  };
-}
 
 function AtlasNodeCard() {
   const { node, data } = useNodeRender();
@@ -122,7 +85,7 @@ export interface AtlasWorkflowCanvasProps {
 export function AtlasWorkflowCanvas({ workflow, readonly, onExport }: AtlasWorkflowCanvasProps) {
   const ctxRef = useRef<FreeLayoutPluginContext | null>(null);
   const initialData = useMemo(() => toWorkflowJSON(workflow), [workflow]);
-  const nodeRegistries = useMemo(() => NODE_TYPES.map((type) => ({ type })), []);
+  const nodeRegistries = useMemo(() => [...new Set([...NODE_TYPES, ...workflow.nodes.map((node) => node.type)])].map((type) => ({ type })), [workflow.nodes]);
   const confirmCount = workflow.nodes.filter(
     (n: AtlasWorkflowNode) => n.type === "human.confirm" || n.requires_confirmation,
   ).length;

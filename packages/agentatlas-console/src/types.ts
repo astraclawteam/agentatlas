@@ -1,6 +1,6 @@
 // Frontend mirrors of the public contracts (schemas/workflow + atlas-runtime).
 
-export type AtlasNodeType =
+export type KnownAtlasNodeType =
   | "input.manual"
   | "input.evidence_pointer"
   | "parser.document"
@@ -17,6 +17,9 @@ export type AtlasNodeType =
   | "dream.aggregate"
   | "answer.generate"
   | "trace.append";
+
+/** Public documents may contain node types added by a newer runtime. */
+export type AtlasNodeType = KnownAtlasNodeType | (string & {});
 
 export interface AtlasWorkflowNode {
   id: string;
@@ -38,6 +41,9 @@ export interface AtlasWorkflow {
   kind: "sop" | "dream" | "ingestion" | "answer";
   nodes: AtlasWorkflowNode[];
   edges: AtlasWorkflowEdge[];
+  variables?: Record<string, unknown>;
+  input_schema?: Record<string, unknown>;
+  output_schema?: Record<string, unknown>;
   risk_level: "low" | "medium" | "high";
 }
 

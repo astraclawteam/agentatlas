@@ -23,7 +23,7 @@ describe("toWorkflowJSON", () => {
   it("maps nodes/edges into FlowGram document JSON with layered positions", () => {
     const json = toWorkflowJSON(workflow);
     expect(json.nodes).toHaveLength(3);
-    expect(json.edges).toEqual([
+    expect(json.edges).toMatchObject([
       { sourceNodeID: "in", targetNodeID: "extract" },
       { sourceNodeID: "extract", targetNodeID: "confirm" },
     ]);
