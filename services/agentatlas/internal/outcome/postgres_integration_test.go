@@ -156,46 +156,44 @@ func backends() []struct {
 	}
 }
 
-// TestPostgresOutcomeMigrationUpDownUp proves migration 000016 is reversible
-// on an EMPTY database. It is defined first so it runs before any test below
-// inserts governed Outcome rows (once rows exist the down migration's guard
-// refuses to drop, which TestPostgresOutcomeImmutabilityAndDownGuard verifies
-// separately).
+// TestPostgresOutcomeMigrationUpDownUp proves migration 000016 is reversible on
+// an EMPTY database. It runs on its OWN ephemeral database (withFreshOutcomeDB)
+// so it is isolated from any shared-DSN pollution: Task 0I's shared outbox
+// (outcome_graph_outbox, migration 000017) is append-only and its down-guard
+// (correctly) refuses to drop once ANY package has written a projection event —
+// so this test must not share a database with the outbox writers.
 func TestPostgresOutcomeMigrationUpDownUp(t *testing.T) {
-	dsn := testDSN(t)
-	ctx := context.Background()
-	if err := storage.Migrate(ctx, dsn); err != nil {
-		t.Fatalf("migrate up: %v", err)
-	}
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := goose.SetDialect("postgres"); err != nil {
-		t.Fatal(err)
-	}
-	goose.SetBaseFS(dbfs.Migrations)
+	withFreshOutcomeDB(t, testDSN(t), func(ctx context.Context, dsn string) {
+		db, err := sql.Open("pgx", dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		if err := goose.SetDialect("postgres"); err != nil {
+			t.Fatal(err)
+		}
+		goose.SetBaseFS(dbfs.Migrations)
 
-	if err := goose.DownToContext(ctx, db, "migrations", 15); err != nil {
-		t.Fatalf("down to 15: %v", err)
-	}
-	var exists bool
-	if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='outcomes')`).Scan(&exists); err != nil {
-		t.Fatal(err)
-	}
-	if exists {
-		t.Fatal("down migration must drop the outcomes table")
-	}
-	if err := storage.Migrate(ctx, dsn); err != nil {
-		t.Fatalf("migrate up again: %v", err)
-	}
-	if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='outcomes')`).Scan(&exists); err != nil {
-		t.Fatal(err)
-	}
-	if !exists {
-		t.Fatal("up migration must recreate the outcomes table")
-	}
+		if err := goose.DownToContext(ctx, db, "migrations", 15); err != nil {
+			t.Fatalf("down to 15: %v", err)
+		}
+		var exists bool
+		if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='outcomes')`).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if exists {
+			t.Fatal("down migration must drop the outcomes table")
+		}
+		if err := storage.Migrate(ctx, dsn); err != nil {
+			t.Fatalf("migrate up again: %v", err)
+		}
+		if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='outcomes')`).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if !exists {
+			t.Fatal("up migration must recreate the outcomes table")
+		}
+	})
 }
 
 func TestOutcomeStoreConformance(t *testing.T) {
@@ -676,12 +674,25 @@ func TestPostgresDownGuardCoversAllGovernedTables(t *testing.T) {
 			if !downRefused(ctx, dsn) {
 				t.Fatal("down must be REFUSED when projection-event history exists (zero outcomes)")
 			}
+			// Task 0I re-points AppendProjectionEvent onto the ONE shared
+			// Outcome-Graph outbox (outcome_graph_outbox, migration 000017),
+			// unifying the 0G outcome-only projection path. The projection-event
+			// history — and the append-only down-guard protecting it — now live
+			// there (the legacy outcome_projection_events table is retired).
 			var evCount int
-			if err := pool.QueryRow(ctx, `SELECT count(*) FROM outcome_projection_events`).Scan(&evCount); err != nil {
-				t.Fatalf("projection event table must survive the refused down: %v", err)
+			if err := pool.QueryRow(ctx, `SELECT count(*) FROM outcome_graph_outbox`).Scan(&evCount); err != nil {
+				t.Fatalf("shared projection outbox must survive the refused down: %v", err)
 			}
 			if evCount != 1 {
 				t.Fatalf("projection event history destroyed by down: count=%d", evCount)
+			}
+			// The retired 0G table receives no writes.
+			var legacy int
+			if err := pool.QueryRow(ctx, `SELECT count(*) FROM outcome_projection_events`).Scan(&legacy); err != nil {
+				t.Fatalf("legacy table read: %v", err)
+			}
+			if legacy != 0 {
+				t.Fatalf("retired outcome_projection_events must not be written, got %d rows", legacy)
 			}
 		})
 	})

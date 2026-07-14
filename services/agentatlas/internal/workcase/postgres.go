@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/astraclawteam/agentatlas/sdk/go/workcase"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/outcomegraph"
 )
 
 // pgUniqueViolation is the PostgreSQL SQLSTATE for a unique/primary-key
@@ -214,6 +215,14 @@ func (s *PostgresStore) Apply(ctx context.Context, cmd Command, eventType EventT
 	if _, err = tx.Exec(ctx, `INSERT INTO workcase_events(case_id,seq,enterprise_id,event_type,payload,idempotency_key,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)`,
 		cmd.CaseID, next.Revision, cmd.EnterpriseID, string(eventType), payload, cmd.IdempotencyKey, now); err != nil {
 		return workcase.WorkCase{}, mapPgError(err)
+	}
+
+	// Task 0I transactional outbox: append the WorkCase revision as a canonical
+	// projection event to the ONE shared Outcome-Graph outbox, in THIS
+	// transaction. The only synchronous write is to authoritative PostgreSQL
+	// (snapshot + event + outbox row, atomically); AGE is projected async.
+	if _, err := outcomegraph.AppendOutboxTx(ctx, tx, outcomegraph.MapWorkCase(next), now); err != nil {
+		return workcase.WorkCase{}, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	model "github.com/astraclawteam/agentatlas/sdk/go/governance"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/outcomegraph"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/workflow"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -371,6 +372,14 @@ func (s *PostgresStore) FinalizePublish(ctx context.Context, ent, idem string, a
 	result := PublishedVersion{ChangeID: rec.Draft.ChangeID, ResourceID: rec.Draft.ResourceID, Version: domainVersion, AuditRefID: auditRef}
 	raw, _ := json.Marshal(result)
 	if _, err = tx.Exec(ctx, `UPDATE publish_operations SET status='succeeded',result=$3,finished_at=now() WHERE enterprise_id=$1 AND idempotency_key=$2 AND status='pending'`, ent, idem, raw); err != nil {
+		return PublishedVersion{}, err
+	}
+	// Task 0I transactional outbox: append the published governed change as a
+	// canonical projection event to the shared Outcome-Graph outbox, in THIS
+	// transaction (no PostgreSQL/AGE dual write). MapGovernanceChange takes
+	// primitives so this package needs no import cycle back into outcomegraph.
+	if _, err = outcomegraph.AppendOutboxTx(ctx, tx, outcomegraph.MapGovernanceChange(
+		ent, rec.Draft.OrgUnitID, string(rec.Draft.ResourceType), rec.Draft.ResourceID, uint64(domainVersion), auditRef), s.now()); err != nil {
 		return PublishedVersion{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {

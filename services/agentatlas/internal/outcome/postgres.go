@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	model "github.com/astraclawteam/agentatlas/sdk/go/outcome"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/outcomegraph"
 )
 
 // pgUniqueViolation is the PostgreSQL SQLSTATE for a unique/primary-key
@@ -201,40 +202,47 @@ func (s *PostgresStore) AppendLineage(ctx context.Context, nodes []model.Lineage
 	return tx.Commit(ctx)
 }
 
+// AppendProjectionEvent is re-pointed by Task 0I onto the ONE shared
+// Outcome-Graph projection outbox (outcome_graph_outbox), unifying the 0G
+// outcome-only projection path so there is exactly one physical outbox for all
+// four authoritative domains (workcase, operatingmap, governance, outcome) — the
+// 0G-era outcome_projection_events table is retired (no longer written). The
+// per-tenant monotonic Sequence, tombstone/reevaluation-as-append and
+// never-edit-in-place semantics the 0G contract requires are preserved by the
+// shared outbox. A rich, self-contained graph delta is built from the
+// authoritative Outcome when present; otherwise a minimal subject upsert is used.
 func (s *PostgresStore) AppendProjectionEvent(ctx context.Context, ev model.ProjectionEvent) (model.ProjectionEvent, error) {
 	if err := ev.Validate(); err != nil {
 		return model.ProjectionEvent{}, err
 	}
+	var rich *outcomegraph.GraphDelta
+	if (ev.Kind == model.ProjectionOutcomeRevision || ev.Kind == model.ProjectionLineageFact) && ev.SubjectType == model.NodeOutcome {
+		switch o, err := s.GetOutcome(ctx, ev.Tenant, ev.SubjectID, ev.SubjectRevision); {
+		case err == nil:
+			d := outcomegraph.MapOutcome(o)
+			rich = &d
+		case errors.Is(err, ErrNotFound):
+			// No authoritative Outcome (e.g. a raw projection append): fall back to
+			// a minimal subject upsert.
+		default:
+			return model.ProjectionEvent{}, err
+		}
+	}
+	ogEvent := outcomegraph.MapOutcomeMarker(ev, rich)
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return model.ProjectionEvent{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "outcome_projection:"+ev.Tenant); err != nil {
-		return model.ProjectionEvent{}, err
-	}
-	var next int64
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(sequence),0)+1 FROM outcome_projection_events WHERE tenant=$1`, ev.Tenant).Scan(&next); err != nil {
-		return model.ProjectionEvent{}, err
-	}
-	// RecordedAt is caller-supplied and required (Validate rejects a zero value),
-	// so the store does not stamp it.
-	ev.Sequence = uint64(next)
-	var supersedes any
-	if ev.SupersedesSequence != 0 {
-		supersedes = int64(ev.SupersedesSequence)
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO outcome_projection_events
-		(tenant,sequence,kind,subject_type,subject_id,subject_revision,payload_hash,supersedes_sequence,recorded_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		ev.Tenant, next, string(ev.Kind), string(ev.SubjectType), ev.SubjectID, int64(ev.SubjectRevision),
-		ev.PayloadHash, supersedes, ev.RecordedAt.UTC()); err != nil {
+	seq, err := outcomegraph.AppendOutboxTx(ctx, tx, ogEvent, s.now())
+	if err != nil {
 		return model.ProjectionEvent{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return model.ProjectionEvent{}, err
 	}
+	ev.Sequence = seq
 	return ev, nil
 }
 

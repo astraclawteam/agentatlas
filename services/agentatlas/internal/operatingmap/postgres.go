@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	model "github.com/astraclawteam/agentatlas/sdk/go/operatingmap"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/outcomegraph"
 )
 
 // PostgresStore is a direct-pgx implementation of Store (see service.go),
@@ -141,6 +142,13 @@ func (s *PostgresStore) Publish(ctx context.Context, candidate model.Entry, chec
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 		candidate.ID, candidate.EnterpriseID, candidate.OrgScope, candidate.OrgVersion, candidate.IntentKey, candidate.Version,
 		candidate.EffectiveFrom, effectiveToArg, candidate.SourcePolicyRevision, candidate.GovernanceReviewRef, content, candidate.CreatedAt); err != nil {
+		return model.Entry{}, err
+	}
+
+	// Task 0I transactional outbox: append the published Operating Map entry as a
+	// canonical projection event to the shared Outcome-Graph outbox, in THIS
+	// transaction (no PostgreSQL/AGE dual write).
+	if _, err := outcomegraph.AppendOutboxTx(ctx, tx, outcomegraph.MapOperatingMap(candidate), s.now()); err != nil {
 		return model.Entry{}, err
 	}
 
