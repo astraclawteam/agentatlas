@@ -105,6 +105,26 @@ func (r *Runner) Stop() {
 	r.unsubs = nil
 }
 
+// JobWorkCaseAdvance is the job type whose handler drives the Task 0E
+// workcase.Orchestrator.Advance(ctx, caseID) exactly once per delivery; the
+// jobID IS the caseID. Advance is idempotent and restart-safe, so duplicate or
+// out-of-order JetStream deliveries converge without a double side effect,
+// while Handler.Claim still gives at-most-one in-flight execution per delivery.
+const JobWorkCaseAdvance = "workcase.advance"
+
+// WorkCaseAdvanceHandler builds the Runner Handler for JobWorkCaseAdvance from
+// an idempotent claim/complete pair and the orchestrator's advance entry point.
+// Package tasks deliberately does NOT import package workcase (that would be an
+// import cycle: the orchestrator enqueues advance jobs through this runner), so
+// the advance function is taken as a plain func(ctx, caseID) error.
+func WorkCaseAdvanceHandler(
+	claim func(ctx context.Context, caseID string) (bool, error),
+	advance func(ctx context.Context, caseID string) error,
+	complete func(ctx context.Context, caseID string, execErr error) error,
+) Handler {
+	return Handler{Claim: claim, Execute: advance, Complete: complete}
+}
+
 // Process runs one job synchronously (used by tests and inline callers).
 func (r *Runner) Process(ctx context.Context, jobType, jobID string) error {
 	r.mu.Lock()

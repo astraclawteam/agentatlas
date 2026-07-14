@@ -178,30 +178,41 @@ var legalStepTransitions = map[workcase.StepStatus]map[workcase.StepStatus]bool{
 	workcase.StepRunning: {workcase.StepCompleted: true, workcase.StepFailed: true},
 }
 
-// TransitionStep records a Step's new StepStatus (and any new Evidence)
-// within the current (most recently proposed) WorkPlan of an executing
-// case. It requires the case to be workcase.StatusExecuting and the
-// transition to be legal per legalStepTransitions. When this transition
-// leaves every Step in the current plan workcase.StepCompleted, the case
-// becomes workcase.StatusCompleted; a Step transitioning to
-// workcase.StepFailed terminates the case (workcase.StatusTerminated).
-// These are the only two ways a WorkCase reaches a terminal Status, since
-// the closed command inventory has no separate Complete/Terminate command.
-func (s *Service) TransitionStep(ctx context.Context, cmd TransitionStepCommand) (workcase.WorkCase, error) {
-	if err := validateCommand(cmd.Command); err != nil {
+// AdvanceStepCommand records a Step status transition on behalf of the Task 0E
+// Orchestrator. It is the SAME shape as TransitionStepCommand but is applied
+// through Service.AdvanceStep, which deliberately does NOT drive the WorkCase's
+// own Status: see AdvanceStep. It lives here (rather than in store.go with the
+// other commands) because it is an orchestration-facing entry point added in
+// Task 0E.
+type AdvanceStepCommand struct {
+	Command
+	StepID   string
+	Status   workcase.StepStatus
+	Evidence []workcase.EvidenceRef
+}
+
+// stepTransition is the shared core of TransitionStep and AdvanceStep. It
+// validates and applies a single Step status change within the current
+// (most-recently-proposed) WorkPlan of an executing case. driveCaseLifecycle
+// selects whether an all-completed / any-failed plan also moves the WorkCase's
+// own Status: TransitionStep passes true (the original Task 0A/0B behavior);
+// AdvanceStep passes false (Task 0E, where WorkCase completion is forbidden to
+// the orchestrator and terminal handling is the orchestrator's own).
+func (s *Service) stepTransition(ctx context.Context, cmd Command, stepID string, status workcase.StepStatus, evidence []workcase.EvidenceRef, driveCaseLifecycle bool) (workcase.WorkCase, error) {
+	if err := validateCommand(cmd); err != nil {
 		return workcase.WorkCase{}, err
 	}
-	if cmd.CaseID == "" || cmd.StepID == "" {
+	if cmd.CaseID == "" || stepID == "" {
 		return workcase.WorkCase{}, fmt.Errorf("%w: case_id and step_id are required", ErrInvalidCommand)
 	}
-	switch cmd.Status {
+	switch status {
 	case workcase.StepRunning, workcase.StepCompleted, workcase.StepFailed:
 	default:
-		return workcase.WorkCase{}, fmt.Errorf("%w: unsupported target step status %q", ErrInvalidCommand, cmd.Status)
+		return workcase.WorkCase{}, fmt.Errorf("%w: unsupported target step status %q", ErrInvalidCommand, status)
 	}
-	evidence := append([]workcase.EvidenceRef(nil), cmd.Evidence...)
+	ev := append([]workcase.EvidenceRef(nil), evidence...)
 
-	return s.store.Apply(ctx, cmd.Command, EventStepTransitioned, func(current workcase.WorkCase) (workcase.WorkCase, error) {
+	return s.store.Apply(ctx, cmd, EventStepTransitioned, func(current workcase.WorkCase) (workcase.WorkCase, error) {
 		if current.Status != workcase.StatusExecuting {
 			return workcase.WorkCase{}, fmt.Errorf("%w: case %s is %s, not executing", ErrInvalidTransition, current.ID, current.Status)
 		}
@@ -213,42 +224,72 @@ func (s *Service) TransitionStep(ctx context.Context, cmd TransitionStepCommand)
 		steps := next.Plans[top].Steps
 		found := -1
 		for i, st := range steps {
-			if st.ID == cmd.StepID {
+			if st.ID == stepID {
 				found = i
 				break
 			}
 		}
 		if found < 0 {
-			return workcase.WorkCase{}, fmt.Errorf("%w: case %s has no step %s in its current plan", ErrInvalidTransition, current.ID, cmd.StepID)
+			return workcase.WorkCase{}, fmt.Errorf("%w: case %s has no step %s in its current plan", ErrInvalidTransition, current.ID, stepID)
 		}
 		fromStatus := steps[found].Status
 		if fromStatus == "" {
 			fromStatus = workcase.StepPending
 		}
-		if !legalStepTransitions[fromStatus][cmd.Status] {
-			return workcase.WorkCase{}, fmt.Errorf("%w: step %s cannot go from %s to %s", ErrInvalidTransition, cmd.StepID, fromStatus, cmd.Status)
+		if !legalStepTransitions[fromStatus][status] {
+			return workcase.WorkCase{}, fmt.Errorf("%w: step %s cannot go from %s to %s", ErrInvalidTransition, stepID, fromStatus, status)
 		}
-		steps[found].Status = cmd.Status
-		steps[found].Evidence = append(steps[found].Evidence, evidence...)
+		steps[found].Status = status
+		steps[found].Evidence = append(steps[found].Evidence, ev...)
 		next.Revision = current.Revision + 1
 
-		allCompleted, anyFailed := true, false
-		for _, st := range steps {
-			if st.Status == workcase.StepFailed {
-				anyFailed = true
+		if driveCaseLifecycle {
+			allCompleted, anyFailed := true, false
+			for _, st := range steps {
+				if st.Status == workcase.StepFailed {
+					anyFailed = true
+				}
+				if st.Status != workcase.StepCompleted {
+					allCompleted = false
+				}
 			}
-			if st.Status != workcase.StepCompleted {
-				allCompleted = false
+			switch {
+			case anyFailed:
+				next.Status = workcase.StatusTerminated
+			case allCompleted:
+				next.Status = workcase.StatusCompleted
 			}
-		}
-		switch {
-		case anyFailed:
-			next.Status = workcase.StatusTerminated
-		case allCompleted:
-			next.Status = workcase.StatusCompleted
 		}
 		return next, nil
 	})
+}
+
+// TransitionStep records a Step's new StepStatus (and any new Evidence)
+// within the current (most recently proposed) WorkPlan of an executing
+// case. It requires the case to be workcase.StatusExecuting and the
+// transition to be legal per legalStepTransitions. When this transition
+// leaves every Step in the current plan workcase.StepCompleted, the case
+// becomes workcase.StatusCompleted; a Step transitioning to
+// workcase.StepFailed terminates the case (workcase.StatusTerminated).
+// These are the only two ways a WorkCase reaches a terminal Status through
+// this direct (non-orchestrated) command path, since the closed command
+// inventory has no separate Complete/Terminate command.
+func (s *Service) TransitionStep(ctx context.Context, cmd TransitionStepCommand) (workcase.WorkCase, error) {
+	return s.stepTransition(ctx, cmd.Command, cmd.StepID, cmd.Status, cmd.Evidence, true)
+}
+
+// AdvanceStep records a Step status transition for the Task 0E Orchestrator
+// WITHOUT touching the WorkCase's own Status. This is the heart of the 0E
+// completion prohibition at the persistence layer: an orchestrated plan whose
+// every Step is workcase.StepCompleted leaves the case StatusExecuting -- the
+// orchestrator can never reach the forbidden StatusCompleted, which stays gated
+// on a satisfied Outcome published by Task 0H. Likewise a StepFailed here does
+// NOT auto-terminate the case: the orchestrator owns failure handling (retry,
+// replanning, compensation, human takeover) and only the governed lifecycle may
+// terminate a case. The step-status transition itself is still validated
+// exactly like TransitionStep (executing case, legal StepStatus edge).
+func (s *Service) AdvanceStep(ctx context.Context, cmd AdvanceStepCommand) (workcase.WorkCase, error) {
+	return s.stepTransition(ctx, cmd.Command, cmd.StepID, cmd.Status, cmd.Evidence, false)
 }
 
 // Get returns the current snapshot for caseID. It is a thin passthrough to
