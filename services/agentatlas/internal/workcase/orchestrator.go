@@ -56,8 +56,10 @@ import (
 
 	model "github.com/astraclawteam/agentatlas/sdk/go/governance"
 	nexus "github.com/astraclawteam/agentatlas/sdk/go/nexus"
+	sdkoutcome "github.com/astraclawteam/agentatlas/sdk/go/outcome"
 	sdkworkcase "github.com/astraclawteam/agentatlas/sdk/go/workcase"
 	governance "github.com/astraclawteam/agentatlas/services/agentatlas/internal/governance"
+	outcome "github.com/astraclawteam/agentatlas/services/agentatlas/internal/outcome"
 )
 
 // Sentinel errors distinguishing the transport outcomes an ActionGateway may
@@ -115,6 +117,44 @@ type Governor interface {
 // receipt.
 type Planner interface {
 	ProposePlan(ctx context.Context, c sdkworkcase.WorkCase) (sdkworkcase.WorkPlan, error)
+}
+
+// ObservationGateway fetches the signed nexus.ObservationReceipt confirming a
+// verification need, so the DETERMINISTIC Evaluator can consume it (the
+// orchestrator does the I/O; the Evaluator only decides over signed facts).
+// found=false means no authoritative observation exists yet -- the need is
+// unresolved and the business result cannot be satisfied. Like ActionGateway,
+// this is untrusted transport: the Evaluator re-verifies every receipt.
+type ObservationGateway interface {
+	FetchObservation(ctx context.Context, req nexus.ActionRequest, needID string) (nexus.ObservationReceipt, bool, error)
+}
+
+// OutcomeConfig wires Task 0H Outcome verification + closure into the
+// orchestrator. When nil, the orchestrator preserves Task 0E behaviour exactly:
+// a fully-executed plan leaves the case executing (completion is not reachable
+// here). When present and fully wired, a fully-executed plan triggers
+// deterministic Outcome evaluation and Outcome-gated closure: a `satisfied`
+// terminal Outcome completes the case, an `unsatisfied` one governed-terminates
+// it, and `disputed`/`blocked`/`unknown`/`unverified` leave it executing on an
+// explicit human/reconciliation path (never a silent completion).
+type OutcomeConfig struct {
+	Store     outcome.Store
+	Evaluator *outcome.Evaluator
+	Closure   *outcome.ClosureService
+	Observer  ObservationGateway
+	// Policy.Version binds the produced Outcome's rule_version; the required
+	// postconditions are DERIVED from the executed plan's declared postconditions.
+	Policy              outcome.Policy
+	Goal                sdkoutcome.GoalRef
+	OperatingMapVersion int64
+	OrgVersion          int64
+	// AcceptingHashes binds a required need id to the normalized-observation
+	// hash(es) that CONFIRM its postcondition (the published "what success looks
+	// like" definition). A need with NO accepting definition here is unconfirmable
+	// -- the evaluator resolves it to `unknown` and the case cannot complete on a
+	// bare observation. The Governor/policy MUST supply this for every satisfiable
+	// postcondition.
+	AcceptingHashes map[string][]string
 }
 
 // AuditSink records an external audit reference for a governance decision. It
@@ -262,8 +302,9 @@ type Config struct {
 	TrustedKeyID   string
 	TrustedKey     ed25519.PublicKey
 	ApprovalPolicy governance.UpwardReviewPolicy
-	Audit          AuditSink // optional
-	Planner        Planner   // optional
+	Audit          AuditSink      // optional
+	Planner        Planner        // optional
+	Outcome        *OutcomeConfig // optional (Task 0H); nil preserves Task 0E behaviour
 	Now            func() time.Time
 	MaxAttempts    int // per-step dispatch/retry bound before human takeover; default 3
 }
@@ -281,6 +322,7 @@ type Orchestrator struct {
 	policy      governance.UpwardReviewPolicy
 	audit       AuditSink
 	planner     Planner
+	outcome     *OutcomeConfig
 	now         func() time.Time
 	maxAttempts int
 }
@@ -298,6 +340,11 @@ func NewOrchestrator(cfg Config) (*Orchestrator, error) {
 	}
 	if cfg.ApprovalPolicy.CurrentOrgVersion <= 0 {
 		return nil, errors.New("workcase: orchestrator requires ApprovalPolicy.CurrentOrgVersion > 0 (authoritative org version for upward review)")
+	}
+	if cfg.Outcome != nil {
+		if err := validateOutcomeConfig(cfg.Outcome); err != nil {
+			return nil, err
+		}
 	}
 	now := cfg.Now
 	if now == nil {
@@ -317,9 +364,33 @@ func NewOrchestrator(cfg Config) (*Orchestrator, error) {
 		policy:      cfg.ApprovalPolicy,
 		audit:       cfg.Audit,
 		planner:     cfg.Planner,
+		outcome:     cfg.Outcome,
 		now:         now,
 		maxAttempts: max,
 	}, nil
+}
+
+// validateOutcomeConfig fails closed on a partially-wired Task 0H Outcome
+// configuration: every collaborator and the governed version binding must be
+// present, or Outcome verification/closure is disabled entirely rather than
+// running half-configured.
+func validateOutcomeConfig(oc *OutcomeConfig) error {
+	if oc.Store == nil || oc.Evaluator == nil || oc.Closure == nil || oc.Observer == nil {
+		return errors.New("workcase: OutcomeConfig requires Store, Evaluator, Closure and Observer")
+	}
+	if oc.Policy.Version == "" {
+		return errors.New("workcase: OutcomeConfig requires a published Policy.Version (it binds the Outcome rule_version)")
+	}
+	if oc.Goal.GoalKey == "" || oc.Goal.GoalVersion < 1 {
+		return errors.New("workcase: OutcomeConfig requires a versioned Goal (goal_key and goal_version >= 1)")
+	}
+	if oc.OperatingMapVersion < 1 {
+		return errors.New("workcase: OutcomeConfig requires OperatingMapVersion >= 1")
+	}
+	if oc.OrgVersion < 0 {
+		return errors.New("workcase: OutcomeConfig requires a non-negative OrgVersion")
+	}
+	return nil
 }
 
 // AdvanceResult summarizes one Advance call.
@@ -413,7 +484,22 @@ func (o *Orchestrator) Advance(ctx context.Context, caseID string) (AdvanceResul
 		}
 		run, ok := currentActionableRun(ledger)
 		if !ok {
-			break // every step completed -- but the WorkCase stays executing (0E)
+			// Every step is completed. Task 0E rested here (case stays executing).
+			// Task 0H: if the Outcome machinery is wired, verify the business
+			// result and drive Outcome-gated closure; otherwise preserve 0E.
+			did, err := o.finalizeCase(ctx, wc, ledger)
+			if err != nil {
+				return AdvanceResult{}, err
+			}
+			if !did {
+				break // 0E behaviour, or resting on a human/reconciliation path
+			}
+			progressed = true
+			ledger, err = o.runs.Load(ctx, caseID)
+			if err != nil {
+				return AdvanceResult{}, err
+			}
+			continue
 		}
 		did, err := o.stepOnce(ctx, wc, ledger, run)
 		if err != nil {
@@ -880,6 +966,145 @@ func (o *Orchestrator) replanStep(ctx context.Context, wc sdkworkcase.WorkCase, 
 	})
 	return true, err
 }
+
+// --- Task 0H: outcome verification and Outcome-gated closure ---------------
+
+// finalizeCase runs once a plan is fully executed. It deterministically
+// evaluates the business Outcome over the enqueued verification needs and the
+// verified receipts/observations, then acts:
+//
+//   - satisfied  -> Outcome-gated closure completes the WorkCase;
+//   - unsatisfied -> governed termination;
+//   - disputed/blocked/unknown/unverified -> rest (the case stays executing on an
+//     explicit human/reconciliation path -- NEVER a silent completion).
+//
+// It returns did=true only when it changed lifecycle state (completed/terminated
+// /replanned) so the caller re-loops; did=false means either 0E behaviour (no
+// Outcome machinery wired) or a deliberate rest. Re-running it is idempotent: a
+// second evaluation of the same versioned input re-reads the already-persisted
+// Outcome (append-only) rather than producing a divergent one, and closure is
+// idempotent under its deterministic key.
+func (o *Orchestrator) finalizeCase(ctx context.Context, wc sdkworkcase.WorkCase, ledger RunLedger) (bool, error) {
+	if o.outcome == nil {
+		return false, nil // Task 0E: a fully-executed plan leaves the case executing
+	}
+	oc := o.outcome
+	cmd, err := o.buildEvaluateCommand(ctx, wc, ledger)
+	if err != nil {
+		return false, err
+	}
+	produced, err := oc.Evaluator.Evaluate(ctx, cmd)
+	if errors.Is(err, outcome.ErrRevisionExists) {
+		// A prior finalize already published this Outcome revision: reuse it
+		// (idempotent) rather than diverging.
+		produced, err = oc.Store.LatestOutcome(ctx, cmd.Tenant, cmd.OutcomeKey)
+	}
+	if err != nil {
+		return false, err
+	}
+
+	switch produced.Claim.Status {
+	case sdkoutcome.OutcomeSatisfied:
+		ref := outcome.OutcomeRef{
+			Tenant: produced.Tenant, OutcomeKey: produced.OutcomeKey, Revision: produced.Revision,
+			OrgScope: ledger.OrgScope, ActorRef: ledger.ActorRef, CaseID: produced.WorkCaseID,
+		}
+		key := "close-" + shortHash(ledger.CaseID+":"+produced.ID)
+		if _, err := oc.Closure.Apply(ctx, ref, wc.Revision, key); err != nil {
+			return false, err
+		}
+		return true, nil
+	case sdkoutcome.OutcomeUnsatisfied:
+		// Governed termination. Replanning of an unsatisfied Outcome is deferred to
+		// reconciliation (the deterministic evaluator, re-run with corrected
+		// evidence, produces a superseding revision); the orchestrator's own
+		// unsatisfied path is a governed close-out, never a silent completion.
+		key := "term-" + shortHash(ledger.CaseID+":"+produced.ID)
+		if _, err := o.svc.TerminateCase(ctx, ledger.EnterpriseID, ledger.OrgScope, ledger.ActorRef, ledger.CaseID, wc.Revision, key, "business outcome unsatisfied"); err != nil {
+			return false, err
+		}
+		return true, nil
+	default:
+		// unverified / unknown / disputed / blocked: retain an explicit
+		// human/reconciliation path. The case stays executing; it is NEVER
+		// completed without a satisfied Outcome.
+		return false, nil
+	}
+}
+
+// buildEvaluateCommand assembles the DETERMINISTIC EvaluateCommand from governed
+// facts: the enqueued verification needs (re-expanded into their governed
+// ActionRequests via the Governor, never the LLM), the signed ObservationReceipts
+// fetched for them, and the exact Goal/WorkCase/WorkPlan/Operating Map/org
+// versions. The Evaluator re-verifies every fetched receipt (fail-closed) and
+// enforces freshness; this method only gathers the inputs.
+func (o *Orchestrator) buildEvaluateCommand(ctx context.Context, wc sdkworkcase.WorkCase, ledger RunLedger) (outcome.EvaluateCommand, error) {
+	oc := o.outcome
+	var (
+		obsInputs []outcome.ObservationInput
+		required  []outcome.RequiredPostcondition
+	)
+	seenNeed := map[string]bool{}
+	for _, q := range ledger.Verify {
+		if seenNeed[q.NeedID] {
+			continue
+		}
+		step, ok := o.stepByID(wc, q.StepID)
+		if !ok || step.Action == nil {
+			continue
+		}
+		req, _, _, err := o.gov.PrepareAction(ctx, wc, ledger.PlanRevision, step)
+		if err != nil {
+			return outcome.EvaluateCommand{}, err
+		}
+		postID := ""
+		for _, pc := range req.Postconditions {
+			if pc.VerificationNeedID == q.NeedID {
+				postID = pc.PostconditionID
+				break
+			}
+		}
+		if postID == "" {
+			continue // a need with no declared postcondition is not an Outcome requirement
+		}
+		seenNeed[q.NeedID] = true
+		required = append(required, outcome.RequiredPostcondition{
+			NeedID: q.NeedID, PostconditionID: postID, Authority: q.Authority,
+			AcceptingObservationHashes: oc.AcceptingHashes[q.NeedID],
+		})
+		obs, found, ferr := oc.Observer.FetchObservation(ctx, req, q.NeedID)
+		if ferr != nil {
+			return outcome.EvaluateCommand{}, ferr
+		}
+		if found {
+			obsInputs = append(obsInputs, outcome.ObservationInput{Request: req, Receipt: obs})
+		}
+	}
+
+	goal := oc.Goal
+	goal.Tenant = ledger.EnterpriseID // the Outcome and its Goal share the tenant
+	return outcome.EvaluateCommand{
+		Tenant:              ledger.EnterpriseID,
+		OutcomeKey:          outcomeKeyFor(ledger.CaseID),
+		Revision:            1,
+		Goal:                goal,
+		WorkCaseID:          ledger.CaseID,
+		WorkCaseRevision:    wc.Revision,
+		WorkPlanRevision:    ledger.PlanRevision,
+		OperatingMapVersion: oc.OperatingMapVersion,
+		OrgVersion:          oc.OrgVersion,
+		Policy:              outcome.Policy{Version: oc.Policy.Version, Required: required},
+		DecidedAt:           o.now().UTC(),
+		TrustedKeyID:        o.trustKeyID,
+		TrustedKey:          o.trustKey,
+		Observations:        obsInputs,
+		Contributions:       []sdkoutcome.ContributionRef{{ContributorID: ledger.ActorRef, Kind: "actor", Weight: 1}},
+	}, nil
+}
+
+// outcomeKeyFor derives the deterministic Outcome key for a case, so a re-run
+// targets the same append-only Outcome chain.
+func outcomeKeyFor(caseID string) string { return caseID + ":outcome" }
 
 // --- WorkCase reflection (never completes the case) ------------------------
 

@@ -193,12 +193,18 @@ type AdvanceStepCommand struct {
 
 // stepTransition is the shared core of TransitionStep and AdvanceStep. It
 // validates and applies a single Step status change within the current
-// (most-recently-proposed) WorkPlan of an executing case. driveCaseLifecycle
-// selects whether an all-completed / any-failed plan also moves the WorkCase's
-// own Status: TransitionStep passes true (the original Task 0A/0B behavior);
-// AdvanceStep passes false (Task 0E, where WorkCase completion is forbidden to
-// the orchestrator and terminal handling is the orchestrator's own).
-func (s *Service) stepTransition(ctx context.Context, cmd Command, stepID string, status workcase.StepStatus, evidence []workcase.EvidenceRef, driveCaseLifecycle bool) (workcase.WorkCase, error) {
+// (most-recently-proposed) WorkPlan of an executing case and NEVER moves the
+// WorkCase's own Status.
+//
+// Task 0H unification: a step transition can no longer complete or terminate a
+// case. Completion is reachable ONLY through Service.CompleteCase (the
+// Outcome-gated path), and termination ONLY through Service.TerminateCase (the
+// governed path). This makes "completed" reachable by exactly ONE route, and
+// that route always requires a satisfied Outcome (verified by
+// outcome.ClosureService before it calls CompleteCase). TransitionStep and
+// AdvanceStep are therefore now behaviourally identical; TransitionStep remains
+// as the direct-command name used by the Task 0A/0B tests.
+func (s *Service) stepTransition(ctx context.Context, cmd Command, stepID string, status workcase.StepStatus, evidence []workcase.EvidenceRef) (workcase.WorkCase, error) {
 	if err := validateCommand(cmd); err != nil {
 		return workcase.WorkCase{}, err
 	}
@@ -242,54 +248,95 @@ func (s *Service) stepTransition(ctx context.Context, cmd Command, stepID string
 		steps[found].Status = status
 		steps[found].Evidence = append(steps[found].Evidence, ev...)
 		next.Revision = current.Revision + 1
-
-		if driveCaseLifecycle {
-			allCompleted, anyFailed := true, false
-			for _, st := range steps {
-				if st.Status == workcase.StepFailed {
-					anyFailed = true
-				}
-				if st.Status != workcase.StepCompleted {
-					allCompleted = false
-				}
-			}
-			switch {
-			case anyFailed:
-				next.Status = workcase.StatusTerminated
-			case allCompleted:
-				next.Status = workcase.StatusCompleted
-			}
-		}
 		return next, nil
 	})
 }
 
-// TransitionStep records a Step's new StepStatus (and any new Evidence)
-// within the current (most recently proposed) WorkPlan of an executing
-// case. It requires the case to be workcase.StatusExecuting and the
-// transition to be legal per legalStepTransitions. When this transition
-// leaves every Step in the current plan workcase.StepCompleted, the case
-// becomes workcase.StatusCompleted; a Step transitioning to
-// workcase.StepFailed terminates the case (workcase.StatusTerminated).
-// These are the only two ways a WorkCase reaches a terminal Status through
-// this direct (non-orchestrated) command path, since the closed command
-// inventory has no separate Complete/Terminate command.
+// TransitionStep records a Step's new StepStatus (and any new Evidence) within
+// the current (most recently proposed) WorkPlan of an executing case. It
+// requires the case to be workcase.StatusExecuting and the transition to be
+// legal per legalStepTransitions. As of Task 0H it NO LONGER drives the
+// WorkCase's own Status: an all-completed plan leaves the case executing (the
+// case completes only through the Outcome-gated Service.CompleteCase), and a
+// StepFailed no longer auto-terminates (termination is the governed
+// Service.TerminateCase). It is now behaviourally identical to AdvanceStep.
 func (s *Service) TransitionStep(ctx context.Context, cmd TransitionStepCommand) (workcase.WorkCase, error) {
-	return s.stepTransition(ctx, cmd.Command, cmd.StepID, cmd.Status, cmd.Evidence, true)
+	return s.stepTransition(ctx, cmd.Command, cmd.StepID, cmd.Status, cmd.Evidence)
 }
 
 // AdvanceStep records a Step status transition for the Task 0E Orchestrator
-// WITHOUT touching the WorkCase's own Status. This is the heart of the 0E
-// completion prohibition at the persistence layer: an orchestrated plan whose
-// every Step is workcase.StepCompleted leaves the case StatusExecuting -- the
-// orchestrator can never reach the forbidden StatusCompleted, which stays gated
-// on a satisfied Outcome published by Task 0H. Likewise a StepFailed here does
-// NOT auto-terminate the case: the orchestrator owns failure handling (retry,
-// replanning, compensation, human takeover) and only the governed lifecycle may
-// terminate a case. The step-status transition itself is still validated
-// exactly like TransitionStep (executing case, legal StepStatus edge).
+// WITHOUT touching the WorkCase's own Status. An orchestrated plan whose every
+// Step is workcase.StepCompleted leaves the case StatusExecuting -- the
+// orchestrator can never reach StatusCompleted, which is gated on a satisfied
+// Outcome (Task 0H). The step-status transition itself is validated exactly like
+// TransitionStep (executing case, legal StepStatus edge).
 func (s *Service) AdvanceStep(ctx context.Context, cmd AdvanceStepCommand) (workcase.WorkCase, error) {
-	return s.stepTransition(ctx, cmd.Command, cmd.StepID, cmd.Status, cmd.Evidence, false)
+	return s.stepTransition(ctx, cmd.Command, cmd.StepID, cmd.Status, cmd.Evidence)
+}
+
+// CompleteCase transitions an executing WorkCase to workcase.StatusCompleted. It
+// is the ONE and ONLY production path to StatusCompleted, and it is Outcome-gated:
+// it requires a non-empty outcomeRef, and its sole authorized caller --
+// outcome.ClosureService.Apply -- invokes it only AFTER re-reading the referenced
+// Outcome and verifying it is `satisfied` at read time (never trusting the
+// caller). Because the step-lifecycle transitions can no longer complete a case,
+// a WorkCase reaches completed ONLY through a satisfied terminal Outcome.
+//
+// The transition is recorded as an EventStepTransitioned event -- the only
+// event_type the frozen workcase_events CHECK admits (a dedicated
+// case_completed event_type is deferred to the next task that adds a migration;
+// Task 0H is core-code-only) -- whose payload is the completed WorkCase, so event
+// replay reconstructs it faithfully. Optimistic concurrency (expectedRevision)
+// and idempotency (idempotencyKey) make a duplicate/redelivered closure safe:
+// the same key replays the recorded result rather than transitioning twice.
+func (s *Service) CompleteCase(ctx context.Context, enterpriseID, orgScope, actorRef, caseID string, expectedRevision uint64, idempotencyKey, outcomeRef string) (workcase.WorkCase, error) {
+	cmd := Command{EnterpriseID: enterpriseID, OrgScope: orgScope, ActorRef: actorRef, CaseID: caseID, ExpectedRevision: expectedRevision, IdempotencyKey: idempotencyKey}
+	if err := validateCommand(cmd); err != nil {
+		return workcase.WorkCase{}, err
+	}
+	if cmd.CaseID == "" {
+		return workcase.WorkCase{}, fmt.Errorf("%w: case_id is required", ErrInvalidCommand)
+	}
+	if outcomeRef == "" {
+		return workcase.WorkCase{}, fmt.Errorf("%w: an outcome reference is required (a case completes only through a satisfied Outcome)", ErrInvalidCommand)
+	}
+	return s.store.Apply(ctx, cmd, EventStepTransitioned, func(current workcase.WorkCase) (workcase.WorkCase, error) {
+		if current.Status != workcase.StatusExecuting {
+			return workcase.WorkCase{}, fmt.Errorf("%w: case %s is %s, not executing (only an executing case may complete)", ErrInvalidTransition, current.ID, current.Status)
+		}
+		next := cloneCase(current)
+		next.Status = workcase.StatusCompleted
+		next.Revision = current.Revision + 1
+		return next, nil
+	})
+}
+
+// TerminateCase transitions an executing WorkCase to workcase.StatusTerminated
+// (governed termination). It is the governed path the orchestrator drives when a
+// business Outcome is unsatisfied and replanning is unavailable/exhausted. It
+// carries a required reason for the audit trail and, like CompleteCase, records
+// an EventStepTransitioned event (the only admitted event_type) whose payload is
+// the terminated WorkCase.
+func (s *Service) TerminateCase(ctx context.Context, enterpriseID, orgScope, actorRef, caseID string, expectedRevision uint64, idempotencyKey, reason string) (workcase.WorkCase, error) {
+	cmd := Command{EnterpriseID: enterpriseID, OrgScope: orgScope, ActorRef: actorRef, CaseID: caseID, ExpectedRevision: expectedRevision, IdempotencyKey: idempotencyKey}
+	if err := validateCommand(cmd); err != nil {
+		return workcase.WorkCase{}, err
+	}
+	if cmd.CaseID == "" {
+		return workcase.WorkCase{}, fmt.Errorf("%w: case_id is required", ErrInvalidCommand)
+	}
+	if reason == "" {
+		return workcase.WorkCase{}, fmt.Errorf("%w: a termination reason is required", ErrInvalidCommand)
+	}
+	return s.store.Apply(ctx, cmd, EventStepTransitioned, func(current workcase.WorkCase) (workcase.WorkCase, error) {
+		if current.Status != workcase.StatusExecuting {
+			return workcase.WorkCase{}, fmt.Errorf("%w: case %s is %s, not executing (only an executing case may be terminated)", ErrInvalidTransition, current.ID, current.Status)
+		}
+		next := cloneCase(current)
+		next.Status = workcase.StatusTerminated
+		next.Revision = current.Revision + 1
+		return next, nil
+	})
 }
 
 // Get returns the current snapshot for caseID. It is a thin passthrough to

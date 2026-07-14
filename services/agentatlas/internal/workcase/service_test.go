@@ -3,11 +3,55 @@ package workcase_test
 import (
 	"context"
 	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	sdkworkcase "github.com/astraclawteam/agentatlas/sdk/go/workcase"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/workcase"
 )
+
+// TestCompleteCaseHasNoProductionCallersOutsideClosure is an ARCHITECTURE
+// boundary test hardening the single-completion-path invariant against
+// caller-trust: Service.CompleteCase must be exported so outcome.ClosureService
+// can drive it through the CaseCloser port, but NO production code outside the
+// outcome package's ClosureService may invoke it directly (that would bypass the
+// satisfied-Outcome read-time gate). It scans every non-test .go file under
+// internal/ and fails if any file other than the definition (workcase/service.go)
+// or the ClosureService port+call (outcome/evaluator.go) references CompleteCase(.
+func TestCompleteCaseHasNoProductionCallersOutsideClosure(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	internalDir := filepath.Dir(filepath.Dir(thisFile)) // .../internal
+	allowed := map[string]bool{
+		filepath.Join(internalDir, "workcase", "service.go"):  true, // the definition
+		filepath.Join(internalDir, "outcome", "evaluator.go"): true, // the CaseCloser port + the c.closer.CompleteCase call
+	}
+	err := filepath.WalkDir(internalDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || allowed[path] {
+			return nil
+		}
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		if strings.Contains(string(b), "CompleteCase(") {
+			t.Errorf("unexpected production reference to CompleteCase( in %s -- completion must go through outcome.ClosureService.Apply", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk internal/: %v", err)
+	}
+}
 
 // validPlan returns a minimal, schema-valid WorkPlan (a single read step,
 // no FailurePolicy required since it never uses Kind "write"). Callers that
@@ -298,7 +342,12 @@ func advanceToExecuting(t *testing.T, svc *workcase.Service, ent, org, actor, ca
 	return afterExec
 }
 
-func TestServiceTransitionStepDrivesCaseLifecycleToCompleted(t *testing.T) {
+// TestServiceStepCompletionDoesNotCompleteCaseAndCompleteCaseDoes proves the
+// Task 0H unification: completing the LAST step no longer completes the case
+// (that auto-completion was the test-only path 0H removes); a WorkCase reaches
+// completed ONLY through the Outcome-gated Service.CompleteCase, which requires
+// an outcome reference and is idempotent.
+func TestServiceStepCompletionDoesNotCompleteCaseAndCompleteCaseDoes(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t)
 	c := createCase(t, svc, "ent-1", "org:team-a", "actor-1", "idem-create-0000000006")
@@ -315,7 +364,7 @@ func TestServiceTransitionStepDrivesCaseLifecycleToCompleted(t *testing.T) {
 		t.Fatalf("case left executing early: %+v", running)
 	}
 
-	completed, err := svc.TransitionStep(ctx, workcase.TransitionStepCommand{
+	completedStep, err := svc.TransitionStep(ctx, workcase.TransitionStepCommand{
 		Command: workcase.Command{EnterpriseID: "ent-1", OrgScope: "org:team-a", ActorRef: "actor-1", CaseID: c.ID, ExpectedRevision: running.Revision, IdempotencyKey: "idem-complete-done001"},
 		StepID:  "step-1", Status: sdkworkcase.StepCompleted,
 		Evidence: []sdkworkcase.EvidenceRef{{Handle: "ev-1", ContentHash: "sha256:ev", Authority: "integration"}},
@@ -323,15 +372,38 @@ func TestServiceTransitionStepDrivesCaseLifecycleToCompleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("transition to completed: %v", err)
 	}
-	if completed.Status != sdkworkcase.StatusCompleted {
-		t.Fatalf("case did not auto-complete once every step completed: %+v", completed)
+	// The crux: the LAST step completing does NOT complete the case.
+	if completedStep.Status != sdkworkcase.StatusExecuting {
+		t.Fatalf("FORBIDDEN: a step transition completed the case (completion must be Outcome-gated), got %q", completedStep.Status)
 	}
-	step := completed.Plans[len(completed.Plans)-1].Steps[0]
+	step := completedStep.Plans[len(completedStep.Plans)-1].Steps[0]
 	if step.Status != sdkworkcase.StepCompleted || len(step.Evidence) != 1 || step.Evidence[0].Handle != "ev-1" {
 		t.Fatalf("step not recorded: %+v", step)
 	}
 
-	// Invalid step transition: completed -> running must be rejected.
+	// CompleteCase demands an outcome reference: a case completes only through a
+	// satisfied Outcome (verified upstream by outcome.ClosureService).
+	if _, err := svc.CompleteCase(ctx, "ent-1", "org:team-a", "actor-1", c.ID, completedStep.Revision, "idem-complete-noref01", ""); !errors.Is(err, workcase.ErrInvalidCommand) {
+		t.Fatalf("CompleteCase without an outcome ref must be rejected, got %v", err)
+	}
+
+	completed, err := svc.CompleteCase(ctx, "ent-1", "org:team-a", "actor-1", c.ID, completedStep.Revision, "idem-complete-close01", "ol_outcome_ref_1")
+	if err != nil {
+		t.Fatalf("CompleteCase: %v", err)
+	}
+	if completed.Status != sdkworkcase.StatusCompleted {
+		t.Fatalf("CompleteCase must complete the case, got %q", completed.Status)
+	}
+	// Idempotent: the same key replays rather than transitioning twice.
+	replay, err := svc.CompleteCase(ctx, "ent-1", "org:team-a", "actor-1", c.ID, completedStep.Revision, "idem-complete-close01", "ol_outcome_ref_1")
+	if err != nil {
+		t.Fatalf("CompleteCase replay: %v", err)
+	}
+	if replay.Revision != completed.Revision || replay.Status != sdkworkcase.StatusCompleted {
+		t.Fatalf("a duplicate CompleteCase must replay (rev %d completed), got rev %d status %q", completed.Revision, replay.Revision, replay.Status)
+	}
+
+	// Invalid step transition on a completed case is rejected.
 	_, err = svc.TransitionStep(ctx, workcase.TransitionStepCommand{
 		Command: workcase.Command{EnterpriseID: "ent-1", OrgScope: "org:team-a", ActorRef: "actor-1", CaseID: c.ID, ExpectedRevision: completed.Revision, IdempotencyKey: "idem-complete-redo001"},
 		StepID:  "step-1", Status: sdkworkcase.StepRunning,
@@ -341,7 +413,10 @@ func TestServiceTransitionStepDrivesCaseLifecycleToCompleted(t *testing.T) {
 	}
 }
 
-func TestServiceTransitionStepFailureTerminatesCase(t *testing.T) {
+// TestServiceStepFailureDoesNotTerminateAndTerminateCaseDoes proves the
+// companion Task 0H change: a failed step no longer auto-terminates the case;
+// termination is the governed Service.TerminateCase (requiring a reason).
+func TestServiceStepFailureDoesNotTerminateAndTerminateCaseDoes(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t)
 	c := createCase(t, svc, "ent-1", "org:team-a", "actor-1", "idem-create-0000000007")
@@ -361,13 +436,24 @@ func TestServiceTransitionStepFailureTerminatesCase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("transition to failed: %v", err)
 	}
-	if failed.Status != sdkworkcase.StatusTerminated {
-		t.Fatalf("case did not terminate on step failure: %+v", failed)
+	if failed.Status != sdkworkcase.StatusExecuting {
+		t.Fatalf("a step failure must NOT auto-terminate the case (termination is governed), got %q", failed.Status)
+	}
+
+	if _, err := svc.TerminateCase(ctx, "ent-1", "org:team-a", "actor-1", c.ID, failed.Revision, "idem-fail-term-00001", ""); !errors.Is(err, workcase.ErrInvalidCommand) {
+		t.Fatalf("TerminateCase without a reason must be rejected, got %v", err)
+	}
+	terminated, err := svc.TerminateCase(ctx, "ent-1", "org:team-a", "actor-1", c.ID, failed.Revision, "idem-fail-term-00002", "outcome unsatisfied; no replan available")
+	if err != nil {
+		t.Fatalf("TerminateCase: %v", err)
+	}
+	if terminated.Status != sdkworkcase.StatusTerminated {
+		t.Fatalf("TerminateCase must terminate the case, got %q", terminated.Status)
 	}
 
 	// Terminal state: further commands are rejected outright.
 	_, err = svc.ProposePlan(ctx, workcase.ProposePlanCommand{
-		Command: workcase.Command{EnterpriseID: "ent-1", OrgScope: "org:team-a", ActorRef: "actor-1", CaseID: c.ID, ExpectedRevision: failed.Revision, IdempotencyKey: "idem-fail-after-00001"},
+		Command: workcase.Command{EnterpriseID: "ent-1", OrgScope: "org:team-a", ActorRef: "actor-1", CaseID: c.ID, ExpectedRevision: terminated.Revision, IdempotencyKey: "idem-fail-after-00001"},
 		Plan:    validPlan(),
 	})
 	if !errors.Is(err, workcase.ErrInvalidTransition) {
