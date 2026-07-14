@@ -19,34 +19,36 @@ schema_version: 1
 image:
   name: agentatlas/age-postgres17
   tag: "1.6.0"
-  # OCI manifest digest of the image actually produced by the build command
-  # below. pending: true and digest: "" until a build in this environment
-  # actually completes and the digest is read back with
-  # `docker buildx imagetools inspect` / `docker inspect`; see notes.md for
-  # the exact outcome recorded for this revision.
-  digest: ""
-  pending: true
-  pending_reason: >-
-    Three build attempts in this authoring environment all failed for
-    network/tooling reasons, never for AGE/PG17 compatibility (see
-    age.compatibility_note below and evidence/2026.2-lts/ga-task-1a/notes.md
-    section 4 for the full record). Attempt 1 (docker buildx --sbom=true
-    --provenance=true): "Attestation is not supported for the docker
-    driver" - the default buildx builder in this Docker Desktop 29.1.3
-    install uses the docker driver, which cannot emit SBOM/provenance
-    attestations; a docker-container builder is required. Attempt 2 (plain
-    docker build, no attestations, to isolate the compile question):
-    apt-get install postgresql-server-dev-17 failed on
-    deb.debian.org/debian/dists/trixie/main (404 after a ~3KB/s partial
-    transfer). Attempt 3 (retry of attempt 2): all 92 packages (176MB)
-    downloaded successfully this time, but the build then failed during
-    dpkg configure with "failed to solve: Unavailable: error reading from
-    server: EOF" (a BuildKit-to-daemon session drop on this long-running
-    step, not an AGE/PG17 error). No attempt reached a compile error in
-    Apache AGE's own make/make install step. Every other AGE tuple
-    field below (release, source digest, license, compatibility note) is
-    real and independently verified regardless of this pending image.
-  registry: "local buildx (not pushed to any remote registry)"
+  # OCI image index digest of the image actually produced by the build
+  # command below. BUILT 2026-07-14: the docker buildx --sbom=true
+  # --provenance=true build succeeded with a host-networked docker-container
+  # builder pushing to a local registry:2. Read back with `docker buildx
+  # imagetools inspect` (top-level Digest, mediaType oci.image.index) and
+  # independently re-confirmed via `docker pull` + `.RepoDigests`. The image
+  # was RUN and Apache AGE confirmed loadable before this digest was recorded
+  # (extversion 1.6.0; LOAD 'age'; create_graph('outcomegraph'); a full
+  # Cypher CREATE/MATCH write-read-traverse round-trip; PostgreSQL 17.10) —
+  # see evidence/2026.2-lts/ga-task-1a/notes.md and the build/verify logs.
+  digest: "sha256:295b647399f118989ba24e60ac06429a197d15cf54e49121943b2bb66dd85270"
+  pending: false
+  built:
+    date: "2026-07-14"
+    builder: "docker buildx docker-container driver, --driver-opt network=host"
+    # Earlier the default `docker` buildx driver rejected --sbom/--provenance
+    # ("Attestation is not supported for the docker driver"); a
+    # docker-container builder with host networking (so it can reach the
+    # host-published local registry) resolved it. No AGE/PG17 compile error
+    # ever occurred; the AGE source sha256 `sha256sum -c` gate passed in-build.
+    amd64_image_manifest: "sha256:4a349ca3a6fc6ceb7f5b88c79b852b88d779e2725a413b5bb45e8796f0dd0845"
+    config: "sha256:cb9304fe9899d9ebd2aaffa740c25251a25772e8af3a26d26b6b6a83b377fdc2"
+    attestation_manifest: "sha256:c5cb78ad24f521ec35ec9ba5c2b2248822c64cffa47f1c8ce80f2f0ab780d681"
+  # Not bit-for-bit reproducible across days: the apt toolchain is unpinned
+  # (see reproducibility_notes), so the image config `created` timestamp — and
+  # thus this index digest — is fresh per build (an earlier successful-compile
+  # attempt produced a different provisional digest). The guarantee is "built
+  # from the pinned base image + checksum-verified AGE source", not "identical
+  # digest every build"; full bit-reproducibility remains a Task 22 item.
+  registry: "local buildx docker-container builder pushed to a local registry:2 (not a remote/public registry)"
 
 base_image:
   ref: "postgres:17"
@@ -107,19 +109,35 @@ build:
   # platform entry), so it is not required to be built/tested for this GA
   # revision; the base postgres:17 image digest above is a multi-arch index
   # that already covers arm64 for when that architecture is promoted.
+  # The successful 2026-07-14 build. --load cannot carry attestations, so the
+  # attested image is produced with `--push` to a local registry from a
+  # host-networked docker-container builder (the only combination that both
+  # emits --sbom/--provenance AND lets buildkit reach the host registry):
+  #   docker buildx create --name agebuilder --driver docker-container \
+  #     --driver-opt network=host --bootstrap --use
+  #   docker run -d --rm -p 5001:5000 --name agereg registry:2
+  #   docker buildx build --builder agebuilder --sbom=true --provenance=true \
+  #     --platform linux/amd64 -t localhost:5001/age-postgres17:1.6.0 --push \
+  #     -f Dockerfile .
   command: >-
-    docker buildx build --sbom=true --provenance=true --platform linux/amd64
-    -t agentatlas/age-postgres17:1.6.0 -f Dockerfile . --load
+    docker buildx build --builder agebuilder --sbom=true --provenance=true
+    --platform linux/amd64 -t localhost:5001/age-postgres17:1.6.0 --push
+    -f Dockerfile .
   sbom:
-    generated: false
-    digest: ""
-    pending: true
-    pending_reason: "Generated by scanning the built image (buildx --sbom=true); image.pending above must resolve first. Also requires a docker-container buildx builder in this environment (see image.pending_reason)."
+    generated: true
+    # SPDX (https://spdx.dev/Document) SBOM attestation layer (7MB SPDX doc),
+    # layers[0] of the attestation manifest image.built.attestation_manifest.
+    # Read via `docker buildx imagetools inspect <image> --raw` + the layer
+    # predicate-type; cross-checked with `--format "{{json .SBOM}}"`.
+    digest: "sha256:0a84bdd4f59fd9936816ffd1606b8831761d3bb435f22ff605cdf77c57339c33"
+    pending: false
   provenance:
-    generated: false
-    digest: ""
-    pending: true
-    pending_reason: "Generated by buildx --provenance=true at build time; image.pending above must resolve first. Also requires a docker-container buildx builder in this environment (see image.pending_reason)."
+    generated: true
+    # SLSA v1 (https://slsa.dev/provenance/v1) build-provenance attestation
+    # layer (62KB, buildType/builder/runDetails), layers[1] of the same
+    # attestation manifest. Cross-checked with `--format "{{json .Provenance}}"`.
+    digest: "sha256:de8122acdebc59d7938b84aafe740563548dc55c2497aff554a61f1bce3e17f8"
+    pending: false
 
 reproducibility_notes: >-
   Bit-for-bit reproducibility of the compiled AGE layer is NOT yet
@@ -135,7 +153,8 @@ reproducibility_notes: >-
   builds run on different days. This matches upstream: Apache AGE's own
   reference docker/Dockerfile also does not pin apt versions. Deliberately
   NOT fixed here (pinning would add a Debian snapshot repo the upstream
-  recipe doesn't use, and the image is pending anyway). For Task 22 (the
+  recipe doesn't use). The image is now BUILT and pinned by digest, but that
+  digest is this-build-specific, not bit-reproducible across days. For Task 22 (the
   GA acceptance/reproducibility gate), full bit-reproducibility would
   require: (a) pinning apt to a snapshot.debian.org timestamp (or an
   internal frozen mirror) so the toolchain is deterministic, (b) recording
@@ -152,5 +171,19 @@ verification:
   # any digest.
   base_image_digest_command: "docker pull postgres:17; docker inspect --format '{{index .RepoDigests 0}}' postgres:17"
   age_source_digest_command: "curl -fsSL -o apache-age-1.6.0-src.tar.gz <source_url> && sha256sum apache-age-1.6.0-src.tar.gz"
-  image_build_command: "docker buildx build --sbom=true --provenance=true --platform linux/amd64 -t agentatlas/age-postgres17:1.6.0 -f Dockerfile . --load"
-  image_digest_command: "docker buildx imagetools inspect agentatlas/age-postgres17:1.6.0 --raw | sha256sum"
+  image_build_command: "docker buildx build --builder agebuilder --sbom=true --provenance=true --platform linux/amd64 -t localhost:5001/age-postgres17:1.6.0 --push -f Dockerfile ."
+  image_digest_command: "docker buildx imagetools inspect localhost:5001/age-postgres17:1.6.0  # top-level 'Digest:' is image.digest"
+  attestation_digests_command: "docker buildx imagetools inspect localhost:5001/age-postgres17:1.6.0@<attestation_manifest> --raw  # layers[].digest + in-toto.io/predicate-type label SBOM (spdx.dev/Document) vs provenance (slsa.dev/provenance/v1)"
+  functional_verification:
+    # Ran the built image and confirmed Apache AGE is genuinely loadable
+    # before recording the digest (see evidence/2026.2-lts/ga-task-1a/).
+    command: "docker run -d --rm -e POSTGRES_PASSWORD=test -p 5455:5432 localhost:5001/age-postgres17:1.6.0; psql: CREATE EXTENSION age; LOAD 'age'; ag_catalog.create_graph('outcomegraph'); Cypher CREATE/MATCH"
+    age_extversion: "1.6.0"
+    result: "pg_extension.extversion=1.6.0; create_graph + a Cypher CREATE (alice)-[:KNOWS]->(bob) / MATCH traverse round-trip succeeded on PostgreSQL 17.10"
+    # Smoke-test gotcha for Task 0I / Task 22: Apache AGE 1.6.0's create_graph
+    # REJECTS graph names shorter than 3 characters ("ERROR: graph name is
+    # invalid"). Use a >=3-char name (e.g. 'outcomegraph') in any GA
+    # verification/smoke script — a name like 'g' spuriously fails on a
+    # correct build. The image's own initdb bootstrap only does CREATE
+    # EXTENSION / LOAD, so the container still boots cleanly.
+    graph_name_min_length: 3
