@@ -158,6 +158,67 @@ paths:
         '401': {description: Invalid service credentials or Case Ticket.}
         '409': {description: Idempotency-Key was already used with a different canonical audit payload.}
         '503': {description: Ticket or audit persistence unavailable.}
+  /v1/actions/request:
+    post:
+      operationId: requestAction
+      summary: Submit a governed ActionRequest and receive an ActionGrant (GA Task 0D).
+      description: >
+        AgentAtlas sends ONLY the governed ActionRequest — never a
+        connector-specific request body, connector endpoint or credential.
+        AgentNexus rechecks identity, org, approval, replay and capability
+        before granting; the AgentAtlas client additionally rechecks the
+        returned ActionGrant (sdk/go/nexus.VerifyActionGrant: exact
+        WorkCase/actor/org/capability/parameter-hash binding, one-use,
+        non-expiry, replay) before treating it as success.
+      security: [{agentAtlasServiceSecret: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/ActionRequest'}}}
+      responses:
+        '200': {description: Action granted., content: {application/json: {schema: {$ref: '#/components/schemas/ActionGrant'}}}}
+        '400': {description: Invalid ActionRequest (malformed parameter_hash, missing idempotency key, detached postcondition/verification-need binding, missing expiry).}
+        '401': {description: Invalid service credentials.}
+        '403': {description: Denied by AgentNexus identity, org, approval, replay or capability enforcement.}
+  /v1/actions/receipt:
+    post:
+      operationId: fetchActionReceipt
+      summary: Fetch the signed ActionReceipt for a previously requested Action (GA Task 0D).
+      description: >
+        ActionReceipt proves technical execution ONLY; it never asserts that
+        a WorkCase Goal or business Outcome was achieved. The AgentAtlas
+        client rechecks the signature and Action/parameter-hash binding
+        (sdk/go/nexus.VerifyActionReceipt) before treating a fetched receipt
+        as success.
+      security: [{agentAtlasServiceSecret: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/ActionReceiptFetchRequest'}}}
+      responses:
+        '200': {description: Signed ActionReceipt., content: {application/json: {schema: {$ref: '#/components/schemas/ActionReceipt'}}}}
+        '401': {description: Invalid service credentials.}
+        '404': {description: Unknown action_id, or no receipt issued yet.}
+  /v1/actions/observation:
+    post:
+      operationId: fetchObservationReceipt
+      summary: Fetch the signed ObservationReceipt confirming one VerificationNeed for a previously requested Action (GA Task 0D).
+      description: >
+        ObservationReceipt proves one bounded, source-authoritative
+        post-action observation; it never asserts that a WorkCase Goal or
+        business Outcome was achieved. NOT part of AgentNexus's frozen v1
+        contract candidate (agentnexus@73ed5a7e83d0804673e3191cf79cc22699f41b3f)
+        — implemented against the cross-product agreed spec pending
+        AgentNexus's own freeze; see evidence/2026.2-lts/ga-task-0d/notes.md.
+        The AgentAtlas client rejects a receipt detached from its Action or
+        PostconditionSpec (sdk/go/nexus.VerifyObservationReceipt) before
+        treating a fetched observation as success.
+      security: [{agentAtlasServiceSecret: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/ObservationReceiptFetchRequest'}}}
+      responses:
+        '200': {description: Signed ObservationReceipt., content: {application/json: {schema: {$ref: '#/components/schemas/ObservationReceipt'}}}}
+        '401': {description: Invalid service credentials.}
+        '404': {description: Unknown action_id/verification_need_id, or no observation issued yet.}
   /v1/org-events:
     get:
       operationId: subscribeOrgEvents
@@ -326,3 +387,150 @@ components:
               user_id: { type: string }
               display_name: { type: string }
         occurred_at: { type: string, format: date-time }
+    # --- GA Task 0D: governed Action Request/Grant/Receipt protocol -------
+    # Mirrors sdk/go/nexus/action.go exactly (same JSON tags). ActionStatus,
+    # ActionRequest (minus AgentAtlas's own WorkCase/Goal/Outcome/
+    # postcondition/verification-need additions), ActionGrant and
+    # ActionReceipt's execution-proof shape are field-compatible with
+    # AgentNexus's frozen v1 Action contract candidate, pinned at
+    # agentnexus@73ed5a7e83d0804673e3191cf79cc22699f41b3f. PostconditionSpec,
+    # VerificationNeed and ObservationReceipt are NOT part of that frozen
+    # contract; they are AgentAtlas's implementation of the cross-product
+    # AGREED SPEC pending AgentNexus's own freeze/re-pin (see
+    # evidence/2026.2-lts/ga-task-0d/notes.md).
+    Signature:
+      type: object
+      additionalProperties: false
+      required: [algorithm, key_id, value]
+      properties:
+        algorithm: {type: string, enum: [ed25519]}
+        key_id: {type: string}
+        value: {type: string, description: Base64-encoded detached signature bytes.}
+    Precondition:
+      type: object
+      additionalProperties: false
+      required: [kind, reference]
+      properties:
+        kind: {type: string}
+        reference: {type: string}
+        expected: {type: string}
+    VerificationNeed:
+      type: object
+      additionalProperties: false
+      required: [need_id, source, authority]
+      properties:
+        need_id: {type: string}
+        source: {type: string, description: Business-semantic source class — never a connector table, API path or instance selector.}
+        authority: {type: string}
+        max_age: {type: integer, minimum: 0, description: "Freshness bound in nanoseconds (Go time.Duration wire encoding). 0 or absent means no bound is declared."}
+    PostconditionSpec:
+      type: object
+      additionalProperties: false
+      required: [postcondition_id, description, verification_need_id]
+      properties:
+        postcondition_id: {type: string}
+        description: {type: string}
+        verification_need_id: {type: string, description: Must reference a need_id declared in the same ActionRequest's verification_needs.}
+    ActionRequest:
+      type: object
+      additionalProperties: false
+      required: [action_id, goal_ref, outcome_ref, work_case_id, work_plan_revision, actor, org_scope, capability, parameter_hash, risk, idempotency_key, expires_at, execution_receipt_schema]
+      properties:
+        action_id: {type: string}
+        goal_ref: {type: string, description: Opaque reference into AgentAtlas's Goal graph.}
+        outcome_ref: {type: string, description: Opaque reference into AgentAtlas's Outcome graph (Outcome type frozen by GA Task 0G, not this contract).}
+        work_case_id: {type: string, description: Mirrors sdk/go/workcase WorkCase.ID.}
+        work_plan_revision: {type: integer, minimum: 0, description: Mirrors sdk/go/workcase WorkPlan.Revision.}
+        actor: {type: string, description: AgentAtlas-declared identity; AgentNexus independently re-derives trusted identity from verified credentials.}
+        org_scope: {type: string}
+        capability: {type: string}
+        parameter_hash: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        preconditions: {type: array, items: {$ref: '#/components/schemas/Precondition'}}
+        postconditions: {type: array, items: {$ref: '#/components/schemas/PostconditionSpec'}}
+        verification_needs: {type: array, items: {$ref: '#/components/schemas/VerificationNeed'}}
+        risk: {type: string, enum: [low, medium, high]}
+        approval_references: {type: array, items: {type: string}, description: Opaque references; AgentNexus transmits but never authors approval plans.}
+        idempotency_key: {type: string, minLength: 16, maxLength: 128}
+        expires_at: {type: string, format: date-time}
+        execution_receipt_schema: {type: string}
+        compensation_ref: {type: string}
+      description: >
+        The ONLY thing that crosses the governed Action boundary toward
+        AgentNexus — never a connector-specific request body, connector
+        endpoint or credential.
+    ActionGrant:
+      type: object
+      additionalProperties: false
+      required: [grant_id, action_id, work_case_id, actor, org_scope, capability, parameter_hash, one_use, issued_at, expires_at]
+      properties:
+        grant_id: {type: string}
+        action_id: {type: string}
+        work_case_id: {type: string}
+        actor: {type: string}
+        org_scope: {type: string}
+        capability: {type: string}
+        parameter_hash: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        one_use: {type: boolean, enum: [true], description: A step grant is one-use by contract.}
+        issued_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+    ActionReceipt:
+      type: object
+      additionalProperties: false
+      required: [receipt_id, action_id, parameter_hash, connector_ref, target_ref, executor_identity, result_code, audit_ref, issued_at]
+      properties:
+        receipt_id: {type: string}
+        action_id: {type: string}
+        parameter_hash: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        connector_ref: {type: string, description: Opaque AgentNexus handle — never a connector endpoint or credential.}
+        target_ref: {type: string, description: Opaque AgentNexus handle — never a raw enterprise identifier.}
+        before_hash: {type: string}
+        after_hash: {type: string}
+        executor_identity: {type: string}
+        result_code: {type: string}
+        external_receipt: {type: object, description: Opaque hash-bound payload from the underlying system of record — content only, never a connector-specific body shape AgentAtlas interprets.}
+        audit_ref: {type: string}
+        issued_at: {type: string, format: date-time}
+        signature: {$ref: '#/components/schemas/Signature'}
+      description: >
+        Proves technical execution ONLY. Never asserts that a WorkCase Goal
+        or business Outcome was achieved (sdk/go/nexus
+        ActionReceipt.ConfirmsOutcome always fails).
+    ObservationReceipt:
+      type: object
+      additionalProperties: false
+      required: [observation_id, action_id, parameter_hash, postcondition_id, verification_need_id, source, authority, observed_at, normalized_observation_hash, evidence_ref, audit_ref]
+      properties:
+        observation_id: {type: string}
+        action_id: {type: string}
+        parameter_hash: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        postcondition_id: {type: string}
+        verification_need_id: {type: string}
+        source: {type: string}
+        source_version: {type: string}
+        authority: {type: string}
+        observed_at: {type: string, format: date-time}
+        freshness_window: {type: integer, minimum: 0, description: "Nanoseconds (Go time.Duration wire encoding). 0 or absent means unbounded."}
+        normalized_observation_hash: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        evidence_ref: {type: string, description: Opaque reference to the AgentNexus EvidenceHandle this observation is bound to.}
+        audit_ref: {type: string}
+        signature: {$ref: '#/components/schemas/Signature'}
+      description: >
+        Proves ONE bounded, source-authoritative post-action observation.
+        Never asserts that a WorkCase Goal or business Outcome was achieved.
+        NOT part of AgentNexus's frozen v1 contract candidate
+        (agentnexus@73ed5a7e83d0804673e3191cf79cc22699f41b3f) — implemented
+        against the cross-product agreed spec; see
+        evidence/2026.2-lts/ga-task-0d/notes.md.
+    ActionReceiptFetchRequest:
+      type: object
+      additionalProperties: false
+      required: [action_id]
+      properties:
+        action_id: {type: string}
+    ObservationReceiptFetchRequest:
+      type: object
+      additionalProperties: false
+      required: [action_id, verification_need_id]
+      properties:
+        action_id: {type: string}
+        verification_need_id: {type: string}

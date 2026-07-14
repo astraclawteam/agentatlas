@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -33,6 +34,17 @@ type HTTPClient struct {
 	serviceClientID     string
 	serviceSecret       string
 	approvalFactsSecret string
+
+	// actionSigningKeyID/actionTrustedKey are the trusted AgentNexus
+	// ed25519 signing identity configured via ConfigureActionSigningKey.
+	// grantTracker enforces one-use ActionGrant replay protection across
+	// RequestAction calls. All three are nil-safe zero values until
+	// configured: an unconfigured client's Action-surface methods reject
+	// every receipt/grant (see verifySignature/VerifyActionGrant), never
+	// silently accept one.
+	actionSigningKeyID string
+	actionTrustedKey   ed25519.PublicKey
+	grantTracker       *nexus.GrantUsageTracker
 }
 
 // ConfigureApprovalFactsSecret loads the dedicated HMAC key shared only with
@@ -50,6 +62,7 @@ var _ nexus.Client = (*HTTPClient)(nil)
 var _ nexus.ApprovalClient = (*HTTPClient)(nil)
 var _ nexus.BrowserBFFClient = (*HTTPClient)(nil)
 var _ nexus.GovernanceClient = (*HTTPClient)(nil)
+var _ nexus.ActionClient = (*HTTPClient)(nil)
 
 func (c *HTTPClient) String() string {
 	if c == nil {
@@ -89,7 +102,35 @@ func New(baseURL string, timeout time.Duration, serviceClientID, serviceSecretFi
 		},
 		serviceClientID: serviceClientID,
 		serviceSecret:   serviceSecret,
+		// grantTracker is always initialized (not only once
+		// ConfigureActionSigningKey is called): ActionGrant replay
+		// protection is orthogonal to signature-key configuration — a
+		// grant carries no signature of its own — and must never silently
+		// no-op just because a caller forgot the separate action-signing
+		// configuration step.
+		grantTracker: nexus.NewGrantUsageTracker(),
 	}, nil
+}
+
+// ConfigureActionSigningKey registers the trusted AgentNexus ed25519 public
+// key used to verify ActionReceipt/ObservationReceipt signatures on the
+// governed Action Request/Grant/Receipt protocol (GA Task 0D). It follows
+// the same post-construction configuration pattern as
+// ConfigureApprovalFactsSecret rather than an added New parameter, so
+// New's signature — including the *transportsecurity.Manager parameter
+// Task 13A added — is unchanged. Until this is called, RequestAction still
+// enforces expiry/replay/actor-org/capability/parameter-hash binding on
+// ActionGrant (which carries no signature), but FetchActionReceipt and
+// FetchObservationReceipt reject every receipt: an unconfigured (nil/empty)
+// trusted key never has the length verifySignature requires, so the client
+// fails closed rather than silently skipping the recheck.
+func (c *HTTPClient) ConfigureActionSigningKey(keyID string, publicKey ed25519.PublicKey) error {
+	if strings.TrimSpace(keyID) == "" || len(publicKey) != ed25519.PublicKeySize {
+		return fmt.Errorf("invalid AgentNexus action signing key configuration")
+	}
+	c.actionSigningKeyID = keyID
+	c.actionTrustedKey = publicKey
+	return nil
 }
 
 func (c *HTTPClient) post(ctx context.Context, path string, in, out any) error {
@@ -112,7 +153,8 @@ func (c *HTTPClient) doPost(ctx context.Context, path string, in, out any) error
 		return fmt.Errorf("nexus %s: %w", path, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if path == "/v1/audit/evidence" || path == "/v1/authorization/decisions" || path == "/v1/tickets/verify" {
+	if path == "/v1/audit/evidence" || path == "/v1/authorization/decisions" || path == "/v1/tickets/verify" ||
+		path == "/v1/actions/request" || path == "/v1/actions/receipt" || path == "/v1/actions/observation" {
 		req.SetBasicAuth(c.serviceClientID, c.serviceSecret)
 		if auditReq, ok := in.(nexus.AppendAuditEvidenceRequest); ok && auditReq.IdempotencyKey != "" {
 			req.Header.Set("Idempotency-Key", auditReq.IdempotencyKey)
@@ -175,6 +217,96 @@ func loadServiceSecretFile(path string) (string, error) {
 		return "", fmt.Errorf("secret does not meet minimum entropy diversity")
 	}
 	return secret, nil
+}
+
+// actionReceiptFetchRequest and observationReceiptFetchRequest are the
+// minimal wire-identifying bodies for the two fetch endpoints: AgentNexus
+// already owns the full receipt once issued, so the client need only name
+// which one it wants. These are transport plumbing, not part of the nexus
+// SDK's Action protocol surface (which stops at ActionRequest/ActionGrant/
+// ActionReceipt/ObservationReceipt) — kept private to this file.
+type actionReceiptFetchRequest struct {
+	ActionID string `json:"action_id"`
+}
+
+type observationReceiptFetchRequest struct {
+	ActionID           string `json:"action_id"`
+	VerificationNeedID string `json:"verification_need_id"`
+}
+
+// RequestAction implements nexus.ActionClient. It rejects a structurally
+// invalid ActionRequest before any network call (see
+// nexus.ActionRequest.Validate — missing idempotency key, malformed
+// parameter hash, detached postcondition/verification-need binding, and so
+// on), sends ONLY the governed ActionRequest (never a connector-specific
+// body), and rechecks the returned ActionGrant with nexus.VerifyActionGrant
+// — exact WorkCase/actor/org/capability/parameter-hash binding, one-use
+// semantics, non-expiry and (via the client's internal GrantUsageTracker)
+// replay protection — before returning it to the caller. An expired,
+// replayed or actor/org-mismatched grant from the wire is never returned as
+// success.
+func (c *HTTPClient) RequestAction(ctx context.Context, req nexus.ActionRequest) (nexus.ActionGrant, error) {
+	var grant nexus.ActionGrant
+	if err := req.Validate(); err != nil {
+		return grant, fmt.Errorf("nexus action request: %w", err)
+	}
+	if err := c.post(ctx, "/v1/actions/request", req, &grant); err != nil {
+		return grant, err
+	}
+	if err := nexus.VerifyActionGrant(req, grant, c.grantTracker, time.Now()); err != nil {
+		return nexus.ActionGrant{}, err
+	}
+	return grant, nil
+}
+
+// FetchActionReceipt implements nexus.ActionClient. It retrieves the signed
+// ActionReceipt AgentNexus issued for req.ActionID and rechecks it with
+// nexus.VerifyActionReceipt (exact Action/parameter-hash binding plus a
+// signature that verifies against the trusted key configured by
+// ConfigureActionSigningKey) before returning it. An unsigned, wrong-key,
+// detached or parameter-hash-mismatched receipt from the wire is never
+// returned as success.
+func (c *HTTPClient) FetchActionReceipt(ctx context.Context, req nexus.ActionRequest) (nexus.ActionReceipt, error) {
+	var receipt nexus.ActionReceipt
+	// Validate the request up front (mirrors RequestAction) so a garbage
+	// req.ActionID/parameter_hash is rejected before any network call and
+	// before it is used as the binding baseline for the receipt recheck.
+	if err := req.Validate(); err != nil {
+		return receipt, fmt.Errorf("nexus action request: %w", err)
+	}
+	if err := c.post(ctx, "/v1/actions/receipt", actionReceiptFetchRequest{ActionID: req.ActionID}, &receipt); err != nil {
+		return receipt, err
+	}
+	if err := nexus.VerifyActionReceipt(req, receipt, c.actionSigningKeyID, c.actionTrustedKey); err != nil {
+		return nexus.ActionReceipt{}, err
+	}
+	return receipt, nil
+}
+
+// FetchObservationReceipt implements nexus.ActionClient. It retrieves the
+// signed ObservationReceipt confirming verificationNeedID for req.ActionID
+// and rechecks it with nexus.VerifyObservationReceipt (exact Action/
+// parameter-hash binding, that the referenced PostconditionSpec and
+// VerificationNeed were actually declared on req, plus a signature that
+// verifies against the trusted key) before returning it. An
+// ObservationReceipt detached from its Action or PostconditionSpec, or one
+// that is unsigned or wrong-key-signed, is never returned as success.
+func (c *HTTPClient) FetchObservationReceipt(ctx context.Context, req nexus.ActionRequest, verificationNeedID string) (nexus.ObservationReceipt, error) {
+	var obs nexus.ObservationReceipt
+	// Validate the request up front (mirrors RequestAction) so a garbage
+	// req is rejected before any network call and before it is used as the
+	// binding baseline for the observation recheck.
+	if err := req.Validate(); err != nil {
+		return obs, fmt.Errorf("nexus action request: %w", err)
+	}
+	fetchReq := observationReceiptFetchRequest{ActionID: req.ActionID, VerificationNeedID: verificationNeedID}
+	if err := c.post(ctx, "/v1/actions/observation", fetchReq, &obs); err != nil {
+		return obs, err
+	}
+	if err := nexus.VerifyObservationReceipt(req, obs, c.actionSigningKeyID, c.actionTrustedKey); err != nil {
+		return nexus.ObservationReceipt{}, err
+	}
+	return obs, nil
 }
 
 func (c *HTTPClient) VerifyTicket(ctx context.Context, req nexus.VerifyTicketRequest) (nexus.VerifyTicketResponse, error) {
