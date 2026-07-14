@@ -27,3 +27,9 @@ var WorkPlanSchemaJSON []byte
 
 //go:embed workcase/action.schema.json
 var ActionSpecSchemaJSON []byte
+
+//go:embed outcome/outcome.schema.json
+var OutcomeSchemaJSON []byte
+
+//go:embed outcome/lineage.schema.json
+var LineageSchemaJSON []byte

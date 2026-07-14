@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentatlas.dev/schemas/outcome/lineage.schema.json",
+  "title": "AgentAtlas Outcome Lineage v1",
+  "description": "Frozen shapes of the append-only Outcome-lineage facts and authoritative projection outbox. Node and edge types are closed versioned enums; stable ids derive only from (tenant, type, business id, revision) and never carry a graph-provider (AGE/Cypher) internal id. Lineage edges never cross tenants. Projection events are immutable rebuild inputs: a source revocation appends a tombstone, never edits an event in place.",
+  "$ref": "#/$defs/LineageNode",
+  "$defs": {
+    "NodeType": {
+      "type": "string",
+      "enum": ["outcome", "goal", "work_case", "observation", "action_receipt", "blocker", "contributor", "evidence"]
+    },
+    "EdgeType": {
+      "type": "string",
+      "enum": ["concerns", "supersedes", "corrects", "contributes_to", "evidences", "observes", "blocked_by", "derived_from"]
+    },
+    "ProjectionEventKind": {
+      "type": "string",
+      "description": "Closed set of authoritative projection-outbox event kinds. There is no in-place-edit kind: a revocation appends a tombstone.",
+      "enum": ["outcome_revision", "lineage_fact", "tombstone", "reevaluation"]
+    },
+    "LineageEndpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tenant", "node_type", "business_id", "revision"],
+      "description": "A versioned reference to a lineage node. Always versioned: revision >= 1.",
+      "properties": {
+        "tenant": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "node_type": { "$ref": "#/$defs/NodeType" },
+        "business_id": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "revision": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "LineageNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "tenant", "node_type", "business_id", "revision"],
+      "description": "One immutable, versioned lineage node. id derives only from (tenant, type, business id, revision); no graph-provider id.",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "tenant": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "node_type": { "$ref": "#/$defs/NodeType" },
+        "business_id": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "summary": { "type": "string", "maxLength": 512 }
+      }
+    },
+    "LineageEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "tenant", "edge_type", "from", "to"],
+      "description": "One immutable, versioned lineage edge between two versioned endpoints in the SAME tenant.",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "tenant": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "edge_type": { "$ref": "#/$defs/EdgeType" },
+        "from": { "$ref": "#/$defs/LineageEndpoint" },
+        "to": { "$ref": "#/$defs/LineageEndpoint" }
+      }
+    },
+    "ProjectionEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tenant", "sequence", "kind", "subject_type", "subject_id", "subject_revision", "payload_hash", "recorded_at"],
+      "description": "One immutable authoritative rebuild input. Sequence is per-tenant monotonic (store-assigned on the wire).",
+      "properties": {
+        "tenant": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "kind": { "$ref": "#/$defs/ProjectionEventKind" },
+        "subject_type": { "$ref": "#/$defs/NodeType" },
+        "subject_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "subject_revision": { "type": "integer", "minimum": 1 },
+        "payload_hash": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "supersedes_sequence": { "type": "integer", "minimum": 1 },
+        "recorded_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ProjectionWatermark": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tenant", "last_sequence", "updated_at"],
+      "description": "Per-tenant projection progress: the last projection-event sequence a downstream reader durably consumed. Only ever advances.",
+      "properties": {
+        "tenant": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "last_sequence": { "type": "integer", "minimum": 0 },
+        "updated_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

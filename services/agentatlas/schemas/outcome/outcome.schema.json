@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentatlas.dev/schemas/outcome/outcome.schema.json",
+  "title": "AgentAtlas Outcome v1",
+  "description": "Frozen shape of one immutable, versioned governed result record. Binds a tenant, a stable outcome_key, a monotonic revision, the exact governed-record versions it was decided against and only opaque handles/hashes and permitted summaries -- never a connector endpoint, credential, raw enterprise content or a full receipt body. A satisfied Outcome requires an authoritative signed observation; an ActionReceipt (technical execution proof) can never justify satisfaction.",
+  "$ref": "#/$defs/Outcome",
+  "$defs": {
+    "OutcomeStatus": {
+      "type": "string",
+      "description": "Closed set of business conclusions. Action success (a nexus ActionStatus such as succeeded) is deliberately absent.",
+      "enum": ["unverified", "satisfied", "unsatisfied", "disputed", "blocked", "unknown"]
+    },
+    "GoalRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tenant", "goal_key", "goal_version"],
+      "description": "Versioned reference to a Goal. goal_version >= 1 is mandatory: an Outcome binds an exact Goal version.",
+      "properties": {
+        "tenant": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "goal_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "goal_version": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "EvidenceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["handle", "content_hash", "authority"],
+      "description": "Opaque, content-addressed pointer to evidence. Never raw content.",
+      "properties": {
+        "handle": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "content_hash": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "authority": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "ObservationRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["handle", "observation_hash", "authority", "signature_key_id", "observed_at"],
+      "description": "Opaque, content-addressed pointer to a SIGNED nexus.ObservationReceipt. A handle+hash+authority+signing-key+observed-at, never the receipt body. 0G stores refs; it never re-verifies signatures.",
+      "properties": {
+        "handle": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "observation_hash": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "authority": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "signature_key_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "observed_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ReceiptRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["handle", "receipt_hash", "signature_key_id"],
+      "description": "Opaque, content-addressed pointer to a signed nexus.ActionReceipt (technical execution proof). Bound for audit lineage only; never justifies satisfaction.",
+      "properties": {
+        "handle": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "receipt_hash": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "signature_key_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "BlockerRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["handle", "kind", "authority"],
+      "description": "Opaque reference to an external blocker. May carry a bounded permitted summary, never raw content.",
+      "properties": {
+        "handle": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "kind": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authority": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "summary": { "type": "string", "maxLength": 512 }
+      }
+    },
+    "ContributionRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contributor_id", "kind"],
+      "description": "Credits one contributor with one kind of contribution. The same contributor+kind must not appear twice on one Outcome.",
+      "properties": {
+        "contributor_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "weight": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "ConfidenceComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "score"],
+      "description": "One named, scored confidence component (authority, freshness, coverage, consistency, attribution). Task 0H computes and interprets these.",
+      "properties": {
+        "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "score": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "OutcomeRevisionRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome_key", "revision", "outcome_id", "reason"],
+      "description": "Points from a correction revision to the exact prior revision it supersedes.",
+      "properties": {
+        "outcome_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "outcome_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "OutcomeClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["goal", "status", "rule_version"],
+      "description": "The asserted conclusion: a versioned Goal reached a status under a named rule version, justified by opaque refs. A satisfied claim requires at least one observation.",
+      "properties": {
+        "goal": { "$ref": "#/$defs/GoalRef" },
+        "status": { "$ref": "#/$defs/OutcomeStatus" },
+        "rule_version": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "evidence": { "type": "array", "default": [], "maxItems": 1000, "items": { "$ref": "#/$defs/EvidenceRef" } },
+        "observations": { "type": "array", "default": [], "maxItems": 1000, "items": { "$ref": "#/$defs/ObservationRef" } },
+        "blockers": { "type": "array", "default": [], "maxItems": 1000, "items": { "$ref": "#/$defs/BlockerRef" } },
+        "confidence": { "type": "array", "default": [], "maxItems": 64, "items": { "$ref": "#/$defs/ConfidenceComponent" } }
+      },
+      "if": {
+        "required": ["status"],
+        "properties": { "status": { "const": "satisfied" } }
+      },
+      "then": {
+        "required": ["observations"],
+        "properties": { "observations": { "minItems": 1 } }
+      }
+    },
+    "Outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "tenant", "outcome_key", "revision", "claim",
+        "work_case_id", "work_case_revision", "work_plan_revision",
+        "operating_map_version", "org_version", "decided_at"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "tenant": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "outcome_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "claim": { "$ref": "#/$defs/OutcomeClaim" },
+        "work_case_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "work_case_revision": { "type": "integer", "minimum": 1 },
+        "work_plan_revision": { "type": "integer", "minimum": 1 },
+        "operating_map_version": { "type": "integer", "minimum": 1 },
+        "org_version": { "type": "integer", "minimum": 0 },
+        "action_receipts": { "type": "array", "default": [], "maxItems": 1000, "items": { "$ref": "#/$defs/ReceiptRef" } },
+        "contributions": { "type": "array", "default": [], "maxItems": 1000, "items": { "$ref": "#/$defs/ContributionRef" } },
+        "decided_at": { "type": "string", "format": "date-time" },
+        "supersedes": { "$ref": "#/$defs/OutcomeRevisionRef" }
+      }
+    }
+  }
+}
