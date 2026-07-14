@@ -12,6 +12,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/transportsecurity"
 )
 
 // age.go is the Apache AGE-backed OutcomeGraphStore — the only GA provider. It
@@ -39,7 +41,14 @@ type AGEStore struct {
 // NewAGEStore opens a pool against the separately-configured graph DSN, loads
 // the AGE extension per connection, ensures the graph and watermark table exist,
 // and returns the store. The DSN is independent from the authoritative Postgres.
-func NewAGEStore(ctx context.Context, dsn, graphName string) (*AGEStore, error) {
+//
+// tlsMgr configures the Apache AGE graph PostgreSQL link's transport security
+// (the eleventh GA Task 13A matrix link), layered on top of whatever sslmode
+// the dsn itself carries — exactly as internal/storage.NewPool does for the
+// authoritative-Postgres link. nil, or a Manager built with Mode == ModeOff,
+// keeps today's dsn-only behavior (backward-compatible), so existing
+// deployments that pass no manager are unaffected.
+func NewAGEStore(ctx context.Context, dsn, graphName string, tlsMgr *transportsecurity.Manager) (*AGEStore, error) {
 	if graphName == "" {
 		graphName = DefaultGraphName
 	}
@@ -52,6 +61,19 @@ func NewAGEStore(ctx context.Context, dsn, graphName string) (*AGEStore, error) 
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("outcomegraph: age pool config: %w", err)
+	}
+	// Apply the AGE-graph link's mTLS profile to the dial (identity pinning,
+	// revocation, and hot-reload all ride on the manager's *tls.Config), the
+	// same way storage.NewPool secures the authoritative-Postgres dial. nil or
+	// ModeOff yields a nil config and leaves the dsn's own sslmode in force.
+	if tlsMgr != nil {
+		tlsCfg, err := tlsMgr.ClientTLSConfigOrNil()
+		if err != nil {
+			return nil, fmt.Errorf("outcomegraph: age tls: %w", err)
+		}
+		if tlsCfg != nil {
+			cfg.ConnConfig.TLSConfig = tlsCfg
+		}
 	}
 	// AGE requires LOAD 'age' and the ag_catalog search_path on every connection.
 	cfg.AfterConnect = func(ctx context.Context, c *pgx.Conn) error {

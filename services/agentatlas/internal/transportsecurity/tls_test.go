@@ -396,8 +396,17 @@ func TestTLSProfile(t *testing.T) {
 // ---------------------------------------------------------------------------
 // TestTLSLinkMatrix: the named-link matrix. AgentAtlas and gateway are
 // server-role (AgentAtlas/parser-gateway accept inbound connections);
-// AgentNexus, llmrouter, PostgreSQL, OpenSearch, NATS, object storage, and
-// parser are client-role (AgentAtlas dials out). Every link gets a real
+// AgentNexus, llmrouter, PostgreSQL, OpenSearch, NATS, object storage,
+// parser, and Apache AGE graph PostgreSQL are client-role (AgentAtlas — or,
+// for the AGE-graph link, the atlas-outcome-projector — dials out). Apache
+// AGE graph PostgreSQL is GA Task 13A's eleventh matrix link: the projector's
+// dial-out to the separately-configured graph read model, proven here at the
+// Manager level exactly as the authoritative-Postgres link is, with its
+// end-to-end NewAGEStore wiring proven in
+// internal/outcomegraph/age_tls_test.go. (The "Outcome projector" — the
+// eleventh name in the enterprise black-box matrix — is that projector's own
+// dial-out identity, established by the client certificates it presents on
+// these links, not an AgentAtlas link modeled here.) Every link gets a real
 // started server/client TLS composition proving the core negative cases;
 // AgentAtlas (server-role) and AgentNexus (client-role) additionally run
 // the full negative-case suite as the two in-depth exemplars.
@@ -426,6 +435,7 @@ var namedLinks = []linkCase{
 	{"NATS", roleClient, false},
 	{"object storage", roleClient, false},
 	{"parser", roleClient, false},
+	{"Apache AGE graph PostgreSQL", roleClient, false},
 }
 
 func TestTLSLinkMatrix(t *testing.T) {

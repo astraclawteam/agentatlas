@@ -112,14 +112,20 @@ type LinkTLS struct {
 }
 
 // TLS is the transport-security configuration surface for every named
-// AgentAtlas link (the same nine links GA Task 13A's per-link matrix
-// names): AgentAtlas and Gateway are this service's own SERVER identities
-// (atlas-api/atlas-agent and parser-gateway accepting inbound connections);
-// AgentNexus, LLMRouter, Postgres, OpenSearch, NATS, ObjectStorage, and
-// Parser are the CLIENT links AgentAtlas dials out on. Every link defaults
-// to TLSModeOff (backward-compatible plaintext); flipping to TLSModeMTLS
-// per link, or globally via ATLAS_TLS_MODE, is the documented secure
-// production posture.
+// AgentAtlas link (the eleven links GA Task 13A's per-link matrix names
+// after the Provable Outcome Graph revision): AgentAtlas and Gateway are
+// this service's own SERVER identities (atlas-api/atlas-agent and
+// parser-gateway accepting inbound connections); AgentNexus, LLMRouter,
+// Postgres, OpenSearch, NATS, ObjectStorage, Parser, and AgeGraph are the
+// CLIENT links AgentAtlas (and the atlas-outcome-projector) dial out on. The
+// eleventh matrix name — the "Outcome projector" — is the projector's own
+// dial-out identity (the client certificate it presents on its links), not a
+// separate endpoint config here. AgeGraph is the Task 0I "Apache AGE graph
+// PostgreSQL" endpoint: a SEPARATE PostgreSQL from Postgres (the
+// authoritative WorkCase database), secured independently, and reached via
+// ATLAS_OUTCOME_GRAPH_DSN. Every link defaults to TLSModeOff
+// (backward-compatible plaintext); flipping to TLSModeMTLS per link, or
+// globally via ATLAS_TLS_MODE, is the documented secure production posture.
 type TLS struct {
 	AgentAtlas    LinkTLS `yaml:"agentatlas"`
 	Gateway       LinkTLS `yaml:"gateway"`
@@ -130,6 +136,11 @@ type TLS struct {
 	NATS          LinkTLS `yaml:"nats"`
 	ObjectStorage LinkTLS `yaml:"object_storage"`
 	Parser        LinkTLS `yaml:"parser"`
+	// AgeGraph secures the Apache AGE graph PostgreSQL link (the
+	// atlas-outcome-projector's dial-out to the separately-configured graph
+	// read model). Distinct from Postgres so the authoritative and graph
+	// databases carry independent identities and trust.
+	AgeGraph LinkTLS `yaml:"age_graph"`
 }
 
 type Config struct {
@@ -171,6 +182,7 @@ func Default() *Config {
 			NATS:          LinkTLS{Mode: TLSModeOff},
 			ObjectStorage: LinkTLS{Mode: TLSModeOff},
 			Parser:        LinkTLS{Mode: TLSModeOff},
+			AgeGraph:      LinkTLS{Mode: TLSModeOff},
 		},
 	}
 }
@@ -270,6 +282,7 @@ func (c *Config) tlsLinkEnvs() []tlsLinkEnv {
 		{&c.TLS.NATS, "nats", "ATLAS_TLS_NATS_"},
 		{&c.TLS.ObjectStorage, "object_storage", "ATLAS_TLS_OBJECT_STORAGE_"},
 		{&c.TLS.Parser, "parser", "ATLAS_TLS_PARSER_"},
+		{&c.TLS.AgeGraph, "age_graph", "ATLAS_TLS_AGE_GRAPH_"},
 	}
 }
 

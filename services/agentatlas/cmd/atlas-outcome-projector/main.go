@@ -63,9 +63,17 @@ func run() error {
 		return fmt.Errorf("ATLAS_OUTCOME_GRAPH_DSN is required (the Apache AGE graph endpoint)")
 	}
 
-	pgTLS, err := transportsecurity.NewManager("PostgreSQL", transportsecurity.FromLinkTLS(cfg.TLS.Postgres))
+	// "authoritative PostgreSQL" (not just "PostgreSQL"): the projector dials
+	// TWO distinct PostgreSQL endpoints — the authoritative WorkCase database
+	// (the outbox source) and the Apache AGE graph database — so each link
+	// carries its own GA Task 13A identity and the two are never conflated.
+	pgTLS, err := transportsecurity.NewManager("authoritative PostgreSQL", transportsecurity.FromLinkTLS(cfg.TLS.Postgres))
 	if err != nil {
-		return fmt.Errorf("postgres tls: %w", err)
+		return fmt.Errorf("authoritative postgres tls: %w", err)
+	}
+	ageTLS, err := transportsecurity.NewManager("Apache AGE graph PostgreSQL", transportsecurity.FromLinkTLS(cfg.TLS.AgeGraph))
+	if err != nil {
+		return fmt.Errorf("apache age graph tls: %w", err)
 	}
 	natsTLS, err := transportsecurity.NewManager("NATS", transportsecurity.FromLinkTLS(cfg.TLS.NATS))
 	if err != nil {
@@ -87,7 +95,7 @@ func run() error {
 	if graphName == "" {
 		graphName = outcomegraph.DefaultGraphName
 	}
-	ageStore, err := outcomegraph.NewAGEStore(ctx, graphDSN, graphName)
+	ageStore, err := outcomegraph.NewAGEStore(ctx, graphDSN, graphName, ageTLS)
 	if err != nil {
 		return fmt.Errorf("apache age: %w", err)
 	}

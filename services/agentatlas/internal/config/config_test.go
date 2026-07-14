@@ -82,6 +82,7 @@ var tlsLinkPrefixes = []string{
 	"ATLAS_TLS_AGENTATLAS_", "ATLAS_TLS_GATEWAY_", "ATLAS_TLS_AGENTNEXUS_",
 	"ATLAS_TLS_LLMROUTER_", "ATLAS_TLS_POSTGRES_", "ATLAS_TLS_OPENSEARCH_",
 	"ATLAS_TLS_NATS_", "ATLAS_TLS_OBJECT_STORAGE_", "ATLAS_TLS_PARSER_",
+	"ATLAS_TLS_AGE_GRAPH_",
 }
 
 func setEveryLinkIdentity(t *testing.T) {
@@ -183,6 +184,10 @@ func TestEveryDeployLinkPinsAnIdentity(t *testing.T) {
 		"ATLAS_TLS_NATS_":           {"nats.internal", "spiffe://agentatlas.internal/ns/prod/sa/nats"},
 		"ATLAS_TLS_OBJECT_STORAGE_": {"object-storage.internal", "spiffe://agentatlas.internal/ns/prod/sa/object-storage"},
 		"ATLAS_TLS_PARSER_":         {"parser.internal", "spiffe://agentatlas.internal/ns/prod/sa/parser"},
+		// The Apache AGE graph PostgreSQL link (GA Task 13A's eleventh link).
+		// Deployment manifests wire it in Task 14/15; this identity is the
+		// code-level shape the fail-closed rule requires once the link is on.
+		"ATLAS_TLS_AGE_GRAPH_": {"apache-age-graph.internal", "spiffe://agentatlas.internal/ns/prod/sa/apache-age-graph"},
 	}
 	for prefix, id := range identities {
 		t.Setenv(prefix+"SERVER_NAME", id[0])
@@ -260,6 +265,73 @@ func TestTLSConfigYAMLRoundTrip(t *testing.T) {
 	if cfg.Postgres.DSN == "" {
 		t.Fatal("unrelated existing config (Postgres DSN) should still carry its default")
 	}
+}
+
+// TestTLSAgeGraphLinkParsesLikeOtherLinks covers the GA Task 13A eleventh
+// link (the Apache AGE graph PostgreSQL endpoint the atlas-outcome-projector
+// dials): it defaults to off, honors the same per-link env/file/identity
+// overrides as every other link, round-trips through YAML, and stays isolated
+// from the authoritative Postgres link.
+func TestTLSAgeGraphLinkParsesLikeOtherLinks(t *testing.T) {
+	t.Run("defaults_off", func(t *testing.T) {
+		cfg := Default()
+		if cfg.TLS.AgeGraph.Mode != TLSModeOff || cfg.TLS.AgeGraph.CertFile != "" {
+			t.Fatalf("AgeGraph default = %+v, want off with no files", cfg.TLS.AgeGraph)
+		}
+	})
+
+	t.Run("per_link_env_overrides", func(t *testing.T) {
+		t.Setenv("ATLAS_TLS_AGE_GRAPH_MODE", "mtls")
+		t.Setenv("ATLAS_TLS_AGE_GRAPH_CERT_FILE", "/run/secrets/agentatlas_tls/age_graph/tls.crt")
+		t.Setenv("ATLAS_TLS_AGE_GRAPH_KEY_FILE", "/run/secrets/agentatlas_tls/age_graph/tls.key")
+		t.Setenv("ATLAS_TLS_AGE_GRAPH_TRUST_BUNDLE_FILE", "/run/secrets/agentatlas_tls/age_graph/ca.crt")
+		t.Setenv("ATLAS_TLS_AGE_GRAPH_REVOCATION_FILE", "/run/secrets/agentatlas_tls/age_graph/revoked.txt")
+		t.Setenv("ATLAS_TLS_AGE_GRAPH_SERVER_NAME", "apache-age-graph.internal")
+		t.Setenv("ATLAS_TLS_AGE_GRAPH_SPIFFE_ID", "spiffe://agentatlas.internal/ns/prod/sa/apache-age-graph")
+
+		cfg, err := Load("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := LinkTLS{
+			Mode:            TLSModeMTLS,
+			CertFile:        "/run/secrets/agentatlas_tls/age_graph/tls.crt",
+			KeyFile:         "/run/secrets/agentatlas_tls/age_graph/tls.key",
+			TrustBundleFile: "/run/secrets/agentatlas_tls/age_graph/ca.crt",
+			RevocationFile:  "/run/secrets/agentatlas_tls/age_graph/revoked.txt",
+			ServerName:      "apache-age-graph.internal",
+			SPIFFEID:        "spiffe://agentatlas.internal/ns/prod/sa/apache-age-graph",
+		}
+		if cfg.TLS.AgeGraph != want {
+			t.Fatalf("AgeGraph TLS config = %+v, want %+v", cfg.TLS.AgeGraph, want)
+		}
+		// The AGE-graph link is independent of the authoritative Postgres link.
+		if cfg.TLS.Postgres.Mode != TLSModeOff || cfg.TLS.Postgres.CertFile != "" {
+			t.Fatalf("authoritative Postgres link leaked AGE-graph overrides: %+v", cfg.TLS.Postgres)
+		}
+	})
+
+	t.Run("yaml_round_trip", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "atlas.yaml")
+		yamlBody := "tls:\n" +
+			"  age_graph:\n" +
+			"    mode: mtls\n" +
+			"    cert_file: /etc/agentatlas/tls/age_graph/tls.crt\n" +
+			"    key_file: /etc/agentatlas/tls/age_graph/tls.key\n" +
+			"    trust_bundle_file: /etc/agentatlas/tls/age_graph/ca.crt\n" +
+			"    spiffe_id: spiffe://agentatlas.internal/ns/prod/sa/apache-age-graph\n"
+		if err := os.WriteFile(path, []byte(yamlBody), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.TLS.AgeGraph.Mode != TLSModeMTLS || cfg.TLS.AgeGraph.CertFile != "/etc/agentatlas/tls/age_graph/tls.crt" {
+			t.Fatalf("AgeGraph not loaded from YAML: %+v", cfg.TLS.AgeGraph)
+		}
+	})
 }
 
 func readDeploymentFile(t *testing.T, path string) string {

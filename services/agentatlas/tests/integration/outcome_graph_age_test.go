@@ -109,7 +109,10 @@ func newOGHarness(t *testing.T) *ogHarness {
 
 func (h *ogHarness) age(t *testing.T) *outcomegraph.AGEStore {
 	t.Helper()
-	s, err := outcomegraph.NewAGEStore(h.ctx, h.ageDSN, h.graphName)
+	// nil TLS manager: this integration harness dials a local AGE container
+	// over the DSN's own sslmode (the GA Task 13A AGE-graph mTLS profile is
+	// unit-proven in internal/outcomegraph/age_tls_test.go).
+	s, err := outcomegraph.NewAGEStore(h.ctx, h.ageDSN, h.graphName, nil)
 	if err != nil {
 		t.Fatalf("age store: %v", err)
 	}
@@ -506,7 +509,7 @@ func TestOutcomeGraphAGE_KillAGEAuthoritativeContinuesThenRecovers(t *testing.T)
 	h := newOGHarness(t)
 
 	// AGE is "down": a store pointed at an unreachable endpoint cannot even open.
-	if _, err := outcomegraph.NewAGEStore(h.ctx, "postgres://postgres:age@127.0.0.1:5999/postgres?sslmode=disable", h.graphName); err == nil {
+	if _, err := outcomegraph.NewAGEStore(h.ctx, "postgres://postgres:age@127.0.0.1:5999/postgres?sslmode=disable", h.graphName, nil); err == nil {
 		t.Fatal("expected NewAGEStore to fail against an unreachable AGE endpoint")
 	}
 
