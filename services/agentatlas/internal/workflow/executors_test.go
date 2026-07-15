@@ -40,7 +40,21 @@ func (fakeRetriever) CreatePlan(context.Context, retrieval.Query) (string, error
 }
 
 func (fakeRetriever) Execute(context.Context, string, retrieval.Query) ([]retrieval.Result, error) {
-	return []retrieval.Result{{DocID: "d1", Snippet: "MES 摘要", EvidencePointerID: "ev_1", Score: 1.5}}, nil
+	return []retrieval.Result{{DocID: "d1", Snippet: "MES 摘要", Authoritative: true, EvidencePointerID: "ev_1", Score: 1.5}}, nil
+}
+
+// mixedAuthorityRetriever returns one governed (authoritative) result and one
+// ungrounded legacy dream_summary (non-authoritative) result.
+type mixedAuthorityRetriever struct{}
+
+func (mixedAuthorityRetriever) CreatePlan(context.Context, retrieval.Query) (string, error) {
+	return "rp_mix", nil
+}
+func (mixedAuthorityRetriever) Execute(context.Context, string, retrieval.Query) ([]retrieval.Result, error) {
+	return []retrieval.Result{
+		{DocID: "m1", SourceType: "method_outline", Authoritative: true, Snippet: "治理方法：两步校验", EvidencePointerID: "ev_m", Score: 2},
+		{DocID: "d1", SourceType: "dream_summary", Authoritative: false, Snippet: "梦境叙述摘要：本周整体顺利", EvidencePointerID: "ev_dream", Score: 1},
+	}, nil
 }
 
 func execNode(t *testing.T, r Registry, node sdkworkflow.Node, run *RunContext) map[string]any {
@@ -200,6 +214,66 @@ func TestRetrievalAndAnswerExecutorsChainOutputs(t *testing.T) {
 	answer := execNode(t, r, sdkworkflow.Node{ID: "a", Type: sdkworkflow.NodeAnswerGenerate}, run)
 	if !strings.Contains(answer["answer"].(string), "基于 1 条材料") {
 		t.Fatalf("answer must consume upstream snippets: %v", answer)
+	}
+}
+
+// TestRetrievalSearchExcludesNonAuthoritativeFromGeneratedAnswer proves the
+// Task 18A Part A guard on the WORKFLOW answer path: a published
+// retrieval.search → answer.generate workflow grounds the generated answer ONLY
+// on governed (authoritative) documents; the legacy ungrounded dream_summary is
+// excluded from the snippets/evidence pointers that reach answer.generate, while
+// remaining searchable (demoted, labelled) in the raw hits.
+func TestRetrievalSearchExcludesNonAuthoritativeFromGeneratedAnswer(t *testing.T) {
+	var captured []string
+	r := NewRegistryWithServices(Executors{
+		Retrieval: mixedAuthorityRetriever{},
+		Answer: func(_ context.Context, q string, snips []string) (string, string, error) {
+			captured = append([]string(nil), snips...)
+			return fmt.Sprintf("基于 %d 条材料回答:%s", len(snips), q), "test/model", nil
+		},
+	})
+	run := &RunContext{EnterpriseID: "ent_1", Input: map[string]any{"query": "本周工作", "question": "本周工作"}, Outputs: map[string]map[string]any{}}
+	search := execNode(t, r, sdkworkflow.Node{ID: "s", Type: sdkworkflow.NodeRetrievalSearch}, run)
+
+	// The governed grounding (snippets) carries ONLY the authoritative document.
+	snips, _ := search["snippets"].([]string)
+	if len(snips) != 1 || snips[0] != "治理方法：两步校验" {
+		t.Fatalf("snippets must exclude the non-authoritative dream_summary, got %v", snips)
+	}
+	// The evidence pointers used to ground the answer likewise exclude it.
+	ptrs, _ := search["evidence_pointer_ids"].([]string)
+	for _, p := range ptrs {
+		if p == "ev_dream" {
+			t.Fatalf("the dream_summary evidence pointer must not reach the governed grounding: %v", ptrs)
+		}
+	}
+	// The dream_summary REMAINS searchable in hits (demoted, labelled), not deleted.
+	hits, _ := search["hits"].([]any)
+	foundDemoted := false
+	for _, h := range hits {
+		m := h.(map[string]any)
+		if m["doc_id"] == "d1" {
+			foundDemoted = true
+			if m["authoritative"] != false {
+				t.Fatalf("the dream_summary hit must be labelled non-authoritative")
+			}
+		}
+	}
+	if !foundDemoted || len(hits) != 2 {
+		t.Fatalf("all results must remain searchable in hits (demoted, not deleted), got %d", len(hits))
+	}
+
+	// Chaining into answer.generate, the generated answer is grounded ONLY on the
+	// single authoritative snippet — the dream_summary never reaches it.
+	run.Outputs["s"] = search
+	answer := execNode(t, r, sdkworkflow.Node{ID: "a", Type: sdkworkflow.NodeAnswerGenerate}, run)
+	if !strings.Contains(answer["answer"].(string), "基于 1 条材料") {
+		t.Fatalf("answer must be grounded on exactly the 1 authoritative snippet: %v", answer)
+	}
+	for _, s := range captured {
+		if strings.Contains(s, "梦境叙述摘要") {
+			t.Fatalf("a dream_summary snippet reached the answer generator: %v", captured)
+		}
 	}
 }
 

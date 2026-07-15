@@ -126,8 +126,14 @@ func (d *answerDeps) handleAnswer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "retrieval_failed", err.Error())
 		return
 	}
+	// Task 18A Part A: only governed, evidence-grounded documents may ground an
+	// answer/citation. Non-authoritative digests (e.g. the legacy Dream
+	// dream_summary) are excluded from every governed-knowledge citation path —
+	// they can never be presented or published as governed knowledge.
+	governed, nonAuthoritative := retrieval.GovernedKnowledge(results)
 	steps = append(steps, trace.Step{Kind: "retrieve", Detail: map[string]any{
 		"retrieval_plan_id": planID, "hits": len(results),
+		"authoritative": len(governed), "non_authoritative_excluded": len(nonAuthoritative),
 	}})
 
 	// authorized evidence reads for the top hits that carry pointers
@@ -137,7 +143,7 @@ func (d *answerDeps) handleAnswer(w http.ResponseWriter, r *http.Request) {
 		excerpts    []string
 		denied      int
 	)
-	for _, res := range results {
+	for _, res := range governed {
 		if res.EvidencePointerID == "" || len(evidenceIDs) >= 3 {
 			continue
 		}
@@ -176,7 +182,7 @@ func (d *answerDeps) handleAnswer(w http.ResponseWriter, r *http.Request) {
 	var prompt strings.Builder
 	fmt.Fprintf(&prompt, "问题：%s\n\n检索摘要：\n", req.Question)
 	spaceSet := map[string]bool{}
-	for i, res := range results {
+	for i, res := range governed {
 		fmt.Fprintf(&prompt, "%d. %s\n", i+1, res.Snippet)
 		if res.SpaceID != "" {
 			spaceSet[res.SpaceID] = true

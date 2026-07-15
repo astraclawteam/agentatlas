@@ -13,6 +13,7 @@ import (
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/governance"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/retrieval"
 )
 
 var errBrowserKnowledgeBound = errors.New("browser knowledge scope exceeds safe bound")
@@ -96,6 +97,13 @@ func (h *browserKnowledgeHandler) list(w http.ResponseWriter, r *http.Request) {
 	items := make([]browserKnowledgeItem, 0, len(rows))
 	for _, row := range rows {
 		if strings.TrimSpace(row.SummaryText) == "" || !row.NodeTime.Valid {
+			continue
+		}
+		// Task 18A Part A: this list is a governed-knowledge surface. A
+		// non-authoritative digest (e.g. the legacy dream_summary) must never be
+		// presented here as governed knowledge, even if a future query change
+		// were to surface one.
+		if !retrieval.SourceTypeAuthoritative(row.SourceType) {
 			continue
 		}
 		items = append(items, browserKnowledgeItem{

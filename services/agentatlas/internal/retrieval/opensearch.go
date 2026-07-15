@@ -43,11 +43,17 @@ type SearchResult struct {
 // IndexDocument is the searchable payload: summaries and sanitized snippets
 // only — never raw originals.
 type IndexDocument struct {
-	EnterpriseID      string     `json:"enterprise_id"`
-	SpaceID           string     `json:"space_id,omitempty"`
-	OrgScope          string     `json:"org_scope,omitempty"`
-	OrgVersion        int64      `json:"org_version,omitempty"`
-	SourceType        string     `json:"source_type"`
+	EnterpriseID string `json:"enterprise_id"`
+	SpaceID      string `json:"space_id,omitempty"`
+	OrgScope     string `json:"org_scope,omitempty"`
+	OrgVersion   int64  `json:"org_version,omitempty"`
+	SourceType   string `json:"source_type"`
+	// Authoritative marks a governed, evidence-grounded document (defense in
+	// depth stamped at index time). Omitted (=> absent => non-authoritative)
+	// for ungrounded digests such as the legacy dream_summary. The retrieval
+	// layer additionally classifies by source_type so existing documents that
+	// predate this field are still handled correctly (see authority.go).
+	Authoritative     bool       `json:"authoritative,omitempty"`
 	SummaryText       string     `json:"summary_text"`
 	SanitizedSnippet  string     `json:"sanitized_snippet,omitempty"`
 	Tags              []string   `json:"tags,omitempty"`

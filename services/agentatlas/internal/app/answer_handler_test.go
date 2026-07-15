@@ -50,8 +50,8 @@ func min(a, b int) int {
 // staticSearch returns one canned hit.
 type staticSearch struct{}
 
-func (staticSearch) EnsureIndex(context.Context, string) error           { return nil }
-func (staticSearch) Index(context.Context, string, string, any) error   { return nil }
+func (staticSearch) EnsureIndex(context.Context, string) error        { return nil }
+func (staticSearch) Index(context.Context, string, string, any) error { return nil }
 func (staticSearch) Search(context.Context, string, any) (retrieval.SearchResult, error) {
 	src, _ := json.Marshal(retrieval.IndexDocument{
 		EnterpriseID: "ent_1", SpaceID: "spc_emp", SourceType: "work_brief",
@@ -186,5 +186,79 @@ func TestAnswerEnterpriseMismatchForbidden(t *testing.T) {
 	resp, _ := postAnswer(t, srv.URL, "tick_b", `{"enterprise_id":"ent_A","question":"跨租户提问"}`)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("cross-tenant must be 403, got %d", resp.StatusCode)
+	}
+}
+
+// capturingLLM records the exact prompt the answer path builds, so a test can
+// prove which retrieved documents grounded the answer.
+type capturingLLM struct{ prompt string }
+
+func (c *capturingLLM) Name() string { return "test/capture" }
+func (c *capturingLLM) GenerateContent(_ context.Context, req *adkmodel.LLMRequest, _ bool) iter.Seq2[*adkmodel.LLMResponse, error] {
+	for _, ct := range req.Contents {
+		for _, p := range ct.Parts {
+			c.prompt += p.Text
+		}
+	}
+	return func(yield func(*adkmodel.LLMResponse, error) bool) {
+		yield(&adkmodel.LLMResponse{
+			Content:      &genai.Content{Role: "model", Parts: []*genai.Part{genai.NewPartFromText("已依据授权证据作答")}},
+			ModelVersion: "test/capture",
+			TurnComplete: true,
+		}, nil)
+	}
+}
+
+// mixedAuthoritySearch returns one governed method_outline hit and one ungrounded
+// legacy dream_summary hit in the same index.
+type mixedAuthoritySearch struct{}
+
+func (mixedAuthoritySearch) EnsureIndex(context.Context, string) error { return nil }
+func (mixedAuthoritySearch) Index(context.Context, string, string, any) error {
+	return nil
+}
+func (mixedAuthoritySearch) Search(context.Context, string, any) (retrieval.SearchResult, error) {
+	method, _ := json.Marshal(retrieval.IndexDocument{
+		EnterpriseID: "ent_1", SpaceID: "spc_kb", SourceType: "method_outline",
+		SummaryText: "治理方法：两步校验流程", SanitizedSnippet: "治理方法：两步校验流程",
+	})
+	dream, _ := json.Marshal(retrieval.IndexDocument{
+		EnterpriseID: "ent_1", SpaceID: "spc_kb", SourceType: "dream_summary",
+		SummaryText: "梦境叙述摘要：本周整体顺利无异常", SanitizedSnippet: "梦境叙述摘要：本周整体顺利无异常",
+	})
+	return retrieval.SearchResult{Total: 2, Hits: []retrieval.Hit{
+		{ID: "m1", Score: 2, Source: method},
+		{ID: "d1", Score: 1, Source: dream},
+	}}, nil
+}
+
+// TestAnswerExcludesNonAuthoritativeDreamSummary proves the live answer/citation
+// path (Task 18A Part A) grounds the answer ONLY on governed, authoritative
+// documents and never presents the legacy ungrounded dream_summary digest as
+// governed knowledge.
+func TestAnswerExcludesNonAuthoritativeDreamSummary(t *testing.T) {
+	mock := nexusclient.NewMock()
+	mock.Tickets["tick_ok"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "u"}
+	capLLM := &capturingLLM{}
+	deps := &answerDeps{
+		nexus:     mock,
+		retrieval: retrieval.NewService(&memPlanStore{}, mixedAuthoritySearch{}, nil, nil),
+		traces:    trace.NewService(&memTraceStore{}),
+		llm:       capLLM,
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/answer", deps.handleAnswer)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	resp, out := postAnswer(t, srv.URL, "tick_ok", `{"enterprise_id":"ent_1","question":"本周工作如何"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %v", resp.StatusCode, out)
+	}
+	if !strings.Contains(capLLM.prompt, "治理方法：两步校验流程") {
+		t.Fatalf("the governed method_outline snippet must ground the answer:\n%s", capLLM.prompt)
+	}
+	if strings.Contains(capLLM.prompt, "梦境叙述摘要") {
+		t.Fatalf("a non-authoritative dream_summary must NEVER be cited as governed knowledge:\n%s", capLLM.prompt)
 	}
 }

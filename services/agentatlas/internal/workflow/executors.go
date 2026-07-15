@@ -277,10 +277,21 @@ func NewRegistryWithServices(e Executors) Registry {
 			snippets := make([]string, 0, len(results))
 			pointers := make([]string, 0, len(results))
 			for _, res := range results {
+				// Every result stays searchable in `hits` (demoted, labelled with
+				// its authority) for any non-governed use. But only governed,
+				// authoritative results may ground a generated answer (Task 18A
+				// Part A): a non-authoritative digest (e.g. the legacy
+				// dream_summary) is excluded from the snippets/evidence pointers a
+				// downstream answer.generate node cites, consistent with the
+				// answer_handler.go GovernedKnowledge partition.
 				hits = append(hits, map[string]any{
 					"doc_id": res.DocID, "snippet": res.Snippet,
 					"evidence_pointer_id": res.EvidencePointerID, "score": res.Score,
+					"authoritative": res.Authoritative,
 				})
+				if !res.Authoritative {
+					continue
+				}
 				if res.Snippet != "" {
 					snippets = append(snippets, res.Snippet)
 				}

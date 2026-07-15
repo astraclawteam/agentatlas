@@ -141,7 +141,8 @@ func (ix *Indexer) collect(ctx context.Context, job db.IndexJob) ([]indexable, e
 				id: fmt.Sprintf("%s_%s", docRow.ID, s.Level),
 				doc: IndexDocument{
 					EnterpriseID: docRow.EnterpriseID, SourceType: "document_summary",
-					SummaryText: s.SummaryText, SanitizedSnippet: s.SummaryText,
+					Authoritative: SourceTypeAuthoritative("document_summary"),
+					SummaryText:   s.SummaryText, SanitizedSnippet: s.SummaryText,
 					EvidencePointerID: pointerID,
 				},
 			})
@@ -159,7 +160,10 @@ func (ix *Indexer) collect(ctx context.Context, job db.IndexJob) ([]indexable, e
 			doc: IndexDocument{
 				EnterpriseID: node.EnterpriseID, SpaceID: node.SpaceID,
 				OrgScope: node.OrgScope, SourceType: node.SourceType,
-				SummaryText: node.SummaryText, SanitizedSnippet: node.SummaryText,
+				// A dream-derived timeline node carries source_type
+				// "dream_summary" and is demoted here too.
+				Authoritative: SourceTypeAuthoritative(node.SourceType),
+				SummaryText:   node.SummaryText, SanitizedSnippet: node.SummaryText,
 				Tags: node.Tags, NodeTime: timePtr(t),
 				EvidencePointerID: textOrEmpty(node.EvidencePointerID),
 			},
@@ -177,8 +181,12 @@ func (ix *Indexer) collect(ctx context.Context, job db.IndexJob) ([]indexable, e
 			id: sum.ID,
 			doc: IndexDocument{
 				EnterpriseID: sum.EnterpriseID, SpaceID: sum.SpaceID,
-				SourceType: "dream_summary", SummaryText: sum.SummaryText,
-				SanitizedSnippet: sum.SummaryText,
+				// dream_summary is the legacy ungrounded LLM digest: it stays
+				// searchable but is NON-authoritative and can never become
+				// governed knowledge (see authority.go).
+				SourceType: "dream_summary", Authoritative: SourceTypeAuthoritative("dream_summary"),
+				SummaryText:       sum.SummaryText,
+				SanitizedSnippet:  sum.SummaryText,
 				EvidencePointerID: textOrEmpty(sum.EvidencePointerID),
 				NodeTime:          timePtr(sum.CreatedAt.Time),
 			},
@@ -194,7 +202,8 @@ func (ix *Indexer) collect(ctx context.Context, job db.IndexJob) ([]indexable, e
 			id: outline.ID,
 			doc: IndexDocument{
 				EnterpriseID: outline.EnterpriseID, OrgScope: outline.OrgScope,
-				SourceType: "method_outline", SummaryText: summary,
+				SourceType: "method_outline", Authoritative: SourceTypeAuthoritative("method_outline"),
+				SummaryText:      summary,
 				SanitizedSnippet: summary,
 				NodeTime:         timePtr(outline.CreatedAt.Time),
 			},

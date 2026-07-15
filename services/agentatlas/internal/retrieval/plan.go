@@ -39,9 +39,14 @@ func NewService(store PlanStore, client SearchClient, embedder Embedder, reranke
 }
 
 type Result struct {
-	DocID             string  `json:"doc_id"`
-	SpaceID           string  `json:"space_id"`
-	SourceType        string  `json:"source_type"`
+	DocID      string `json:"doc_id"`
+	SpaceID    string `json:"space_id"`
+	SourceType string `json:"source_type"`
+	// Authoritative reports whether this result may be cited or published as
+	// governed enterprise knowledge. Ungrounded digests (e.g. the legacy
+	// dream_summary) are non-authoritative: searchable, but never governed
+	// knowledge. Classified from source_type (see SourceTypeAuthoritative).
+	Authoritative     bool    `json:"authoritative"`
 	Snippet           string  `json:"snippet"`
 	EvidencePointerID string  `json:"evidence_pointer_id"`
 	Score             float64 `json:"score"`
@@ -164,7 +169,8 @@ func (s *Service) Execute(ctx context.Context, planID string, q Query) ([]Result
 		}
 		results = append(results, Result{
 			DocID: h.ID, SpaceID: doc.SpaceID, SourceType: doc.SourceType,
-			Snippet: truncateRunes(snippet, 1000), EvidencePointerID: doc.EvidencePointerID,
+			Authoritative: SourceTypeAuthoritative(doc.SourceType),
+			Snippet:       truncateRunes(snippet, 1000), EvidencePointerID: doc.EvidencePointerID,
 			Score: h.Score,
 		})
 	}
