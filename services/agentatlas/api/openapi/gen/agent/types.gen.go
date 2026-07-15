@@ -62,6 +62,132 @@ func (e AgentRunStatus) Valid() bool {
 	}
 }
 
+// Defines values for AssessmentAttributionRuleMode.
+const (
+	BlockerExcluded      AssessmentAttributionRuleMode = "blocker_excluded"
+	ContributionWeighted AssessmentAttributionRuleMode = "contribution_weighted"
+	SharedOnce           AssessmentAttributionRuleMode = "shared_once"
+)
+
+// Valid indicates whether the value is a known member of the AssessmentAttributionRuleMode enum.
+func (e AssessmentAttributionRuleMode) Valid() bool {
+	switch e {
+	case BlockerExcluded:
+		return true
+	case ContributionWeighted:
+		return true
+	case SharedOnce:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AssessmentConfidenceRuleLevel.
+const (
+	AssessmentConfidenceRuleLevelHigh   AssessmentConfidenceRuleLevel = "high"
+	AssessmentConfidenceRuleLevelLow    AssessmentConfidenceRuleLevel = "low"
+	AssessmentConfidenceRuleLevelMedium AssessmentConfidenceRuleLevel = "medium"
+)
+
+// Valid indicates whether the value is a known member of the AssessmentConfidenceRuleLevel enum.
+func (e AssessmentConfidenceRuleLevel) Valid() bool {
+	switch e {
+	case AssessmentConfidenceRuleLevelHigh:
+		return true
+	case AssessmentConfidenceRuleLevelLow:
+		return true
+	case AssessmentConfidenceRuleLevelMedium:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AssessmentEvidenceRuleTier.
+const (
+	AcceptedDeliverable AssessmentEvidenceRuleTier = "accepted_deliverable"
+	HumanReport         AssessmentEvidenceRuleTier = "human_report"
+	VerifiedOutcome     AssessmentEvidenceRuleTier = "verified_outcome"
+)
+
+// Valid indicates whether the value is a known member of the AssessmentEvidenceRuleTier enum.
+func (e AssessmentEvidenceRuleTier) Valid() bool {
+	switch e {
+	case AcceptedDeliverable:
+		return true
+	case HumanReport:
+		return true
+	case VerifiedOutcome:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AssessmentPolicyViewStatus.
+const (
+	AssessmentPolicyViewStatusDraft     AssessmentPolicyViewStatus = "draft"
+	AssessmentPolicyViewStatusPublished AssessmentPolicyViewStatus = "published"
+	AssessmentPolicyViewStatusRetired   AssessmentPolicyViewStatus = "retired"
+	AssessmentPolicyViewStatusReviewing AssessmentPolicyViewStatus = "reviewing"
+	AssessmentPolicyViewStatusShadow    AssessmentPolicyViewStatus = "shadow"
+)
+
+// Valid indicates whether the value is a known member of the AssessmentPolicyViewStatus enum.
+func (e AssessmentPolicyViewStatus) Valid() bool {
+	switch e {
+	case AssessmentPolicyViewStatusDraft:
+		return true
+	case AssessmentPolicyViewStatusPublished:
+		return true
+	case AssessmentPolicyViewStatusRetired:
+		return true
+	case AssessmentPolicyViewStatusReviewing:
+		return true
+	case AssessmentPolicyViewStatusShadow:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AssessmentShadowCycleFailReasons.
+const (
+	CycleIncompleteOrPartialPeriod AssessmentShadowCycleFailReasons = "cycle_incomplete_or_partial_period"
+	EvidenceCoverageBelow90pct     AssessmentShadowCycleFailReasons = "evidence_coverage_below_90pct"
+	FormalDimensionLowConfidence   AssessmentShadowCycleFailReasons = "formal_dimension_low_confidence"
+	ManagerNotConfirmed            AssessmentShadowCycleFailReasons = "manager_not_confirmed"
+	PolicyOwnerNotConfirmed        AssessmentShadowCycleFailReasons = "policy_owner_not_confirmed"
+	RuleChangedAfterCycleBegan     AssessmentShadowCycleFailReasons = "rule_changed_after_cycle_began"
+	UnresolvedCalibration          AssessmentShadowCycleFailReasons = "unresolved_calibration"
+	UnresolvedCorrection           AssessmentShadowCycleFailReasons = "unresolved_correction"
+)
+
+// Valid indicates whether the value is a known member of the AssessmentShadowCycleFailReasons enum.
+func (e AssessmentShadowCycleFailReasons) Valid() bool {
+	switch e {
+	case CycleIncompleteOrPartialPeriod:
+		return true
+	case EvidenceCoverageBelow90pct:
+		return true
+	case FormalDimensionLowConfidence:
+		return true
+	case ManagerNotConfirmed:
+		return true
+	case PolicyOwnerNotConfirmed:
+		return true
+	case RuleChangedAfterCycleBegan:
+		return true
+	case UnresolvedCalibration:
+		return true
+	case UnresolvedCorrection:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for BrowserDreamAdvancedPolicyEvidenceRetention.
 const (
 	PointerOnly               BrowserDreamAdvancedPolicyEvidenceRetention = "pointer_only"
@@ -1648,16 +1774,16 @@ func (e CreateDreamPolicy201JSONResponseBodyVersion) Valid() bool {
 
 // Defines values for CheckDreamPolicyRisk200JSONResponseBodyRiskLevel.
 const (
-	CheckDreamPolicyRisk200JSONResponseBodyRiskLevelHigh CheckDreamPolicyRisk200JSONResponseBodyRiskLevel = "high"
-	CheckDreamPolicyRisk200JSONResponseBodyRiskLevelLow  CheckDreamPolicyRisk200JSONResponseBodyRiskLevel = "low"
+	High CheckDreamPolicyRisk200JSONResponseBodyRiskLevel = "high"
+	Low  CheckDreamPolicyRisk200JSONResponseBodyRiskLevel = "low"
 )
 
 // Valid indicates whether the value is a known member of the CheckDreamPolicyRisk200JSONResponseBodyRiskLevel enum.
 func (e CheckDreamPolicyRisk200JSONResponseBodyRiskLevel) Valid() bool {
 	switch e {
-	case CheckDreamPolicyRisk200JSONResponseBodyRiskLevelHigh:
+	case High:
 		return true
-	case CheckDreamPolicyRisk200JSONResponseBodyRiskLevelLow:
+	case Low:
 		return true
 	default:
 		return false
@@ -1726,13 +1852,13 @@ func (e AnnotateDreamRunJSONBodyAction) Valid() bool {
 
 // Defines values for StartWorkflowRun202JSONResponseBodyStatus.
 const (
-	Pending StartWorkflowRun202JSONResponseBodyStatus = "pending"
+	StartWorkflowRun202JSONResponseBodyStatusPending StartWorkflowRun202JSONResponseBodyStatus = "pending"
 )
 
 // Valid indicates whether the value is a known member of the StartWorkflowRun202JSONResponseBodyStatus enum.
 func (e StartWorkflowRun202JSONResponseBodyStatus) Valid() bool {
 	switch e {
-	case Pending:
+	case StartWorkflowRun202JSONResponseBodyStatusPending:
 		return true
 	default:
 		return false
@@ -1762,6 +1888,134 @@ type AgentRunPendingConfirmationRiskLevel string
 
 // AgentRunStatus defines model for AgentRun.Status.
 type AgentRunStatus string
+
+// AssessmentAttributionRule defines model for AssessmentAttributionRule.
+type AssessmentAttributionRule struct {
+	Dimension string                        `json:"dimension"`
+	Mode      AssessmentAttributionRuleMode `json:"mode"`
+	Rationale string                        `json:"rationale"`
+}
+
+// AssessmentAttributionRuleMode defines model for AssessmentAttributionRule.Mode.
+type AssessmentAttributionRuleMode string
+
+// AssessmentConfidenceRule defines model for AssessmentConfidenceRule.
+type AssessmentConfidenceRule struct {
+	Dimension string                        `json:"dimension"`
+	Level     AssessmentConfidenceRuleLevel `json:"level"`
+	Rationale string                        `json:"rationale"`
+}
+
+// AssessmentConfidenceRuleLevel defines model for AssessmentConfidenceRule.Level.
+type AssessmentConfidenceRuleLevel string
+
+// AssessmentDimension defines model for AssessmentDimension.
+type AssessmentDimension struct {
+	Evidence *[]AssessmentEvidenceLink `json:"evidence,omitempty"`
+
+	// Formal Formal-scoring intent; the effect stays non-formal until the policy is published.
+	Formal bool `json:"formal"`
+
+	// Hidden Always false on a valid policy; a hidden dimension is rejected.
+	Hidden *bool `json:"hidden,omitempty"`
+
+	// Key A built-in candidate key or a governed
+	Key string `json:"key"`
+
+	// Rationale WHY the dimension was proposed.
+	Rationale string `json:"rationale"`
+	Title     string `json:"title"`
+}
+
+// AssessmentEvidenceLink defines model for AssessmentEvidenceLink.
+type AssessmentEvidenceLink struct {
+	// Handle Opaque graph/outcome descriptor; never raw content.
+	Handle  string  `json:"handle"`
+	Kind    string  `json:"kind"`
+	Summary *string `json:"summary,omitempty"`
+}
+
+// AssessmentEvidenceRule defines model for AssessmentEvidenceRule.
+type AssessmentEvidenceRule struct {
+	Dimension string                     `json:"dimension"`
+	Rationale string                     `json:"rationale"`
+	Tier      AssessmentEvidenceRuleTier `json:"tier"`
+}
+
+// AssessmentEvidenceRuleTier defines model for AssessmentEvidenceRule.Tier.
+type AssessmentEvidenceRuleTier string
+
+// AssessmentPolicyDraftInput defines model for AssessmentPolicyDraftInput.
+type AssessmentPolicyDraftInput struct {
+	ExtraDimensions *[]AssessmentDimension  `json:"extra_dimensions,omitempty"`
+	OrgUnitId       *string                 `json:"org_unit_id,omitempty"`
+	PolicyKey       string                  `json:"policy_key"`
+	Sources         AssessmentSourceBinding `json:"sources"`
+}
+
+// AssessmentPolicyView defines model for AssessmentPolicyView.
+type AssessmentPolicyView struct {
+	AttributionRules []AssessmentAttributionRule `json:"attribution_rules"`
+	ConfidenceRules  []AssessmentConfidenceRule  `json:"confidence_rules"`
+	Dimensions       []AssessmentDimension       `json:"dimensions"`
+	EvidenceRules    []AssessmentEvidenceRule    `json:"evidence_rules"`
+
+	// FormalScoringActive True only when the policy is published; draft/shadow/reviewing policies are non-formal suggestions.
+	FormalScoringActive bool                       `json:"formal_scoring_active"`
+	GovernanceChangeId  *string                    `json:"governance_change_id,omitempty"`
+	Id                  string                     `json:"id"`
+	OrgUnitId           *string                    `json:"org_unit_id,omitempty"`
+	PolicyKey           string                     `json:"policy_key"`
+	Revision            int                        `json:"revision"`
+	ShadowCycles        *[]AssessmentShadowCycle   `json:"shadow_cycles,omitempty"`
+	Sources             AssessmentSourceBinding    `json:"sources"`
+	Status              AssessmentPolicyViewStatus `json:"status"`
+	SupersedesId        *string                    `json:"supersedes_id,omitempty"`
+	Watermark           int64                      `json:"watermark"`
+}
+
+// AssessmentPolicyViewStatus defines model for AssessmentPolicyView.Status.
+type AssessmentPolicyViewStatus string
+
+// AssessmentShadowCycle defines model for AssessmentShadowCycle.
+type AssessmentShadowCycle struct {
+	CompletedAt      *time.Time                          `json:"completed_at,omitempty"`
+	Cycle            int                                 `json:"cycle"`
+	EvidenceCoverage float32                             `json:"evidence_coverage"`
+	FailReasons      *[]AssessmentShadowCycleFailReasons `json:"fail_reasons,omitempty"`
+	ManagerConfirmed bool                                `json:"manager_confirmed"`
+
+	// Passed Non-formal shadow verdict; a shadow output is never a formal score.
+	Passed                 bool      `json:"passed"`
+	PeriodEnd              time.Time `json:"period_end"`
+	PeriodStart            time.Time `json:"period_start"`
+	PolicyOwnerConfirmed   bool      `json:"policy_owner_confirmed"`
+	Revision               int       `json:"revision"`
+	RuleChangedAfterStart  *bool     `json:"rule_changed_after_start,omitempty"`
+	RuleDigest             string    `json:"rule_digest"`
+	StartedAt              time.Time `json:"started_at"`
+	UnresolvedCalibrations *int      `json:"unresolved_calibrations,omitempty"`
+	UnresolvedCorrections  *int      `json:"unresolved_corrections,omitempty"`
+	Watermark              *int64    `json:"watermark,omitempty"`
+}
+
+// AssessmentShadowCycleFailReasons defines model for AssessmentShadowCycle.FailReasons.
+type AssessmentShadowCycleFailReasons string
+
+// AssessmentSourceBinding defines model for AssessmentSourceBinding.
+type AssessmentSourceBinding struct {
+	AcceptanceReview  AssessmentVersionedRef    `json:"acceptance_review"`
+	JobResponsibility AssessmentVersionedRef    `json:"job_responsibility"`
+	OrgGoal           AssessmentVersionedRef    `json:"org_goal"`
+	OrgVersion        int64                     `json:"org_version"`
+	Sops              *[]AssessmentVersionedRef `json:"sops,omitempty"`
+}
+
+// AssessmentVersionedRef defines model for AssessmentVersionedRef.
+type AssessmentVersionedRef struct {
+	Key     string `json:"key"`
+	Version int64  `json:"version"`
+}
 
 // BrowserDreamAdvancedPolicy defines model for BrowserDreamAdvancedPolicy.
 type BrowserDreamAdvancedPolicy struct {

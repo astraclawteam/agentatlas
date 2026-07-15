@@ -1489,3 +1489,124 @@ components:
             mode: { type: string, enum: [enterprise_knowledge_admin_queue] }
             risk_level: { type: string, enum: [low, high] }
           not: { required: [reviewer_user_id] }
+    # --- B2 employee work-assessment policies (Task 18B) ---------------------
+    # The governed, versioned rubric the B2 assessment product line evaluates
+    # work against. These schemas define the assessment-policy operation
+    # contract (types consumed by the management surface wired in Task 18D);
+    # the lifecycle, fairness guard and shadow-cycle publication gate are
+    # enforced server-side by internal/assessment against sdk/go/assessment.
+    AssessmentVersionedRef:
+      type: object
+      additionalProperties: false
+      required: [key, version]
+      properties:
+        key: { type: string, minLength: 1, maxLength: 256 }
+        version: { type: integer, format: int64, minimum: 1 }
+    AssessmentEvidenceLink:
+      type: object
+      additionalProperties: false
+      required: [handle, kind]
+      properties:
+        handle: { type: string, minLength: 1, maxLength: 256, description: Opaque graph/outcome descriptor; never raw content. }
+        kind: { type: string, minLength: 1, maxLength: 64 }
+        summary: { type: string, maxLength: 512 }
+    AssessmentSourceBinding:
+      type: object
+      additionalProperties: false
+      required: [org_version, job_responsibility, org_goal, acceptance_review]
+      properties:
+        org_version: { type: integer, format: int64, minimum: 0 }
+        job_responsibility: { $ref: '#/components/schemas/AssessmentVersionedRef' }
+        org_goal: { $ref: '#/components/schemas/AssessmentVersionedRef' }
+        sops: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/AssessmentVersionedRef' } }
+        acceptance_review: { $ref: '#/components/schemas/AssessmentVersionedRef' }
+    AssessmentDimension:
+      type: object
+      additionalProperties: false
+      required: [key, title, formal, rationale]
+      properties:
+        key: { type: string, minLength: 1, maxLength: 128, description: A built-in candidate key or a governed, non-forbidden addition. Personality, loyalty, private-life and hidden dimensions are rejected. }
+        title: { type: string, minLength: 1, maxLength: 256 }
+        formal: { type: boolean, description: Formal-scoring intent; the effect stays non-formal until the policy is published. }
+        hidden: { type: boolean, description: Always false on a valid policy; a hidden dimension is rejected. }
+        rationale: { type: string, minLength: 1, maxLength: 512, description: WHY the dimension was proposed. }
+        evidence: { type: array, maxItems: 500, items: { $ref: '#/components/schemas/AssessmentEvidenceLink' } }
+    AssessmentEvidenceRule:
+      type: object
+      additionalProperties: false
+      required: [dimension, tier, rationale]
+      properties:
+        dimension: { type: string, minLength: 1, maxLength: 128 }
+        tier: { type: string, enum: [verified_outcome, accepted_deliverable, human_report] }
+        rationale: { type: string, minLength: 1, maxLength: 512 }
+    AssessmentAttributionRule:
+      type: object
+      additionalProperties: false
+      required: [dimension, mode, rationale]
+      properties:
+        dimension: { type: string, minLength: 1, maxLength: 128 }
+        mode: { type: string, enum: [shared_once, contribution_weighted, blocker_excluded] }
+        rationale: { type: string, minLength: 1, maxLength: 512 }
+    AssessmentConfidenceRule:
+      type: object
+      additionalProperties: false
+      required: [dimension, level, rationale]
+      properties:
+        dimension: { type: string, minLength: 1, maxLength: 128 }
+        level: { type: string, enum: [high, medium, low] }
+        rationale: { type: string, minLength: 1, maxLength: 512 }
+    AssessmentShadowCycle:
+      type: object
+      additionalProperties: false
+      required: [cycle, revision, rule_digest, period_start, period_end, started_at, evidence_coverage, manager_confirmed, policy_owner_confirmed, passed]
+      properties:
+        cycle: { type: integer, minimum: 1, maximum: 2 }
+        revision: { type: integer, minimum: 1 }
+        rule_digest: { type: string, minLength: 1, maxLength: 128 }
+        period_start: { type: string, format: date-time }
+        period_end: { type: string, format: date-time }
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+        watermark: { type: integer, format: int64, minimum: 0 }
+        evidence_coverage: { type: number, minimum: 0, maximum: 1 }
+        rule_changed_after_start: { type: boolean }
+        unresolved_corrections: { type: integer, minimum: 0 }
+        unresolved_calibrations: { type: integer, minimum: 0 }
+        manager_confirmed: { type: boolean }
+        policy_owner_confirmed: { type: boolean }
+        passed: { type: boolean, description: Non-formal shadow verdict; a shadow output is never a formal score. }
+        fail_reasons:
+          type: array
+          maxItems: 16
+          items:
+            type: string
+            enum: [cycle_incomplete_or_partial_period, evidence_coverage_below_90pct, formal_dimension_low_confidence, rule_changed_after_cycle_began, unresolved_correction, unresolved_calibration, manager_not_confirmed, policy_owner_not_confirmed]
+    AssessmentPolicyDraftInput:
+      type: object
+      additionalProperties: false
+      required: [policy_key, sources]
+      properties:
+        policy_key: { type: string, minLength: 1, maxLength: 256 }
+        org_unit_id: { type: string, maxLength: 128 }
+        sources: { $ref: '#/components/schemas/AssessmentSourceBinding' }
+        extra_dimensions: { type: array, maxItems: 50, items: { $ref: '#/components/schemas/AssessmentDimension' } }
+    AssessmentPolicyView:
+      type: object
+      additionalProperties: false
+      required: [id, policy_key, revision, status, sources, watermark, formal_scoring_active, dimensions, evidence_rules, attribution_rules, confidence_rules]
+      properties:
+        id: { type: string, minLength: 1 }
+        policy_key: { type: string, minLength: 1, maxLength: 256 }
+        org_unit_id: { type: string, maxLength: 128 }
+        revision: { type: integer, minimum: 1 }
+        status: { type: string, enum: [draft, shadow, reviewing, published, retired] }
+        sources: { $ref: '#/components/schemas/AssessmentSourceBinding' }
+        watermark: { type: integer, format: int64, minimum: 0 }
+        formal_scoring_active: { type: boolean, description: True only when the policy is published; draft/shadow/reviewing policies are non-formal suggestions. }
+        dimensions: { type: array, maxItems: 50, items: { $ref: '#/components/schemas/AssessmentDimension' } }
+        evidence_rules: { type: array, maxItems: 50, items: { $ref: '#/components/schemas/AssessmentEvidenceRule' } }
+        attribution_rules: { type: array, maxItems: 50, items: { $ref: '#/components/schemas/AssessmentAttributionRule' } }
+        confidence_rules: { type: array, maxItems: 50, items: { $ref: '#/components/schemas/AssessmentConfidenceRule' } }
+        shadow_cycles: { type: array, maxItems: 2, items: { $ref: '#/components/schemas/AssessmentShadowCycle' } }
+        governance_change_id: { type: string, maxLength: 128 }
+        supersedes_id: { type: string, maxLength: 128 }
