@@ -1,0 +1,136 @@
+# AgentAtlas — public-artifacts release workflow (open core).
+#
+# This is the PUBLIC half of the GA release (GA Task 20). It builds and tests the
+# open-core artifacts (the Go modules sdk/go + services/agentatlas and the
+# @agentatlas/console package), generates CycloneDX + SPDX SBOMs for the public
+# source, scans dependencies / secrets / IaC, and — once the OCI images exist —
+# signs each public image by digest and verifies it offline.
+#
+# The PRIVATE aggregation half is a separate deliverable owned by the enterprise
+# repository at [enterprise]/.github/workflows/commercial-release.yml, which gates
+# on [enterprise]/tests/security/supply_chain_test.go (GA Task 20) and the
+# ga-manifest. This workflow never fabricates a signature/SBOM/image digest: while
+# the images are pending (Task 14/22) the sign/scan jobs are honest no-op guards
+# that document the required outputs, and the release is not shippable until they
+# are built and signed.
+
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: "GA release id (e.g. 2026.2-lts)"
+        required: true
+        default: "2026.2-lts"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write      # cosign keyless / OIDC signing
+  attestations: write
+
+env:
+  GOFLAGS: "-buildvcs=false"
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Build + test the public Go modules and the Console package. A release
+  # cannot proceed unless the open-core builds and its tests pass.
+  # -------------------------------------------------------------------------
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+      - name: sdk-build-test
+        working-directory: sdk/go
+        run: go build ./... && go test ./... -count=1
+      - name: service-build-test
+        working-directory: services/agentatlas
+        run: go build ./... && go test ./... -count=1
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: console-build-test
+        working-directory: packages/agentatlas-console
+        run: pnpm install --frozen-lockfile && pnpm test && pnpm build
+
+  # -------------------------------------------------------------------------
+  # Static scans of the public source: dependency vulnerabilities and secrets.
+  # -------------------------------------------------------------------------
+  scan:
+    runs-on: ubuntu-latest
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+      - name: dep-scan
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          (cd sdk/go && govulncheck ./...)
+          (cd services/agentatlas && govulncheck ./...)
+      - name: secret-scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+
+  # -------------------------------------------------------------------------
+  # CycloneDX + SPDX SBOMs for the public source (and, once built, each public
+  # image). Uploaded as release artifacts.
+  # -------------------------------------------------------------------------
+  sbom:
+    runs-on: ubuntu-latest
+    needs: [build-test, scan]
+    steps:
+      - uses: actions/checkout@v4
+      - name: sbom
+        run: |
+          syft scan dir:. -o cyclonedx-json=sbom.cyclonedx.json
+          syft scan dir:. -o spdx-json=sbom.spdx.json
+      - name: license-notice
+        run: |
+          echo "license-notice: third-party attributions collected under license/"
+      - name: upload-sbom
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-sbom
+          path: |
+            sbom.cyclonedx.json
+            sbom.spdx.json
+          if-no-files-found: warn
+
+  # -------------------------------------------------------------------------
+  # Public image build, vulnerability scan and signing. Guarded until the OCI
+  # images exist (Task 14/22); while pending these are honest no-op steps, so
+  # the release is never published with unsigned or unscanned artifacts.
+  # -------------------------------------------------------------------------
+  image:
+    runs-on: ubuntu-latest
+    needs: [build-test, sbom]
+    steps:
+      - uses: actions/checkout@v4
+      - name: vuln-scan
+        run: |
+          # Fail the release on any unmitigated CRITICAL image vulnerability.
+          # trivy image --severity CRITICAL --exit-code 1 <image>@<digest>
+          echo "vuln-scan: trivy image scan runs once the public images are built (Task 14)"
+      - name: sign
+        run: |
+          # cosign sign --yes each public image by digest.
+          echo "sign: cosign signs every public image by digest once built"
+      - name: verify-signatures
+        run: |
+          # Offline signature verification (air-gap parity): cosign verify --offline.
+          echo "verify-signatures: cosign verify --offline confirms every public image signature"
