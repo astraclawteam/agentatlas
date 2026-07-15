@@ -1,0 +1,198 @@
+# hierarchy-cases.yaml — the Task 18C evaluator table. Each case seeds
+# authoritative Outcomes (internal/outcome) and a typed Outcome-Graph candidate
+# set (internal/outcomegraph) with an exact watermark, runs the deterministic
+# evaluator for ONE dimension, and asserts the per-dimension result: the
+# verify-then-score state (assessed / not_assessable + reason), the counted
+# un-superseded outcome heads, and the deterministic blocker classification
+# (confidence: verified/corroborated/reported/inferred) and delay attribution
+# (external/personal/process/resource/unattributed). Every reference is opaque —
+# handles, versioned keys and bounded summaries only; never raw content.
+cases:
+  # --- verify-then-score: a satisfied, signed outcome is tier-1 and assessed ---
+  - name: verified_outcome_assessed
+    dimension: outcome_completion
+    watermark: 42
+    graph_candidates:
+      - {key: outcome-1, revision: 1}
+    outcomes:
+      - key: outcome-1
+        chain:
+          - {revision: 1, status: satisfied, signed: true, authority: mes.official}
+    dimension_outcomes: [outcome-1]
+    expect_state: assessed
+    expect_satisfied: 1
+    expect_counted: [outcome-1]
+
+  # --- insufficient data => not_assessable (no candidate in the graph) ---------
+  - name: insufficient_no_candidate
+    dimension: timeliness
+    watermark: 10
+    graph_candidates: []
+    outcomes: []
+    dimension_outcomes: [outcome-missing]
+    expect_state: not_assessable
+    expect_reason: insufficient_data
+
+  # --- unverifiable: a graph candidate with no authoritative Outcome behind it --
+  - name: unverifiable_candidate
+    dimension: quality
+    watermark: 7
+    graph_candidates:
+      - {key: outcome-ghost, revision: 1}
+    outcomes: []
+    dimension_outcomes: [outcome-ghost]
+    expect_state: not_assessable
+    expect_reason: unverifiable_evidence
+
+  # --- conflicting authorities (disputed head) => not_assessable ---------------
+  - name: conflicting_disputed_head
+    dimension: outcome_completion
+    watermark: 21
+    graph_candidates:
+      - {key: outcome-conflict, revision: 1}
+    outcomes:
+      - key: outcome-conflict
+        chain:
+          - {revision: 1, status: disputed, authority: mes.official}
+    dimension_outcomes: [outcome-conflict]
+    expect_state: not_assessable
+    expect_reason: conflicting_evidence
+
+  # --- Outcome supersession: count the un-superseded head ONCE ------------------
+  # The graph still projects rev1 (satisfied), but a correction superseded it with
+  # rev2 (unsatisfied). The evaluator resolves to the head (rev2): counted once,
+  # zero satisfied.
+  - name: supersession_counts_head_once
+    dimension: outcome_completion
+    watermark: 55
+    graph_candidates:
+      - {key: outcome-super, revision: 1, superseded: true}
+    outcomes:
+      - key: outcome-super
+        chain:
+          - {revision: 1, status: satisfied, signed: true, authority: mes.official}
+          - {revision: 2, status: unsatisfied, authority: mes.official}
+    dimension_outcomes: [outcome-super]
+    expect_state: assessed
+    expect_satisfied: 0
+    expect_counted: [outcome-super]
+
+  # --- shared contribution: counted once, contribution preserved ---------------
+  - name: shared_contribution
+    dimension: collaboration
+    watermark: 33
+    graph_candidates:
+      - {key: outcome-shared, revision: 2}
+    outcomes:
+      - key: outcome-shared
+        chain:
+          - {revision: 1, status: satisfied, signed: true, authority: crm.official}
+          - {revision: 2, status: satisfied, signed: true, authority: crm.official}
+    dimension_outcomes: [outcome-shared]
+    contributions:
+      - {contributor: actor:operator-7, outcome: outcome-shared, kind: author, weight: 0.5}
+    expect_state: assessed
+    expect_satisfied: 1
+    expect_counted: [outcome-shared]
+
+  # --- plan-external contribution is INCLUDED, never silently dropped ----------
+  - name: plan_external_contribution
+    dimension: improvement_contribution
+    watermark: 44
+    graph_candidates:
+      - {key: outcome-ext, revision: 1}
+    outcomes:
+      - key: outcome-ext
+        chain:
+          - {revision: 1, status: satisfied, signed: true, authority: mes.official}
+    dimension_outcomes: [outcome-ext]
+    contributions:
+      - {contributor: actor:operator-7, outcome: outcome-ext, kind: method_improvement, plan_external: true}
+    expect_state: assessed
+    expect_satisfied: 1
+    expect_counted: [outcome-ext]
+    expect_plan_external: true
+
+  # --- blocker classification x delay attribution matrix (end-to-end) ----------
+  - name: verified_external_blocker
+    dimension: timeliness
+    watermark: 61
+    graph_candidates:
+      - {key: outcome-b1, revision: 1}
+    outcomes:
+      - key: outcome-b1
+        chain:
+          - {revision: 1, status: satisfied, signed: true, authority: mes.official}
+    dimension_outcomes: [outcome-b1]
+    blockers:
+      - {handle: blk-ext, kind: dependency, signed: true, external: true, expect_confidence: verified, expect_delay: external}
+    expect_state: assessed
+    expect_satisfied: 1
+    expect_counted: [outcome-b1]
+
+  - name: corroborated_process_blocker
+    dimension: timeliness
+    watermark: 62
+    graph_candidates:
+      - {key: outcome-b2, revision: 1}
+    outcomes:
+      - key: outcome-b2
+        chain:
+          - {revision: 1, status: satisfied, signed: true, authority: mes.official}
+    dimension_outcomes: [outcome-b2]
+    blockers:
+      - {handle: blk-proc, kind: process_gap, reports: 2, process: true, expect_confidence: corroborated, expect_delay: process}
+    expect_state: assessed
+    expect_satisfied: 1
+    expect_counted: [outcome-b2]
+
+  - name: reported_resource_blocker
+    dimension: timeliness
+    watermark: 63
+    graph_candidates:
+      - {key: outcome-b3, revision: 1}
+    outcomes:
+      - key: outcome-b3
+        chain:
+          - {revision: 1, status: satisfied, signed: true, authority: mes.official}
+    dimension_outcomes: [outcome-b3]
+    blockers:
+      - {handle: blk-res, kind: resource_gap, reports: 1, resource: true, expect_confidence: reported, expect_delay: resource}
+    expect_state: assessed
+    expect_satisfied: 1
+    expect_counted: [outcome-b3]
+
+  - name: inferred_personal_blocker
+    dimension: timeliness
+    watermark: 64
+    graph_candidates:
+      - {key: outcome-b4, revision: 1}
+    outcomes:
+      - key: outcome-b4
+        chain:
+          - {revision: 1, status: satisfied, signed: true, authority: mes.official}
+    dimension_outcomes: [outcome-b4]
+    # "personal" grades a WORK/PROCESS fact (the assessed party's own rework step),
+    # never the person's character — and only when no external/resource/process
+    # cause explains the delay.
+    blockers:
+      - {handle: blk-pers, kind: rework, personal: true, expect_confidence: inferred, expect_delay: personal}
+    expect_state: assessed
+    expect_satisfied: 1
+    expect_counted: [outcome-b4]
+
+  - name: inferred_unattributed_blocker
+    dimension: timeliness
+    watermark: 65
+    graph_candidates:
+      - {key: outcome-b5, revision: 1}
+    outcomes:
+      - key: outcome-b5
+        chain:
+          - {revision: 1, status: satisfied, signed: true, authority: mes.official}
+    dimension_outcomes: [outcome-b5]
+    blockers:
+      - {handle: blk-unk, kind: gap, expect_confidence: inferred, expect_delay: unattributed}
+    expect_state: assessed
+    expect_satisfied: 1
+    expect_counted: [outcome-b5]
