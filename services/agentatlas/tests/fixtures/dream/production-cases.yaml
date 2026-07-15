@@ -1,0 +1,42 @@
+# production-cases.yaml — Task 18A Part B production-conformance capstone.
+#
+# Synthetic MULTI-LEVEL operating records that drive the outcome-grounded
+# hierarchical distillation (Task 0J internal/outcomelearning + Task 18C
+# internal/assessment) through the 18A production property list: the full
+# individual → group → department → business-unit → company hierarchy, each
+# bound to the EXACT Outcome Graph watermark, with a cross-level SHARED outcome
+# that must be attributed exactly once. Every reference is opaque — versioned
+# keys and handles only, never raw content.
+#
+# The watermark matches the published assessment policy watermark so a formal,
+# grounded assessment is permitted at every level; a mismatch would (correctly)
+# pause every level as not_assessable.
+watermark: 42
+
+hierarchy:
+  - level: individual
+    org: "org:line-1"
+    subject: "actor:operator-7"
+    outcomes: ["outcome-ind-1", "outcome-shared"]
+
+  - level: group
+    org: "org:group-assembly"
+    subject: "actor:group-lead-3"
+    # outcome-shared is ALSO listed here: the same governed outcome the report
+    # already counted. It must be attributed once across the hierarchy.
+    outcomes: ["outcome-grp-1", "outcome-shared"]
+
+  - level: department
+    org: "org:dept-operations"
+    subject: "actor:dept-head-2"
+    outcomes: ["outcome-dept-1"]
+
+  - level: business_unit
+    org: "org:bu-manufacturing"
+    subject: "actor:bu-vp-1"
+    outcomes: ["outcome-bu-1"]
+
+  - level: company
+    org: "org:acme-industrial"
+    subject: "actor:ceo-1"
+    outcomes: ["outcome-co-1"]
