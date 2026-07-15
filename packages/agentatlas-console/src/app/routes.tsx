@@ -7,7 +7,7 @@ import { KnowledgeHome } from "../features/knowledge/KnowledgeHome";
 import { KnowledgeEditor } from "../features/knowledge/KnowledgeEditor";
 import { KnowledgeTaskHandoff } from "../features/knowledge/KnowledgeTaskHandoff";
 import { ChangeReviewListPage, ChangeReviewPage } from "../features/governance/ChangeReviewPage";
-import { DreamAdvancedPolicyRoute, DreamOverviewRoute, DreamPolicyRoute, DreamRunDetailRoute, DreamTimelineRoute } from "../features/dream/DreamRoutes";
+import { DreamAdvancedPolicyRoute, DreamOverviewRoute, DreamPolicyRoute, DreamRunDetailRoute, DreamTimelineRoute, WorkAssessmentDetailRoute } from "../features/dream/DreamRoutes";
 
 export const consoleSurfaces = [
   { path: "/knowledge", label: "企业知识", icon: LibraryBig },
@@ -92,6 +92,7 @@ export function ConsoleRoutes() {
       <Route path="/dream/workflow" element={<DreamPolicyRoute />} />
       <Route path="/dream/workflow/advanced" element={<DreamAdvancedPolicyRoute />} />
       <Route path="/dream/runs/:runID" element={<DreamRunDetailRoute />} />
+      <Route path="/dream/assessments/:id" element={<WorkAssessmentDetailRoute />} />
       <Route path="/workflows/*" element={<RouteAdapter surface="workflows" />} />
       <Route path="/evidence/*" element={<RouteAdapter surface="evidence" />} />
       <Route path="/assistant" element={<AssistantRoute />} />

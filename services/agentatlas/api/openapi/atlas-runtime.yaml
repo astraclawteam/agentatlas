@@ -185,6 +185,105 @@ paths:
                   artifact_id: { type: string }
                   job_id: { type: string }
                   status: { type: string, enum: [pending, running, succeeded, failed] }
+  /v1/assessments/{id}:
+    get:
+      operationId: getEmployeeAssessment
+      summary: Read your own work assessment (Visibility B; never the final score/level or manager notes)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: >
+            The employee's own goals, WorkCase facts, completion (opaque counted-outcome
+            references), evidence references, blocker attribution and missing data. Never
+            the final score, the confidence level, manager notes, or another employee's data.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [subject, period, goals, dimensions]
+                properties:
+                  subject: { type: string }
+                  period:
+                    type: object
+                    properties:
+                      start: { type: string, format: date-time }
+                      end: { type: string, format: date-time }
+                  goals:
+                    type: object
+                    properties:
+                      job_responsibility: { type: object }
+                      org_goal: { type: object }
+                  dimensions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        dimension: { type: string }
+                        completed_outcome_refs: { type: array, items: { type: string } }
+                        missing_data: { type: string }
+                        evidence: { type: array, items: { type: object } }
+                        blockers: { type: array, items: { type: object } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/assessments/{id}/corrections:
+    post:
+      operationId: submitAssessmentCorrection
+      summary: Submit a correction against your own assessment (add evidence or challenge a fact/attribution)
+      description: >
+        A correction never edits the old assessment in place, never deletes a signed receipt
+        and never mutates a structured result; an accepted correction produces a new assessment
+        version. It never triggers any HR action.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, dimension, rationale]
+              properties:
+                kind: { type: string, enum: [add_evidence, challenge_fact, challenge_attribution] }
+                dimension: { type: string }
+                challenged_handle: { type: string }
+                rationale: { type: string, maxLength: 512 }
+                added_evidence:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      handle: { type: string }
+                      kind: { type: string }
+                      summary: { type: string }
+      responses:
+        '201':
+          description: Correction recorded (pending); the old assessment is unchanged
+          content:
+            application/json:
+              schema: { type: object }
+        '400':
+          description: Invalid correction
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/assessments/{id}/corrections/{correctionId}:
+    get:
+      operationId: getAssessmentCorrection
+      summary: Read your own correction submission and its outcome
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: correctionId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: The employee's correction submission and outcome (never the manager identity)
+          content:
+            application/json:
+              schema: { type: object }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
 components:
   securitySchemes:
     NexusTicket:

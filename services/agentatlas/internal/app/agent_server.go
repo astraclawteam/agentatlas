@@ -9,6 +9,7 @@ import (
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/agent"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/assessment"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/browsersession"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/governance"
@@ -32,13 +33,14 @@ type AgentRouterDeps struct {
 	Store                  *db.Queries
 	Outlines               MethodOutlineStore // optional; defaults to Store
 	Runner                 *tasks.Runner
-	Metrics                *observability.Metrics    // optional; enables /metrics + latency histograms
-	BrowserSessions        *browsersession.Service   // optional; enables Console BFF routes
-	BrowserHandleProtector *browsersession.Protector // required for restart-safe opaque Console resource handles
-	BrowserOrgStore        browserSessionOrgStore    // optional; defaults to Store
-	BrowserKnowledgeStore  browserKnowledgeStore     // optional; defaults to Store
-	BrowserAuthorizer      nexus.BrowserBFFClient    // optional; required by advanced legacy BFF routes
-	Changes                *governance.Service       // optional; enables governed maintenance routes
+	Metrics                *observability.Metrics               // optional; enables /metrics + latency histograms
+	BrowserSessions        *browsersession.Service              // optional; enables Console BFF routes
+	BrowserHandleProtector *browsersession.Protector            // required for restart-safe opaque Console resource handles
+	BrowserOrgStore        browserSessionOrgStore               // optional; defaults to Store
+	BrowserKnowledgeStore  browserKnowledgeStore                // optional; defaults to Store
+	BrowserAuthorizer      nexus.BrowserBFFClient               // optional; required by advanced legacy BFF routes
+	Changes                *governance.Service                  // optional; enables governed maintenance routes
+	Assessments            *assessment.ManagerVisibilityService // optional; enables the Task 18D management assessment detail route
 	// TLS is this service's own server-identity Manager (the "AgentAtlas"
 	// link); optional. When set, /healthz surfaces certificate lifecycle
 	// status distinctly from readiness, without leaking key material — see
@@ -202,6 +204,8 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 		r.Get("/auth/callback", browser.callback)
 		r.Get("/api/session", browser.session)
 		r.With(browser.sessionGuard).Get("/api/knowledge", knowledge.list)
+		assessAgent := &assessmentAgentHandler{manager: deps.Assessments}
+		r.With(browser.sessionGuard).Get("/api/assessments/{id}", assessAgent.detail)
 		r.Route("/api/dream", func(r chi.Router) {
 			r.Use(browser.sessionGuard)
 			r.Get("/runs", browserDream.list)

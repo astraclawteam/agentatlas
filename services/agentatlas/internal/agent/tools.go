@@ -4,13 +4,16 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 
+	assessmentmodel "github.com/astraclawteam/agentatlas/sdk/go/assessment"
 	"github.com/astraclawteam/agentatlas/sdk/go/workflow"
 )
 
@@ -239,4 +242,76 @@ func Tools() ([]tool.Tool, error) {
 		return nil, err
 	}
 	return []tool.Tool{draftWorkflow, draftPlan, explain}, nil
+}
+
+// --- query_work_assessment (Task 18D manager assessment-query tool) -----------
+//
+// This tool lets an authorized MANAGER read a subordinate's work-assessment
+// detail (score/level + manager notes) through the Atlas Assistant. It calls the
+// DETERMINISTIC visibility service (assessment.ManagerVisibilityService, which
+// itself re-uses the Task 18C evaluation result and the exact hierarchy + policy
+// authorization) and returns its projection VERBATIM: the LLM cannot broaden the
+// hierarchy scope and cannot rewrite the score, attribution or confidence.
+//
+// It is deliberately NOT registered in the process-global, dependency-free
+// Tools() set: the trusted tenant + manager identity + org scope must be bound
+// per request (never taken from an LLM argument), so the management plane
+// constructs this tool with a request-scoped AssessmentQueryPort. The LLM arg
+// carries ONLY the assessment id to look up.
+
+// AssessmentQueryPort is the deterministic visibility service the tool calls. Its
+// implementation (assessment.ManagerVisibilityService bound to a trusted manager
+// identity + tenant) enforces the exact hierarchy + policy authorization and
+// returns a fail-closed error on an out-of-scope or unowned-policy read. The port
+// is expressed over the frozen SDK WorkAssessment so this package never imports
+// internal/assessment (which would create an import cycle through governance ->
+// workflow -> agent).
+type AssessmentQueryPort interface {
+	ManagerView(ctx context.Context, assessmentID string) (assessmentmodel.WorkAssessment, error)
+}
+
+// ManagerAssessmentQueryArgs is the LLM-suppliable query: ONLY the assessment id.
+// The trusted tenant + manager identity + org scope are bound into the port, so
+// the model can never widen scope or name another tenant/subject.
+type ManagerAssessmentQueryArgs struct {
+	AssessmentID string `json:"assessment_id"`
+}
+
+// ManagerAssessmentQueryResult carries the authorized, deterministic assessment
+// projection verbatim. The model may narrate around it but can never alter the
+// score, attribution or confidence.
+type ManagerAssessmentQueryResult struct {
+	Assessment assessmentmodel.WorkAssessment `json:"assessment"`
+}
+
+// ManagerAssessmentQuery calls the deterministic port and returns its result
+// unchanged. It fails loud on an empty id and propagates the port's fail-closed
+// authorization error; it can never modify the structured result.
+func ManagerAssessmentQuery(ctx context.Context, port AssessmentQueryPort, args ManagerAssessmentQueryArgs) (ManagerAssessmentQueryResult, error) {
+	if port == nil {
+		return ManagerAssessmentQueryResult{}, fmt.Errorf("assessment query service is not configured")
+	}
+	if strings.TrimSpace(args.AssessmentID) == "" {
+		return ManagerAssessmentQueryResult{}, fmt.Errorf("assessment_id is required")
+	}
+	wa, err := port.ManagerView(ctx, args.AssessmentID)
+	if err != nil {
+		return ManagerAssessmentQueryResult{}, err
+	}
+	return ManagerAssessmentQueryResult{Assessment: wa}, nil
+}
+
+// ManagerAssessmentQueryTool wraps ManagerAssessmentQuery as an ADK function tool
+// bound to a request-scoped, trusted AssessmentQueryPort.
+func ManagerAssessmentQueryTool(port AssessmentQueryPort) (tool.Tool, error) {
+	return functiontool.New(functiontool.Config{
+		Name:        "query_work_assessment",
+		Description: "读取一名下属员工的工作评估详情（分数/等级/主管备注）。只能读取你所在管理层级范围内、且由你负责的评估策略下的评估；越权、跨汇报线或跨策略的读取会被拒绝。返回的是确定性评估投影，模型不得修改其分数、归因或置信度，也不得据此触发任何人事动作。",
+		// The assessment result is a recursive type (a WorkAssessment embeds
+		// sub-assessments), which the reflective schema inferencer cannot walk, so
+		// the output schema is declared explicitly as an opaque object.
+		OutputSchema: &jsonschema.Schema{Type: "object"},
+	}, func(ctx adkagent.ToolContext, args ManagerAssessmentQueryArgs) (ManagerAssessmentQueryResult, error) {
+		return ManagerAssessmentQuery(ctx, port, args)
+	})
 }

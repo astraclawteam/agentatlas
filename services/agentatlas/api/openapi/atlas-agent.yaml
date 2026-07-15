@@ -45,6 +45,19 @@ paths:
         '403': {description: The selected organization is not authorized.}
         '404': {$ref: '#/components/responses/NotFound'}
         '503': {description: Authorization or safely bounded knowledge data is unavailable.}
+  /api/assessments/{id}:
+    get:
+      security: [{AtlasSession: []}]
+      operationId: getManagerAssessmentDetail
+      description: Returns the authorized manager assessment detail (score/level and manager notes) only for a subject within the manager's exact org hierarchy scope and under a policy they own. It exposes no HR-action capability.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 256}}
+      responses:
+        '200': {description: The authorized manager assessment detail, content: {application/json: {schema: {type: object}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: The manager is outside the subject's reporting line or does not own the governing policy.}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {description: The assessment surface is not configured.}
   /api/dream/runs:
     get:
       security: [{AtlasSession: []}]

@@ -193,6 +193,27 @@ func (e CreateArtifactJob202JSONResponseBodyStatus) Valid() bool {
 	}
 }
 
+// Defines values for SubmitAssessmentCorrectionJSONBodyKind.
+const (
+	AddEvidence          SubmitAssessmentCorrectionJSONBodyKind = "add_evidence"
+	ChallengeAttribution SubmitAssessmentCorrectionJSONBodyKind = "challenge_attribution"
+	ChallengeFact        SubmitAssessmentCorrectionJSONBodyKind = "challenge_fact"
+)
+
+// Valid indicates whether the value is a known member of the SubmitAssessmentCorrectionJSONBodyKind enum.
+func (e SubmitAssessmentCorrectionJSONBodyKind) Valid() bool {
+	switch e {
+	case AddEvidence:
+		return true
+	case ChallengeAttribution:
+		return true
+	case ChallengeFact:
+		return true
+	default:
+		return false
+	}
+}
+
 // AnswerRequest defines model for AnswerRequest.
 type AnswerRequest struct {
 	ActorUserId  *string   `json:"actor_user_id,omitempty"`
@@ -357,6 +378,22 @@ type CreateArtifactJobMultipartBodyParserHint string
 // CreateArtifactJob202JSONResponseBodyStatus defines parameters for CreateArtifactJob.
 type CreateArtifactJob202JSONResponseBodyStatus string
 
+// SubmitAssessmentCorrectionJSONBody defines parameters for SubmitAssessmentCorrection.
+type SubmitAssessmentCorrectionJSONBody struct {
+	AddedEvidence *[]struct {
+		Handle  *string `json:"handle,omitempty"`
+		Kind    *string `json:"kind,omitempty"`
+		Summary *string `json:"summary,omitempty"`
+	} `json:"added_evidence,omitempty"`
+	ChallengedHandle *string                                `json:"challenged_handle,omitempty"`
+	Dimension        string                                 `json:"dimension"`
+	Kind             SubmitAssessmentCorrectionJSONBodyKind `json:"kind"`
+	Rationale        string                                 `json:"rationale"`
+}
+
+// SubmitAssessmentCorrectionJSONBodyKind defines parameters for SubmitAssessmentCorrection.
+type SubmitAssessmentCorrectionJSONBodyKind string
+
 // GetSpaceTimelineParams defines parameters for GetSpaceTimeline.
 type GetSpaceTimelineParams struct {
 	From  *time.Time `form:"from,omitempty" json:"from,omitempty"`
@@ -369,6 +406,9 @@ type CreateAnswerJSONRequestBody = AnswerRequest
 
 // CreateArtifactJobMultipartRequestBody defines body for CreateArtifactJob for multipart/form-data ContentType.
 type CreateArtifactJobMultipartRequestBody CreateArtifactJobMultipartBody
+
+// SubmitAssessmentCorrectionJSONRequestBody defines body for SubmitAssessmentCorrection for application/json ContentType.
+type SubmitAssessmentCorrectionJSONRequestBody SubmitAssessmentCorrectionJSONBody
 
 // CreateRetrievalPlanJSONRequestBody defines body for CreateRetrievalPlan for application/json ContentType.
 type CreateRetrievalPlanJSONRequestBody = RetrievalPlanRequest

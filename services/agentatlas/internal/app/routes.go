@@ -15,6 +15,7 @@ import (
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/artifacts"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/assessment"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/retrieval"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/tasks"
@@ -55,6 +56,10 @@ type RouterDeps struct {
 	Artifacts *artifacts.Service     // optional; enables POST /v1/artifacts/jobs
 	PlanSteps PlanStepLister         // optional; defaults to Store
 	Metrics   *observability.Metrics // optional; enables /metrics + latency histograms
+	// AssessmentResults and AssessmentCorrections enable the Task 18D employee
+	// assessment surface (read own assessment, submit/read corrections); optional.
+	AssessmentResults     assessment.ResultStore
+	AssessmentCorrections *assessment.CorrectionService
 	// TLS is this service's own server-identity Manager (the "AgentAtlas"
 	// link); optional. When set, /healthz surfaces certificate lifecycle
 	// status distinctly from readiness, without leaking key material — see
@@ -72,6 +77,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		planSteps = deps.Store
 	}
 	retrievalH := &retrievalHandler{nexus: deps.Nexus, retrieval: deps.Retrieval, store: planSteps}
+	assess := &assessmentRuntimeHandler{nexus: deps.Nexus, results: deps.AssessmentResults, corrections: deps.AssessmentCorrections}
 
 	r := chi.NewRouter()
 	r.Use(corsMiddleware)
@@ -101,6 +107,11 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		r.Post("/work-briefs", briefs.handleIngest)
 		r.Post("/artifacts/jobs", artifactsH.createJob)
 		r.Post("/retrieval/plans", retrievalH.createPlan)
+
+		// Task 18D employee assessment surface (Visibility B + correction).
+		r.Get("/assessments/{id}", assess.getForEmployee)
+		r.Post("/assessments/{id}/corrections", assess.submitCorrection)
+		r.Get("/assessments/{id}/corrections/{correctionId}", assess.getCorrection)
 
 		r.Get("/spaces", func(w http.ResponseWriter, req *http.Request) {
 			_, ticket, err := verifyTicket(req.Context(), deps.Nexus, req)

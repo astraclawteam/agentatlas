@@ -6,6 +6,8 @@ import { DreamPolicyPanel } from "../../DreamPolicyPanel";
 import { DreamTimeline } from "../../DreamTimeline";
 import { DreamHeader, DreamOverviewPage, type DreamPageState } from "./DreamOverviewPage";
 import { DreamRunDetailPage } from "./DreamRunDetailPage";
+import { WorkAssessmentDetail } from "./WorkAssessmentDetail";
+import { getManagerAssessment, type WorkAssessmentDetail as WorkAssessmentDetailPayload } from "../../api/assessments";
 
 export function DreamOverviewRoute() { const { session } = useSession(); const { runs, state } = useAuthorizedRuns(session.org_tree); const latest = new Map<string, DreamRun | undefined>(); for (const run of runs) if (run.organization_id && !latest.has(run.organization_id)) latest.set(run.organization_id, run); return <DreamOverviewPage data={buildHierarchy(session.org_tree, latest)} state={state} />; }
 export function DreamTimelineRoute() { const { session } = useSession(); const { runs, state } = useAuthorizedRuns(session.org_tree); const organizations = useMemo(() => flattenOrganizations(session.org_tree), [session.org_tree]); return <DreamTimeline runs={runs} organizations={organizations} state={state === "empty" ? "ready" : state} />; }
@@ -20,6 +22,22 @@ export function DreamPolicyRoute() {
 }
 
 export function DreamRunDetailRoute() { const { runID = "" } = useParams(); const [run, setRun] = useState<DreamRun | null>(null); const [failed, setFailed] = useState(false); useEffect(() => { const controller = new AbortController(); setRun(null); setFailed(false); getDreamRun(runID, controller.signal).then(setRun).catch((error) => { if ((error as Error).name !== "AbortError") setFailed(true); }); return () => controller.abort(); }, [runID]); if (failed) return <DreamOverviewPage state="error" />; if (!run) return <DreamOverviewPage state="loading" />; return <DreamRunDetailPage run={run} onAnnotate={async (action, comment) => { await annotateDreamRun(run.handle, action, comment); setRun(await getDreamRun(run.handle)); }} onRerun={(key) => rerunDreamRun(run.handle, key)} onEvidenceAccess={() => accessDreamEvidence(run.handle)} />; }
+
+export function WorkAssessmentDetailRoute() {
+  const { id = "" } = useParams();
+  const [assessment, setAssessment] = useState<WorkAssessmentDetailPayload | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    const controller = new AbortController();
+    setAssessment(null);
+    setFailed(false);
+    getManagerAssessment(id, controller.signal).then((response) => setAssessment(response.assessment)).catch((error) => { if ((error as Error).name !== "AbortError") setFailed(true); });
+    return () => controller.abort();
+  }, [id]);
+  if (failed) return <main className="dream-page"><DreamHeader title="工作评估详情" description="暂时无法读取该评估，或你没有查看权限。" /></main>;
+  if (!assessment) return <main className="dream-page"><DreamHeader title="工作评估详情" description="正在读取评估详情…" /></main>;
+  return <WorkAssessmentDetail assessment={assessment} />;
+}
 
 export function DreamAdvancedPolicyRoute() {
   const { session, advancedMode } = useSession(); const [query] = useSearchParams(); const handle = query.get("policy") ?? "";
