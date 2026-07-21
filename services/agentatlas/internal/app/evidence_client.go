@@ -39,3 +39,10 @@ const (
 	dreamEvidenceDataClass = "dream.evidence"
 	dreamEvidencePurpose   = "dream_evidence_drilldown"
 )
+
+// answerEvidenceDataClass and answerEvidencePurpose name the data class and
+// purpose of an employee-answer evidence read.
+const (
+	answerEvidenceDataClass = "knowledge.evidence"
+	answerEvidencePurpose   = "answer_employee_question"
+)

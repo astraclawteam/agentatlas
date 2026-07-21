@@ -104,6 +104,7 @@ func testAnswerServer(t *testing.T, mock *nexusclient.Mock) (*httptest.Server, *
 	t.Helper()
 	traceStore := &memTraceStore{}
 	deps := &answerDeps{
+		evidence:  &fakeFrozenEvidence{},
 		nexus:     mock,
 		retrieval: retrieval.NewService(&memPlanStore{}, staticSearch{}, nil, nil),
 		traces:    trace.NewService(traceStore),
@@ -241,6 +242,7 @@ func TestAnswerExcludesNonAuthoritativeDreamSummary(t *testing.T) {
 	mock.Tickets["tick_ok"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "u"}
 	capLLM := &capturingLLM{}
 	deps := &answerDeps{
+		evidence:  &fakeFrozenEvidence{},
 		nexus:     mock,
 		retrieval: retrieval.NewService(&memPlanStore{}, mixedAuthoritySearch{}, nil, nil),
 		traces:    trace.NewService(&memTraceStore{}),

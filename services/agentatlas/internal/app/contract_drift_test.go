@@ -292,7 +292,7 @@ func diffSets(a, b map[string]bool) []string {
 // ignored" state can no longer happen silently.
 func TestContractDrift(t *testing.T) {
 	runtimeSpec := specPaths(t, "atlas-runtime.yaml")
-	apiRoutes := servedRoutes(t, NewRouter(RouterDeps{Nexus: adminMock()}))
+	apiRoutes := servedRoutes(t, NewRouter(RouterDeps{Evidence: &fakeFrozenEvidence{}, Nexus: adminMock()}))
 	if m := diffSets(apiRoutes, runtimeSpec); len(m) > 0 {
 		t.Fatalf("atlas-api serves routes missing from atlas-runtime.yaml: %v", m)
 	}

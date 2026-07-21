@@ -19,6 +19,7 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/observability"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/retrieval"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/trace"
+	nexusruntime "github.com/astraclawteam/agentnexus/sdk/go/runtime"
 )
 
 const answerInstruction = `你是 AgentAtlas 的回答引擎。只依据下面提供的检索摘要与授权证据回答；引用不到的内容明确说不知道。回答用中文，简洁、落在证据上。`
@@ -46,7 +47,9 @@ type AnswerResponse struct {
 
 // answerDeps wires the runtime answer path.
 type answerDeps struct {
-	nexus     nexus.Client
+	nexus nexus.Client
+	// evidence is the frozen-contract evidence surface.
+	evidence  FrozenEvidenceClient
 	retrieval *retrieval.Service
 	traces    *trace.Service
 	llm       model.LLM
@@ -147,8 +150,19 @@ func (d *answerDeps) handleAnswer(w http.ResponseWriter, r *http.Request) {
 		if res.EvidencePointerID == "" || len(evidenceIDs) >= 3 {
 			continue
 		}
-		loc, err := d.nexus.LocateEvidence(ctx, nexus.LocateEvidenceRequest{
-			TicketID: ticket, EnterpriseID: req.EnterpriseID, EvidencePointerID: res.EvidencePointerID,
+		if d.evidence == nil {
+			writeError(w, http.StatusServiceUnavailable, "evidence_unavailable", "AgentNexus evidence surface unavailable")
+			return
+		}
+		located, err := d.evidence.Locate(ctx, nexusruntime.EvidenceRequest{
+			RequestID: "answer-locate-" + res.EvidencePointerID,
+			Purpose:   answerEvidencePurpose,
+			DataNeeds: []nexusruntime.DataNeed{{
+				NeedID:    res.EvidencePointerID,
+				DataClass: answerEvidenceDataClass,
+				Purpose:   answerEvidencePurpose,
+			}},
+			ExpiresAt: time.Now().Add(evidenceRequestTTL).UTC(),
 		})
 		if err != nil {
 			if errors.Is(err, nexusclient.ErrDenied) {
@@ -158,9 +172,17 @@ func (d *answerDeps) handleAnswer(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadGateway, "nexus_locate_failed", err.Error())
 			return
 		}
-		read, err := d.nexus.ReadEvidence(ctx, nexus.ReadEvidenceRequest{
-			TicketID: ticket, EnterpriseID: req.EnterpriseID,
-			ResourceURI: loc.ResourceURI, EvidencePointerID: res.EvidencePointerID,
+		if len(located.Evidence) == 0 {
+			// Located nothing is not a denial and not a fault: the pointer
+			// simply resolves to no readable evidence for this principal.
+			continue
+		}
+		read, err := d.evidence.Read(ctx, nexusruntime.EvidenceReadRequest{
+			RequestID:          "answer-read-" + res.EvidencePointerID,
+			BusinessContextRef: located.BusinessContextRef,
+			EvidenceRef:        located.Evidence[0].EvidenceRef,
+			Purpose:            answerEvidencePurpose,
+			ExpiresAt:          time.Now().Add(evidenceRequestTTL).UTC(),
 		})
 		if err != nil {
 			if errors.Is(err, nexusclient.ErrDenied) {
@@ -171,8 +193,18 @@ func (d *answerDeps) handleAnswer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		evidenceIDs = append(evidenceIDs, res.EvidencePointerID)
-		grantIDs = append(grantIDs, read.GrantID)
-		excerpts = append(excerpts, read.SanitizedExcerpt)
+		grantIDs = append(grantIDs, read.GrantRef)
+		// The frozen read returns normalized, policy-masked business FIELDS
+		// rather than a prose excerpt. Serialize them verbatim instead of
+		// summarizing: any summarization here would be an ungrounded claim
+		// entering the answer, and the Answer Trace could no longer point at
+		// what the model actually saw.
+		rendered, err := json.Marshal(read.Data)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "evidence_render_failed", err.Error())
+			return
+		}
+		excerpts = append(excerpts, string(rendered))
 	}
 	steps = append(steps, trace.Step{Kind: "evidence_read", Detail: map[string]any{
 		"granted": len(grantIDs), "denied": denied,

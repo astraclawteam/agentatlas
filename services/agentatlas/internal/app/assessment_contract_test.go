@@ -140,7 +140,7 @@ func TestAssessmentContract(t *testing.T) {
 	corr := assessment.NewMemoryCorrectionStore(assessNow)
 	corrections := assessment.NewCorrectionService(corr, results, stubReeval{base: appAssessment(assessSubject, 1)}, assessNow)
 
-	router := NewRouter(RouterDeps{Nexus: assessTicketMock(), AssessmentResults: results, AssessmentCorrections: corrections})
+	router := NewRouter(RouterDeps{Evidence: &fakeFrozenEvidence{}, Nexus: assessTicketMock(), AssessmentResults: results, AssessmentCorrections: corrections})
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
 
@@ -198,7 +198,7 @@ func TestAssessmentAudit(t *testing.T) {
 	corr := assessment.NewMemoryCorrectionStore(assessNow)
 	corrections := assessment.NewCorrectionService(corr, results, stubReeval{base: appAssessment(assessSubject, 1)}, assessNow)
 
-	router := NewRouter(RouterDeps{Nexus: assessTicketMock(), AssessmentResults: results, AssessmentCorrections: corrections})
+	router := NewRouter(RouterDeps{Evidence: &fakeFrozenEvidence{}, Nexus: assessTicketMock(), AssessmentResults: results, AssessmentCorrections: corrections})
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
 

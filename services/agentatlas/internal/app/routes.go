@@ -47,7 +47,9 @@ func newID(prefix string) string {
 
 // RouterDeps is the composition surface for the runtime API.
 type RouterDeps struct {
-	Nexus     nexus.Client
+	Nexus nexus.Client
+	// Evidence is the frozen-contract evidence surface.
+	Evidence  FrozenEvidenceClient
 	Retrieval *retrieval.Service
 	Traces    *trace.Service
 	LLM       model.LLM
@@ -69,7 +71,7 @@ type RouterDeps struct {
 
 // NewRouter builds the atlas-api HTTP surface (api/openapi/atlas-runtime.yaml).
 func NewRouter(deps RouterDeps) *chi.Mux {
-	answer := &answerDeps{nexus: deps.Nexus, retrieval: deps.Retrieval, traces: deps.Traces, llm: deps.LLM}
+	answer := &answerDeps{nexus: deps.Nexus, evidence: deps.Evidence, retrieval: deps.Retrieval, traces: deps.Traces, llm: deps.LLM}
 	briefs := &briefDeps{nexus: deps.Nexus, store: deps.Store, runner: deps.Runner}
 	artifactsH := &artifactHandler{nexus: deps.Nexus, artifacts: deps.Artifacts}
 	planSteps := deps.PlanSteps
