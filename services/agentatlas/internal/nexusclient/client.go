@@ -41,8 +41,6 @@ type HTTPClient struct {
 	grantTracker       *nexus.GrantUsageTracker
 }
 
-// ConfigureApprovalFactsSecret loads the dedicated HMAC key shared only with
-// the AgentNexus approval verifier. It must not reuse the service credential.
 var _ nexus.Client = (*HTTPClient)(nil)
 var _ nexus.ApprovalClient = (*HTTPClient)(nil)
 var _ nexus.BrowserBFFClient = (*HTTPClient)(nil)
@@ -100,8 +98,7 @@ func New(baseURL string, timeout time.Duration, serviceClientID, serviceSecretFi
 // ConfigureActionSigningKey registers the trusted AgentNexus ed25519 public
 // key used to verify ActionReceipt/ObservationReceipt signatures on the
 // governed Action Request/Grant/Receipt protocol (GA Task 0D). It follows
-// the same post-construction configuration pattern as
-// ConfigureApprovalFactsSecret rather than an added New parameter, so
+// a post-construction configuration pattern rather than an added New parameter, so
 // New's signature — including the *transportsecurity.Manager parameter
 // Task 13A added — is unchanged. Until this is called, RequestAction still
 // enforces expiry/replay/actor-org/capability/parameter-hash binding on

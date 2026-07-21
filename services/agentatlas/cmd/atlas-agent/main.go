@@ -197,6 +197,12 @@ func run() error {
 		DreamRerun: dreamScheduler, Runner: taskRunner, Metrics: metrics,
 		BrowserSessions: browserSessions, BrowserHandleProtector: protector, Changes: changes, BrowserAuthorizer: rawNexusClient,
 		ApprovalTransmitter: rawNexusClient, ApprovalAuthority: cfg.AgentNexus.ApprovalAuthority,
+		// OrgAuthorization and Evidence are the frozen-contract surfaces the
+		// dream paths reach. Both fail closed when nil, so leaving them unset
+		// did not crash - it made every org check answer 502 and every
+		// evidence drill-down unreachable, while the tests stayed green
+		// because each test sets them itself.
+		OrgAuthorization: rawNexusClient, Evidence: rawNexusClient,
 		TLS: tlsLinks.agentAtlas,
 	})
 

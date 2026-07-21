@@ -36,7 +36,11 @@ config:
   nexusClientId: agentatlas
   nexusServiceSecretName: agentatlas-agentnexus-service
   nexusServiceSecretKey: client-secret
-  nexusApprovalFactsSecretKey: approval-facts-secret
+  # approvalAuthority names the customer OA/BPM system that decides governed
+  # changes. It is a deployment FACT, not a secret: AgentAtlas authors approval
+  # plans and AgentNexus transmits them there. Empty is a deployment gap, not a
+  # default - atlas-agent refuses to start without it.
+  approvalAuthority: ""
   nexusBrowserClientSecretKey: browser-client-secret
   browserSessionEncryptionKeyId: current
   browserSessionEncryptionKey: browser-session-key

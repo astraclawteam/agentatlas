@@ -32,8 +32,12 @@
   value: {{ .Values.config.nexusClientId | quote }}
 - name: ATLAS_NEXUS_SERVICE_SECRET_FILE
   value: /var/run/secrets/agentnexus/client-secret
-- name: ATLAS_NEXUS_APPROVAL_FACTS_SECRET_FILE
-  value: /var/run/secrets/agentnexus/approval-facts-secret
+{{- /* Not `required` here: this env block is shared by every service in the
+       chart, including parser-gateway which has nothing to do with approvals.
+       atlas-agent refuses to start on an empty value (cmd/atlas-agent/main.go),
+       which is the enforcement point that actually knows it needs one. */}}
+- name: ATLAS_APPROVAL_AUTHORITY
+  value: {{ .Values.config.approvalAuthority | quote }}
 - name: ATLAS_NEXUS_BROWSER_CLIENT_ID
   value: {{ .Values.config.nexusClientId | quote }}
 - name: ATLAS_NEXUS_BROWSER_CLIENT_SECRET_FILE
@@ -73,9 +77,6 @@
     items:
       - key: {{ .Values.config.nexusServiceSecretKey | quote }}
         path: client-secret
-        mode: 0400
-      - key: {{ .Values.config.nexusApprovalFactsSecretKey | quote }}
-        path: approval-facts-secret
         mode: 0400
       - key: {{ .Values.config.nexusBrowserClientSecretKey | quote }}
         path: browser-client-secret
