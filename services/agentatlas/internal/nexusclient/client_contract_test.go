@@ -92,9 +92,21 @@ func contractServer(t *testing.T, serviceSecret string) *httptest.Server {
 	})
 
 	mux.HandleFunc("GET /v1/org-events", func(w http.ResponseWriter, r *http.Request) {
-		assertNoServiceAuthorization(t, r)
-		if r.URL.Query().Get("enterprise_id") == "" {
-			http.Error(w, "enterprise_id required", http.StatusBadRequest)
+		// The frozen operation is security:[{trustedServiceSecret}], and the
+		// real AgentNexus handler 401s on anything that is not a verified
+		// service credential. This previously asserted the OPPOSITE - that a
+		// credential here was a leak - which encoded a proposal-era belief and
+		// pinned the client into sending a request that could only ever 401.
+		user, secret, ok := r.BasicAuth()
+		if !ok || user != "agentatlas" || secret != serviceSecret {
+			http.Error(w, "invalid_service", http.StatusUnauthorized)
+			return
+		}
+		// Tenant scope comes from that credential. The contract declares
+		// since_version as the ONLY parameter, so a caller-supplied
+		// enterprise_id is a forbidden org fact crossing the boundary.
+		if r.URL.Query().Has("enterprise_id") {
+			http.Error(w, "enterprise_id is not a declared parameter", http.StatusBadRequest)
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")

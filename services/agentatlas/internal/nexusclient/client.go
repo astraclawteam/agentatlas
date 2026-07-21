@@ -372,21 +372,48 @@ func (c *HTTPClient) bearerPost(ctx context.Context, path, accessToken, idempote
 // processed org_version).
 func (c *HTTPClient) SubscribeOrgEvents(ctx context.Context, enterpriseID string, sinceVersion int64, handler nexus.OrgEventHandler) error {
 	q := url.Values{}
-	q.Set("enterprise_id", enterpriseID)
+	// Deliberately NO enterprise_id. The frozen operation declares exactly one
+	// parameter, since_version, and states that tenant scope "is derived from
+	// the verified service credential and never travels as a request
+	// parameter". Sending it was a caller-supplied org fact crossing the
+	// boundary; the server ignored it, so it was a silent lie rather than a
+	// rejection.
 	q.Set("since_version", strconv.FormatInt(sinceVersion, 10))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/org-events?"+q.Encode(), nil)
 	if err != nil {
 		return fmt.Errorf("nexus org-events: %w", err)
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	// The frozen operation is security:[{trustedServiceSecret}]. This request
+	// previously carried no credential at all: basic auth is applied only
+	// inside doPost, behind a path allowlist this GET never passes through, so
+	// against a real AgentNexus it could only ever 401. It went unnoticed
+	// because the composition root is env-gated and has never run.
+	req.SetBasicAuth(c.serviceClientID, c.serviceSecret)
 
-	// The stream is long-lived; bypass the client-level timeout.
-	streaming := &http.Client{Transport: c.http.Transport}
+	// The stream is long-lived, so it bypasses the client-level timeout - but
+	// it must NOT bypass the no-follow redirect guard installed in New. Building
+	// a client from the transport alone dropped that guard, which was harmless
+	// only while the request was unauthenticated; now that it carries a
+	// credential, following a redirect would forward the Authorization header
+	// to whatever host the response named.
+	streaming := &http.Client{
+		Transport: c.http.Transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	resp, err := streaming.Do(req)
 	if err != nil {
 		return fmt.Errorf("nexus org-events: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusConflict {
+		// The contract declares 409 for a cursor ahead of the sealed version.
+		// That is a corrupt-consumer signal, not a transient fault, and callers
+		// must not retry it in a loop: the cursor has to be reset deliberately.
+		return fmt.Errorf("%w: since_version %d is ahead of the sealed org version", ErrOrgCursorAhead, sinceVersion)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("nexus org-events: status %d", resp.StatusCode)
 	}
