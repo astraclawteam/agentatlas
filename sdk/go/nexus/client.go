@@ -29,34 +29,9 @@ type VerifyTicketResponse struct {
 	ExpiresAt      time.Time `json:"expires_at,omitempty"`
 }
 
-type LocateEvidenceRequest struct {
-	TicketID          string `json:"ticket_id"`
-	EnterpriseID      string `json:"enterprise_id"`
-	EvidencePointerID string `json:"evidence_pointer_id,omitempty"`
-	ResourceURI       string `json:"resource_uri,omitempty"`
-	QueryIntent       string `json:"query_intent,omitempty"`
-}
 
-type LocateEvidenceResponse struct {
-	ResourceURI   string         `json:"resource_uri"`
-	SourceSystem  string         `json:"source_system"`
-	LocationHints map[string]any `json:"location_hints,omitempty"`
-}
 
-type ReadEvidenceRequest struct {
-	TicketID          string `json:"ticket_id"`
-	EnterpriseID      string `json:"enterprise_id"`
-	ResourceURI       string `json:"resource_uri"`
-	EvidencePointerID string `json:"evidence_pointer_id,omitempty"`
-	MaxBytes          int    `json:"max_bytes,omitempty"`
-}
 
-type ReadEvidenceResponse struct {
-	GrantID          string `json:"grant_id"`
-	ContentType      string `json:"content_type"`
-	SanitizedExcerpt string `json:"sanitized_excerpt"`
-	ContentHash      string `json:"content_hash"`
-}
 
 // AuditAction enumerates the AgentAtlas actions that must reach the
 // AgentNexus audit chain.
@@ -151,8 +126,6 @@ type OrgEventHandler func(ctx context.Context, event OrgEvent) error
 // Client is the only doorway from AgentAtlas to enterprise resources.
 type Client interface {
 	VerifyTicket(ctx context.Context, req VerifyTicketRequest) (VerifyTicketResponse, error)
-	LocateEvidence(ctx context.Context, req LocateEvidenceRequest) (LocateEvidenceResponse, error)
-	ReadEvidence(ctx context.Context, req ReadEvidenceRequest) (ReadEvidenceResponse, error)
 	AppendAuditEvidence(ctx context.Context, req AppendAuditEvidenceRequest) (AppendAuditEvidenceResponse, error)
 	SubscribeOrgEvents(ctx context.Context, enterpriseID string, sinceVersion int64, handler OrgEventHandler) error
 }

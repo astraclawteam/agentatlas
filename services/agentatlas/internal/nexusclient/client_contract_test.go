@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
+	nexusruntime "github.com/astraclawteam/agentnexus/sdk/go/runtime"
 )
 
 // contractServer implements the agentnexus-client.yaml surface.
@@ -39,24 +40,30 @@ func contractServer(t *testing.T, serviceSecret string) *httptest.Server {
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
-	mux.HandleFunc("POST /v1/evidence/locate", func(w http.ResponseWriter, r *http.Request) {
+	// The frozen evidence surface. Denial is keyed by the DECLARED NEED now:
+	// there is no ticket in the body to key it by.
+	mux.HandleFunc("POST /v1/runtime/locate", func(w http.ResponseWriter, r *http.Request) {
 		assertNoServiceAuthorization(t, r)
-		_ = json.NewEncoder(w).Encode(nexus.LocateEvidenceResponse{
-			ResourceURI: "fs://briefs/2026-07-06.md", SourceSystem: "filesystem",
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"business_context_ref": "wc_0123456789abcdef0123",
+			"evidence": []map[string]any{{
+				"evidence_ref": "evd_0123456789abcdef0123", "data_class": "test.evidence",
+			}},
 		})
 	})
 
-	mux.HandleFunc("POST /v1/evidence/read", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /v1/runtime/read", func(w http.ResponseWriter, r *http.Request) {
 		assertNoServiceAuthorization(t, r)
-		var req nexus.ReadEvidenceRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if req.TicketID == "tick_denied" {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if ref, _ := body["evidence_ref"].(string); ref == "evd_denied0000000000" {
 			http.Error(w, `{"code":"forbidden","message":"scope missing"}`, http.StatusForbidden)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(nexus.ReadEvidenceResponse{
-			GrantID: "grant_1", ContentType: "text/plain",
-			SanitizedExcerpt: "完成分拣规则联调", ContentHash: "sha256:x",
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"decision": "allow", "grant_ref": "grn_0123456789abcdef",
+			"data":           map[string]any{"detail": "ok"},
+			"source_version": 1, "as_of": "2026-07-21T00:00:00Z", "served_from_cache": false,
 		})
 	})
 
@@ -147,18 +154,33 @@ func TestHTTPClientContract(t *testing.T) {
 		t.Fatalf("invalid ticket must be valid=false without transport error: %+v err=%v", invalid, err)
 	}
 
-	loc, err := c.LocateEvidence(ctx, nexus.LocateEvidenceRequest{TicketID: "tick_ok", EnterpriseID: "ent_1", EvidencePointerID: "ev_1"})
-	if err != nil || loc.SourceSystem != "filesystem" {
-		t.Fatalf("locate: %+v err=%v", loc, err)
+	sample := func(ref string) nexusruntime.EvidenceReadRequest {
+		return nexusruntime.EvidenceReadRequest{
+			RequestID: "contract-read-0001", BusinessContextRef: "wc_0123456789abcdef0123",
+			EvidenceRef: ref, Purpose: "contract_test",
+			ExpiresAt: time.Now().Add(time.Minute).UTC(),
+		}
+	}
+	located, err := c.Locate(ctx, nexusruntime.EvidenceRequest{
+		RequestID: "contract-locate-0001", Purpose: "contract_test",
+		DataNeeds: []nexusruntime.DataNeed{{NeedID: "need-1", DataClass: "test.evidence", Purpose: "contract_test"}},
+		ExpiresAt: time.Now().Add(time.Minute).UTC(),
+	})
+	if err != nil || len(located.Evidence) != 1 || located.Evidence[0].EvidenceRef == "" {
+		t.Fatalf("locate: %+v err=%v", located, err)
 	}
 
-	read, err := c.ReadEvidence(ctx, nexus.ReadEvidenceRequest{TicketID: "tick_ok", EnterpriseID: "ent_1", ResourceURI: loc.ResourceURI})
-	if err != nil || read.GrantID != "grant_1" || read.SanitizedExcerpt == "" {
+	read, err := c.Read(ctx, sample(located.Evidence[0].EvidenceRef))
+	if err != nil || read.GrantRef == "" || read.Decision != "allow" {
 		t.Fatalf("read: %+v err=%v", read, err)
 	}
+	// The freshness disclosure must survive decoding: a caller that cannot see
+	// served_from_cache cannot tell a staged answer from a live one.
+	if read.AsOf == "" || read.SourceVersion == 0 {
+		t.Fatalf("freshness disclosure lost: %+v", read)
+	}
 
-	_, err = c.ReadEvidence(ctx, nexus.ReadEvidenceRequest{TicketID: "tick_denied", EnterpriseID: "ent_1", ResourceURI: loc.ResourceURI})
-	if !errors.Is(err, ErrDenied) {
+	if _, err := c.Read(ctx, sample("evd_denied0000000000")); !errors.Is(err, ErrDenied) {
 		t.Fatalf("denied read must map to ErrDenied, got %v", err)
 	}
 
@@ -264,9 +286,6 @@ func TestMockImplementsContract(t *testing.T) {
 
 	if resp, _ := m.VerifyTicket(ctx, nexus.VerifyTicketRequest{TicketID: "tick_ok"}); !resp.Valid {
 		t.Fatal("mock verify failed")
-	}
-	if _, err := m.ReadEvidence(ctx, nexus.ReadEvidenceRequest{ResourceURI: "fs://missing"}); !errors.Is(err, ErrDenied) {
-		t.Fatalf("mock unknown read must deny, got %v", err)
 	}
 	var n int
 	if err := m.SubscribeOrgEvents(ctx, "ent_1", 0, func(context.Context, nexus.OrgEvent) error {

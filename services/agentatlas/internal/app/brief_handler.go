@@ -116,8 +116,8 @@ func (d *briefDeps) handleIngest(w http.ResponseWriter, r *http.Request) {
 	pointer, err := d.store.CreateEvidencePointer(ctx, db.CreateEvidencePointerParams{
 		ID: newID("ev"), EnterpriseID: req.EnterpriseID,
 		ResourceType: resourceType, ResourceRef: req.EvidencePointer.ResourceRef,
-		SourceSystem: req.EvidencePointer.SourceSystem,
-		ContentHash:  req.EvidencePointer.ContentHash,
+		SourceSystem:          req.EvidencePointer.SourceSystem,
+		ContentHash:           req.EvidencePointer.ContentHash,
 		AgentnexusResourceUri: req.EvidencePointer.AgentNexusResourceURI,
 		RequiredScopes:        orEmptySlice(req.EvidencePointer.RequiredScopes),
 	})
@@ -137,8 +137,8 @@ func (d *briefDeps) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 	node, err := d.store.InsertTimelineNode(ctx, db.InsertTimelineNodeParams{
 		ID: newID("tl"), EnterpriseID: req.EnterpriseID, SpaceID: space.ID,
-		OrgScope: space.OrgScope,
-		NodeTime: pgtype.Timestamptz{Time: briefDate.Add(12 * time.Hour), Valid: true},
+		OrgScope:   space.OrgScope,
+		NodeTime:   pgtype.Timestamptz{Time: briefDate.Add(12 * time.Hour), Valid: true},
 		SourceType: "work_brief", SummaryText: summary,
 		Tags: orEmptySlice(req.Topics), EvidencePointerID: pgtype.Text{String: pointer.ID, Valid: true},
 	})

@@ -239,12 +239,6 @@ type replayClient struct{ events []nexus.OrgEvent }
 func (r *replayClient) VerifyTicket(context.Context, nexus.VerifyTicketRequest) (nexus.VerifyTicketResponse, error) {
 	return nexus.VerifyTicketResponse{}, nil
 }
-func (r *replayClient) LocateEvidence(context.Context, nexus.LocateEvidenceRequest) (nexus.LocateEvidenceResponse, error) {
-	return nexus.LocateEvidenceResponse{}, nil
-}
-func (r *replayClient) ReadEvidence(context.Context, nexus.ReadEvidenceRequest) (nexus.ReadEvidenceResponse, error) {
-	return nexus.ReadEvidenceResponse{}, nil
-}
 func (r *replayClient) AppendAuditEvidence(context.Context, nexus.AppendAuditEvidenceRequest) (nexus.AppendAuditEvidenceResponse, error) {
 	return nexus.AppendAuditEvidenceResponse{AuditRefID: "a"}, nil
 }

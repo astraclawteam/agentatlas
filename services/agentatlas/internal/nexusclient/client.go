@@ -315,18 +315,6 @@ func (c *HTTPClient) VerifyTicket(ctx context.Context, req nexus.VerifyTicketReq
 	return out, err
 }
 
-func (c *HTTPClient) LocateEvidence(ctx context.Context, req nexus.LocateEvidenceRequest) (nexus.LocateEvidenceResponse, error) {
-	var out nexus.LocateEvidenceResponse
-	err := c.post(ctx, "/v1/evidence/locate", req, &out)
-	return out, err
-}
-
-func (c *HTTPClient) ReadEvidence(ctx context.Context, req nexus.ReadEvidenceRequest) (nexus.ReadEvidenceResponse, error) {
-	var out nexus.ReadEvidenceResponse
-	err := c.post(ctx, "/v1/evidence/read", req, &out)
-	return out, err
-}
-
 func (c *HTTPClient) AppendAuditEvidence(ctx context.Context, req nexus.AppendAuditEvidenceRequest) (nexus.AppendAuditEvidenceResponse, error) {
 	var out nexus.AppendAuditEvidenceResponse
 	err := c.post(ctx, "/v1/audit/evidence", req, &out)
@@ -413,17 +401,6 @@ func (c *HTTPClient) AppendAuditEvidenceWithBearer(ctx context.Context, accessTo
 	return out, err
 }
 
-func (c *HTTPClient) LocateEvidenceWithBearer(ctx context.Context, accessToken string, input nexus.LocateEvidenceRequest) (nexus.LocateEvidenceResponse, error) {
-	var out nexus.LocateEvidenceResponse
-	err := c.bearerPost(ctx, "/v1/evidence/locate", accessToken, "", input, &out, nil)
-	return out, err
-}
-
-func (c *HTTPClient) ReadEvidenceWithBearer(ctx context.Context, accessToken string, input nexus.ReadEvidenceRequest) (nexus.ReadEvidenceResponse, error) {
-	var out nexus.ReadEvidenceResponse
-	err := c.bearerPost(ctx, "/v1/evidence/read", accessToken, "", input, &out, nil)
-	return out, err
-}
 func (c *HTTPClient) bearerPost(ctx context.Context, path, accessToken, idempotency string, in, out any, headers map[string]string) error {
 	if len(accessToken) < 16 {
 		return fmt.Errorf("nexus %s: missing BFF credential", path)

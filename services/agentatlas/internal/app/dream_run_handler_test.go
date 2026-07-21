@@ -14,7 +14,6 @@ import (
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
-	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -70,12 +69,9 @@ func (f *fakeDreamRunStore) ListDreamRunChildrenByParentBounded(_ context.Contex
 
 type evidenceNexus struct {
 	scopes        []string
-	denyRead      bool
 	failAudit     bool
 	emptyAudit    bool
 	orgAuth       map[string]bool
-	locates       []nexus.LocateEvidenceRequest
-	reads         []nexus.ReadEvidenceRequest
 	audits        []nexus.AppendAuditEvidenceRequest
 	auditReceipts map[string]string
 }
@@ -123,23 +119,6 @@ func (f *fakeDreamRerunner) LookupRerun(_ context.Context, _, sourceRun, key str
 
 func (n *evidenceNexus) VerifyTicket(context.Context, nexus.VerifyTicketRequest) (nexus.VerifyTicketResponse, error) {
 	return nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent-1", ActorUserID: "manager-1", Scopes: n.scopes, ExpiresAt: time.Now().Add(time.Hour)}, nil
-}
-func (n *evidenceNexus) LocateEvidence(_ context.Context, p nexus.LocateEvidenceRequest) (nexus.LocateEvidenceResponse, error) {
-	n.locates = append(n.locates, p)
-	if p.ResourceURI != "" {
-		if !n.orgAuth[p.QueryIntent+"|"+p.ResourceURI] {
-			return nexus.LocateEvidenceResponse{}, nexusclient.ErrDenied
-		}
-		return nexus.LocateEvidenceResponse{ResourceURI: p.ResourceURI, SourceSystem: "agentatlas"}, nil
-	}
-	return nexus.LocateEvidenceResponse{ResourceURI: "s3://sealed/run-1"}, nil
-}
-func (n *evidenceNexus) ReadEvidence(_ context.Context, p nexus.ReadEvidenceRequest) (nexus.ReadEvidenceResponse, error) {
-	n.reads = append(n.reads, p)
-	if n.denyRead {
-		return nexus.ReadEvidenceResponse{}, nexusclient.ErrDenied
-	}
-	return nexus.ReadEvidenceResponse{GrantID: "grant-bound", ContentType: "text/markdown", SanitizedExcerpt: "sanitized detail", ContentHash: "sha256:abc"}, nil
 }
 func (n *evidenceNexus) AppendAuditEvidence(_ context.Context, p nexus.AppendAuditEvidenceRequest) (nexus.AppendAuditEvidenceResponse, error) {
 	if n.failAudit {
@@ -244,9 +223,8 @@ func TestDreamRoutesRequireScopeAndOrgBoundNexusAuthorization(t *testing.T) {
 		if authz.lastRequest.OrgUnitID != "department:other" || authz.lastRequest.Action == "" {
 			t.Fatalf("authorization binding=%+v", authz.lastRequest)
 		}
-		if len(nx.locates) != 0 {
-			t.Fatalf("authorization still went through evidence locate: %+v", nx.locates)
-		}
+		// That authorization no longer touches evidence locate is now enforced by
+		// the type system: the retired method does not exist.
 	})
 	t.Run("cross org detail denied", func(t *testing.T) {
 		nx := &evidenceNexus{scopes: []string{"dream:read"}, orgAuth: map[string]bool{}}
@@ -277,9 +255,11 @@ func TestDreamRoutesRequireScopeAndOrgBoundNexusAuthorization(t *testing.T) {
 	})
 	t.Run("cross org evidence denied before grant", func(t *testing.T) {
 		nx := &evidenceNexus{scopes: []string{"dream:evidence:read"}, orgAuth: map[string]bool{}}
-		resp := requestDream(t, NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{decision: "deny"}, Nexus: nx, DreamRuns: store}), http.MethodPost, "/v1/dream/runs/run-1/evidence-access", nil)
-		if resp.Code != http.StatusForbidden || len(nx.reads) != 0 {
-			t.Fatalf("status=%d reads=%v", resp.Code, nx.reads)
+		evd := &fakeFrozenEvidence{}
+		resp := requestDream(t, NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{decision: "deny"}, Evidence: evd, Nexus: nx, DreamRuns: store}), http.MethodPost, "/v1/dream/runs/run-1/evidence-access", nil)
+		// Denied before any evidence is touched: the read must not have happened.
+		if resp.Code != http.StatusForbidden || len(evd.reads) != 0 || len(evd.locates) != 0 {
+			t.Fatalf("status=%d locates=%v reads=%v", resp.Code, evd.locates, evd.reads)
 		}
 	})
 }

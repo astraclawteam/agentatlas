@@ -220,12 +220,11 @@ func TestAgentAtlasMVP(t *testing.T) {
 		Valid: true, EnterpriseID: enterpriseID, ActorUserID: "admin",
 		Scopes: []string{"admin"}, ExpiresAt: time.Now().Add(time.Hour),
 	}
+	// Authorized evidence is now keyed by the DECLARED NEED, not by a resource
+	// URI: the frozen contract has no notion of a location a consumer may name.
 	authorized := loadAuthorizedEvidence(t)
-	for uri, grant := range authorized {
-		mock.Reads[uri] = nexus.ReadEvidenceResponse{
-			GrantID: grant.GrantID, ContentType: grant.ContentType,
-			SanitizedExcerpt: grant.SanitizedExcerpt, ContentHash: "sha256:" + grant.GrantID,
-		}
+	for needID, grant := range authorized {
+		mock.SetEvidence(needID, grant.SanitizedExcerpt)
 	}
 
 	// ---- step 1-2: org events -> five knowledge spaces ----
@@ -299,9 +298,9 @@ func TestAgentAtlasMVP(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mock.Locations[node.EvidencePointerID.String] = nexus.LocateEvidenceResponse{
-			ResourceURI: b.ResourceRef, SourceSystem: "filesystem",
-		}
+		// Authorizing a pointer now means making it a locatable NEED. There is no
+		// resource URI to register: the consumer never names a location.
+		mock.SetEvidence(node.EvidencePointerID.String, b.ResourceRef)
 	}
 
 	// ---- step 4-7: SOP document -> workflow draft -> immutable publish ----

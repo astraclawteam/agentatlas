@@ -17,10 +17,10 @@ import (
 type Mock struct {
 	mu sync.Mutex
 
-	Tickets          map[string]nexus.VerifyTicketResponse   // ticket_id -> response
-	Locations        map[string]nexus.LocateEvidenceResponse // pointer id or uri -> location
-	Reads            map[string]nexus.ReadEvidenceResponse   // resource_uri -> excerpt
-	DenyReads        bool
+	// evidence is the frozen-contract fixture: need id -> detail.
+	evidence map[string]string
+
+	Tickets          map[string]nexus.VerifyTicketResponse // ticket_id -> response
 	OrgEvents        []nexus.OrgEvent
 	ApprovalRoute    nexus.ApprovalRoute
 	ApprovalErr      error
@@ -49,9 +49,7 @@ var _ nexus.Client = (*Mock)(nil)
 
 func NewMock() *Mock {
 	return &Mock{
-		Tickets:   map[string]nexus.VerifyTicketResponse{},
-		Locations: map[string]nexus.LocateEvidenceResponse{},
-		Reads:     map[string]nexus.ReadEvidenceResponse{},
+		Tickets: map[string]nexus.VerifyTicketResponse{},
 	}
 }
 
@@ -62,39 +60,6 @@ func (m *Mock) VerifyTicket(_ context.Context, req nexus.VerifyTicketRequest) (n
 		return resp, nil
 	}
 	return nexus.VerifyTicketResponse{Valid: false}, nil
-}
-
-func (m *Mock) LocateEvidence(_ context.Context, req nexus.LocateEvidenceRequest) (nexus.LocateEvidenceResponse, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if loc, ok := m.Locations[req.EvidencePointerID]; ok {
-		return loc, nil
-	}
-	if loc, ok := m.Locations[req.ResourceURI]; ok {
-		return loc, nil
-	}
-	if strings.HasPrefix(req.ResourceURI, "agentatlas://dream/") {
-		if ticket, ok := m.Tickets[req.TicketID]; ok && ticket.Valid {
-			for _, scope := range ticket.Scopes {
-				if scope == "admin" || scope == req.QueryIntent {
-					return nexus.LocateEvidenceResponse{ResourceURI: req.ResourceURI}, nil
-				}
-			}
-		}
-	}
-	return nexus.LocateEvidenceResponse{}, fmt.Errorf("locate %q: %w", req.EvidencePointerID, ErrDenied)
-}
-
-func (m *Mock) ReadEvidence(_ context.Context, req nexus.ReadEvidenceRequest) (nexus.ReadEvidenceResponse, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.DenyReads {
-		return nexus.ReadEvidenceResponse{}, fmt.Errorf("read %q: %w", req.ResourceURI, ErrDenied)
-	}
-	if r, ok := m.Reads[req.ResourceURI]; ok {
-		return r, nil
-	}
-	return nexus.ReadEvidenceResponse{}, fmt.Errorf("read %q: %w", req.ResourceURI, ErrDenied)
 }
 
 func (m *Mock) AppendAuditEvidence(_ context.Context, req nexus.AppendAuditEvidenceRequest) (nexus.AppendAuditEvidenceResponse, error) {
@@ -143,4 +108,44 @@ func (m *Mock) SubscribeOrgEvents(ctx context.Context, enterpriseID string, sinc
 		}
 	}
 	return nil
+}
+
+// Evidence is the frozen-contract evidence fixture: need id -> detail. A need
+// absent from the map is simply not located, which the frozen contract models
+// as an empty handle list rather than as a denial.
+func (m *Mock) SetEvidence(needID, detail string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.evidence == nil {
+		m.evidence = map[string]string{}
+	}
+	m.evidence[needID] = detail
+}
+
+// EvidenceAllowed reports whether a declared need resolves to readable
+// evidence for this fixture.
+func (m *Mock) EvidenceAllowed(needID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.evidence[needID]
+	return ok
+}
+
+// EvidenceDetail resolves an opaque handle back to its fixture detail. The
+// handle grammar is evd_<padded need id>, so the mock can round-trip without
+// keeping a second index.
+func (m *Mock) EvidenceDetail(evidenceRef string) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	trimmed := strings.TrimPrefix(evidenceRef, "evd_")
+	for needID, detail := range m.evidence {
+		padded := needID
+		for len(padded) < 16 {
+			padded += "0"
+		}
+		if padded == trimmed {
+			return detail, true
+		}
+	}
+	return "", false
 }

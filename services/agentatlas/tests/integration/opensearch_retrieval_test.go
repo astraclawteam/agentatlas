@@ -126,7 +126,7 @@ func TestOpenSearchRetrieval(t *testing.T) {
 	nodeID := newID("tl")
 	if _, err := q.InsertTimelineNode(ctx, db.InsertTimelineNodeParams{
 		ID: nodeID, EnterpriseID: entA, SpaceID: spaceID, OrgScope: "employee:u1",
-		NodeTime: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		NodeTime:   pgtype.Timestamptz{Time: time.Now(), Valid: true},
 		SourceType: "work_brief", SummaryText: "完成 MES 异常工单分拣规则联调，遗留接口限流风险。",
 		Tags: []string{"MES"}, EvidencePointerID: pgtype.Text{String: epID, Valid: true},
 	}); err != nil {

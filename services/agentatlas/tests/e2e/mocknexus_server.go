@@ -4,14 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
+	nexusruntime "github.com/astraclawteam/agentnexus/sdk/go/runtime"
 )
 
 // startMockNexusServer serves the agentnexus-client.yaml proposal contract
@@ -32,26 +35,59 @@ func startMockNexusServer(t *testing.T, addr string, backing *nexusclient.Mock, 
 		writeJSONMock(w, http.StatusOK, resp)
 	})
 
-	mux.HandleFunc("POST /v1/evidence/locate", func(w http.ResponseWriter, r *http.Request) {
-		var req nexus.LocateEvidenceRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		resp, err := backing.LocateEvidence(r.Context(), req)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusForbidden) // fail closed
+	// The frozen evidence surface. This mock is deliberately strict about the
+	// REQUEST it accepts: the whole point of the migration is that identity and
+	// connector topology no longer travel in the body, so a mock that tolerated
+	// them would let a regression pass here and fail against a real AgentNexus.
+	mux.HandleFunc("POST /v1/runtime/locate", func(w http.ResponseWriter, r *http.Request) {
+		var req nexusruntime.EvidenceRequest
+		body, _ := io.ReadAll(r.Body)
+		if rejectRetiredEvidenceFields(w, body) {
 			return
 		}
-		writeJSONMock(w, http.StatusOK, resp)
+		_ = json.Unmarshal(body, &req)
+		if err := req.Validate(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		handles := make([]nexusruntime.EvidenceHandle, 0, len(req.DataNeeds))
+		for _, need := range req.DataNeeds {
+			if !backing.EvidenceAllowed(need.NeedID) {
+				continue
+			}
+			handles = append(handles, nexusruntime.EvidenceHandle{
+				EvidenceRef: "evd_" + padRef(need.NeedID), DataClass: need.DataClass,
+			})
+		}
+		writeJSONMock(w, http.StatusOK, map[string]any{
+			"business_context_ref": "wc_" + padRef("mocknexus"),
+			"evidence":             handles,
+		})
 	})
 
-	mux.HandleFunc("POST /v1/evidence/read", func(w http.ResponseWriter, r *http.Request) {
-		var req nexus.ReadEvidenceRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		resp, err := backing.ReadEvidence(r.Context(), req)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusForbidden) // fail closed
+	mux.HandleFunc("POST /v1/runtime/read", func(w http.ResponseWriter, r *http.Request) {
+		var req nexusruntime.EvidenceReadRequest
+		body, _ := io.ReadAll(r.Body)
+		if rejectRetiredEvidenceFields(w, body) {
 			return
 		}
-		writeJSONMock(w, http.StatusOK, resp)
+		_ = json.Unmarshal(body, &req)
+		if err := req.Validate(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		detail, ok := backing.EvidenceDetail(req.EvidenceRef)
+		if !ok {
+			http.Error(w, "no evidence under handle", http.StatusForbidden) // fail closed
+			return
+		}
+		// The freshness trio is always present on an allowed read.
+		writeJSONMock(w, http.StatusOK, map[string]any{
+			"decision": "allow", "grant_ref": "grn_" + padRef(req.EvidenceRef),
+			"data":           map[string]any{"detail": detail},
+			"source_version": 1, "as_of": "2026-07-21T00:00:00Z",
+			"served_from_cache": false,
+		})
 	})
 
 	mux.HandleFunc("POST /v1/audit/evidence", func(w http.ResponseWriter, r *http.Request) {
@@ -116,4 +152,44 @@ func writeJSONMock(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// rejectRetiredEvidenceFields fails any request that still carries identity or
+// connector topology in its body. A mock that quietly tolerated them would let
+// a regression pass end-to-end here and only fail against a real AgentNexus,
+// which is precisely how the drift this migration fixed went unnoticed.
+func rejectRetiredEvidenceFields(w http.ResponseWriter, body []byte) bool {
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		http.Error(w, "malformed evidence request", http.StatusBadRequest)
+		return true
+	}
+	for _, retired := range []string{"ticket_id", "enterprise_id", "resource_uri", "evidence_pointer_id", "query_intent", "max_bytes"} {
+		if _, present := raw[retired]; present {
+			http.Error(w, "retired field on the frozen evidence contract: "+retired, http.StatusBadRequest)
+			return true
+		}
+	}
+	return false
+}
+
+// padRef pads a seed into the >=16-character opaque handle grammar the frozen
+// contract requires, so the mock's handles pass the same validation a real one
+// would.
+func padRef(seed string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			return r
+		default:
+			return '-'
+		}
+	}, seed)
+	for len(cleaned) < 16 {
+		cleaned += "0"
+	}
+	if len(cleaned) > 128 {
+		cleaned = cleaned[:128]
+	}
+	return cleaned
 }

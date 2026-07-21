@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"testing"
 	"time"
@@ -210,11 +209,9 @@ func TestDreamHierarchy(t *testing.T) {
 
 	nx := nexusclient.NewMock()
 	nx.Tickets["no-evidence"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: ent, ActorUserID: "manager", Scopes: []string{"dream:read"}}
-	nx.Tickets["bound-evidence"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: ent, ActorUserID: "manager", Scopes: []string{"dream:evidence:read"}}
-	orgURI := "agentatlas://dream/enterprises/" + url.PathEscape(ent) + "/org-units/" + url.PathEscape("department:parent")
-	nx.Locations[orgURI] = nexus.LocateEvidenceResponse{ResourceURI: orgURI, SourceSystem: "agentatlas"}
-	nx.Locations[view.EvidencePointerID.String] = nexus.LocateEvidenceResponse{ResourceURI: "s3://sealed/" + parentRun, SourceSystem: "object-storage"}
-	nx.Reads["s3://sealed/"+parentRun] = nexus.ReadEvidenceResponse{GrantID: "grant-hierarchy", ContentType: "text/markdown", SanitizedExcerpt: "sanitized parent detail", ContentHash: "sha256:detail"}
+	// Authorization no longer runs through evidence, and evidence is keyed by the
+	// declared need rather than by a resource URI.
+	nx.SetEvidence(view.EvidencePointerID.String, "sanitized parent detail")
 	router := app.NewAgentRouter(app.AgentRouterDeps{Nexus: nx, Store: q})
 	for ticket, want := range map[string]int{"no-evidence": http.StatusForbidden, "bound-evidence": http.StatusOK} {
 		req := httptest.NewRequest(http.MethodPost, "/v1/dream/runs/"+parentRun+"/evidence-access", nil)

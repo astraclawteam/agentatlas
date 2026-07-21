@@ -208,31 +208,31 @@ func assertEnum(t *testing.T, schema map[string]any, want []any) {
 // here makes the committed gen packages a compile-time dependency of the
 // suite, so "spec regenerated but not committed" breaks the build.
 var (
-	_ = runtimeapi.AnswerTrace{}
-	_ = runtimeapi.WorkBriefIngest{}
-	_ = runtimeapi.RetrievalPlanRequest{}
-	_ = agentapi.CreateWorkflowDraftJSONBody{}
-	_ = agentapi.StartWorkflowRunJSONBody{}
-	_ = agentapi.WorkflowRef{}
-	_ = agentapi.DreamPolicyDefinition{}
-	_ = agentapi.DreamRunView{}
-	_ = agentapi.DreamSummaryView{}
-	_ = agentapi.StructuredSignal{}
-	_ = agentapi.Coverage{}
-	_ = agentapi.MissingInput{}
-	_ = agentapi.ChangeDraft{}
-	_ = agentapi.ChangeDiff{}
-	_ = agentapi.RevisionConflict{}
-	_ = agentapi.UpdateChangeInput{}
-	_ = agentapi.ChangeDecisionInput{}
-	_ = agentapi.UpdateGovernedChangeJSONRequestBody{}
-	_ = agentapi.DecideGovernedChangeJSONRequestBody{}
+	_                                         = runtimeapi.AnswerTrace{}
+	_                                         = runtimeapi.WorkBriefIngest{}
+	_                                         = runtimeapi.RetrievalPlanRequest{}
+	_                                         = agentapi.CreateWorkflowDraftJSONBody{}
+	_                                         = agentapi.StartWorkflowRunJSONBody{}
+	_                                         = agentapi.WorkflowRef{}
+	_                                         = agentapi.DreamPolicyDefinition{}
+	_                                         = agentapi.DreamRunView{}
+	_                                         = agentapi.DreamSummaryView{}
+	_                                         = agentapi.StructuredSignal{}
+	_                                         = agentapi.Coverage{}
+	_                                         = agentapi.MissingInput{}
+	_                                         = agentapi.ChangeDraft{}
+	_                                         = agentapi.ChangeDiff{}
+	_                                         = agentapi.RevisionConflict{}
+	_                                         = agentapi.UpdateChangeInput{}
+	_                                         = agentapi.ChangeDecisionInput{}
+	_                                         = agentapi.UpdateGovernedChangeJSONRequestBody{}
+	_                                         = agentapi.DecideGovernedChangeJSONRequestBody{}
 	_ agentapi.AnnotateDreamRunJSONBodyAction = agentapi.Comment
 	_ agentapi.AnnotateDreamRunJSONBodyAction = agentapi.Confirm
 	_ agentapi.AnnotateDreamRunJSONBodyAction = agentapi.MarkIncorrect
 	_ agentapi.AnnotateDreamRunJSONBodyAction = agentapi.Reject
-	_ = agentapi.RiskAssessment{}
-	_ = agentapi.ReviewRoute{}
+	_                                         = agentapi.RiskAssessment{}
+	_                                         = agentapi.ReviewRoute{}
 )
 
 func specPaths(t *testing.T, file string) map[string]bool {

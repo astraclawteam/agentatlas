@@ -166,13 +166,9 @@ func TestAnswerRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	pointerID := node.EvidencePointerID.String
-	mock.Locations[pointerID] = nexus.LocateEvidenceResponse{
-		ResourceURI: "fs://briefs/u_zhang/2026-07-06.md", SourceSystem: "filesystem",
-	}
-	mock.Reads["fs://briefs/u_zhang/2026-07-06.md"] = nexus.ReadEvidenceResponse{
-		GrantID: "grant_e2e", ContentType: "text/markdown",
-		SanitizedExcerpt: "今日完成 MES 分拣规则联调，遗留接口限流风险。", ContentHash: "sha256:brief",
-	}
+	// Authorized evidence is keyed by the declared NEED; the frozen contract has
+	// no resource URI for a consumer to register.
+	mock.SetEvidence(pointerID, "今日完成 MES 分拣规则联调，遗留接口限流风险。")
 
 	// 2) answer with full chain
 	resp, out = do(http.MethodPost, "/v1/answer", "tick_e2e",

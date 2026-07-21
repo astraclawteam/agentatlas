@@ -151,11 +151,6 @@ func TestAnswerFailsClosedWithoutTicket(t *testing.T) {
 func TestAnswerCompletesWithEvidenceAndAudit(t *testing.T) {
 	mock := nexusclient.NewMock()
 	mock.Tickets["tick_ok"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "u_zhang"}
-	mock.Locations["ev_1"] = nexus.LocateEvidenceResponse{ResourceURI: "fs://briefs/1.md", SourceSystem: "filesystem"}
-	mock.Reads["fs://briefs/1.md"] = nexus.ReadEvidenceResponse{
-		GrantID: "grant_1", ContentType: "text/plain",
-		SanitizedExcerpt: "今日完成分拣规则联调。", ContentHash: "sha256:x",
-	}
 	srv, traceStore := testAnswerServer(t, mock)
 
 	resp, out := postAnswer(t, srv.URL, "tick_ok", `{"enterprise_id":"ent_1","question":"我的工作内容是什么？"}`)
