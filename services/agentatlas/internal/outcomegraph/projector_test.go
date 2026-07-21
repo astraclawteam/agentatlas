@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -466,11 +465,103 @@ type racyGraph struct {
 	inner     sync.Mutex // protects the slice itself (no Go data race)
 	nodes     []string   // appended nids; duplicates possible without serialization
 	wm        uint64
+	seam      *readWriteSeam // unserialized runs only; nil when serialize is true
+}
+
+// readWriteSeam forces the outcome of the race instead of hoping for it. It
+// holds a worker inside the non-atomic MERGE window -- after it has read "this
+// nid does not exist yet" and before it writes -- until it can tell whether a
+// second worker got into that same window.
+//
+// It replaces a runtime.Gosched() at this spot. Gosched only HINTS that the
+// scheduler should switch, so under load (a full-repo `go test ./...`) the
+// runtime could serialize the workers by accident: no duplicate appeared and
+// the control assertion failed for a reason unrelated to the code under test.
+//
+// Crucially the seam runs in BOTH modes. An earlier version engaged it only in
+// the unserialized run, which left the serialized assertion vacuous -- deleting
+// the per-tenant lock entirely still passed 10/10, because without forced
+// interleaving the workers simply never collided.
+type readWriteSeam struct {
+	mu       sync.Mutex
+	total    int // workers in this run
+	inWindow int // inside the read->write window, not yet released
+	blocked  int // parked on the serialization lock, so unable to reach the window
+	finished int // done with ProjectBatch
+	opened   bool
+	open     chan struct{}
+}
+
+func newReadWriteSeam(total int) *readWriteSeam {
+	return &readWriteSeam{total: total, open: make(chan struct{})}
+}
+
+// releaseLocked opens the seam once the outcome is decided either way:
+//
+//	inWindow >= 2                          two workers collided -- the hazard is real
+//	inWindow + blocked + finished >= total no one else can possibly arrive
+//
+// The second clause is what makes this deadlock-free under serialization: the
+// lock holder sits in the window while every other worker is parked on the
+// lock, so the run is fully accounted for and the holder is released alone --
+// which is exactly the property "serialized" is supposed to have.
+//
+// It also cannot fire early in the unserialized run: nothing can reach
+// `finished` before the first append, and the first append is downstream of
+// this seam.
+func (s *readWriteSeam) releaseLocked() {
+	if s.opened {
+		return
+	}
+	if s.inWindow >= 2 || s.inWindow+s.blocked+s.finished >= s.total {
+		s.opened = true
+		close(s.open)
+	}
+}
+
+func (s *readWriteSeam) hold() {
+	s.mu.Lock()
+	if s.opened {
+		s.mu.Unlock()
+		return
+	}
+	s.inWindow++
+	s.releaseLocked()
+	opened := s.opened
+	s.mu.Unlock()
+	if !opened {
+		<-s.open
+	}
+}
+
+// blocking/unblocked bracket the wait on the serialization lock so the seam can
+// tell "no one else is coming" from "no one else has got here yet".
+func (s *readWriteSeam) blocking() {
+	s.mu.Lock()
+	s.blocked++
+	s.releaseLocked()
+	s.mu.Unlock()
+}
+
+func (s *readWriteSeam) unblocked() {
+	s.mu.Lock()
+	s.blocked--
+	s.mu.Unlock()
+}
+
+func (s *readWriteSeam) finish() {
+	s.mu.Lock()
+	s.finished++
+	s.releaseLocked()
+	s.mu.Unlock()
 }
 
 func (r *racyGraph) ProjectBatch(_ context.Context, _ string, events []og.ProjectionEvent) (uint64, error) {
+	defer r.seam.finish()
 	if r.serialize {
+		r.seam.blocking()
 		r.outer.Lock()
+		r.seam.unblocked()
 		defer r.outer.Unlock()
 	}
 	r.inner.Lock()
@@ -493,9 +584,12 @@ func (r *racyGraph) ProjectBatch(_ context.Context, _ string, events []og.Projec
 			}
 			r.inner.Unlock()
 			if !exists {
-				if !r.serialize {
-					runtime.Gosched() // widen the non-atomic MERGE window deterministically
-				}
+				// Hold between the read and the write until the seam knows
+				// whether a second worker made it into the same window. Runs in
+				// both modes: under serialization it releases this worker alone
+				// (everyone else is parked on outer), which is the property the
+				// serialized assertion is actually claiming.
+				r.seam.hold()
 				r.inner.Lock()
 				r.nodes = append(r.nodes, id)
 				r.inner.Unlock()
@@ -556,11 +650,12 @@ func TestPerTenantSerializationPreventsDuplicates(t *testing.T) {
 		for i := 0; i < 6; i++ {
 			mustAppend(t, ob, outcomeEvent(outcomeFixture(tenant, fmt.Sprintf("oc-%d", i), 1, "goal.x", fmt.Sprintf("case-%d", i), "agent:planner", "", "")))
 		}
-		g := &racyGraph{serialize: serialize}
+		const workers = 8
+		g := &racyGraph{serialize: serialize, seam: newReadWriteSeam(workers)}
 		var _ og.OutcomeGraphStore = g // must satisfy the provider interface
 		start := make(chan struct{})
 		var wg sync.WaitGroup
-		for k := 0; k < 8; k++ {
+		for k := 0; k < workers; k++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
