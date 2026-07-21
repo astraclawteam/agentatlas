@@ -577,7 +577,7 @@ func TestBrowserDreamRouterRequiresSessionForEveryRouteAndCSRFForeveryMutation(t
 	run.ParentRunIds = nil
 	store := &fakeDreamRunStore{run: run, runs: []db.DreamRun{{ID: run.ID, EnterpriseID: run.EnterpriseID, OrgUnitID: run.OrgUnitID}}}
 	nx := &fakeBrowserDreamNexus{}
-	router := NewAgentRouter(AgentRouterDeps{Nexus: adminMock(), BrowserSessions: sessions, BrowserHandleProtector: protector, BrowserAuthorizer: nx, DreamRuns: store, Dreams: dream.NewPolicyService(&browserPolicyStore{fakePolicyStore: newFakePolicyStore()}), DreamRerun: &fakeDreamRerunner{}})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, Nexus: adminMock(), BrowserSessions: sessions, BrowserHandleProtector: protector, BrowserAuthorizer: nx, DreamRuns: store, Dreams: dream.NewPolicyService(&browserPolicyStore{fakePolicyStore: newFakePolicyStore()}), DreamRerun: &fakeDreamRerunner{}})
 	login := httptest.NewRequest(http.MethodGet, "https://atlas.example/auth/login?return_to=%2Fdream", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, login)

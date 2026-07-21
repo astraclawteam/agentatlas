@@ -127,17 +127,33 @@ func (h *dreamPolicyHandler) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"dream_policies": visible})
 }
 
+// canOrg asks the authorization surface whether the ticket holder may act on
+// one organization unit.
+//
+// It used to synthesize a resource URI, call evidence LOCATE with it, and treat
+// the echoed URI as permission. That put connector topology on the wire and
+// inferred a grant from an echo; the decision belongs to
+// /v1/authorization/decisions, which is what OrgAuthorization reaches.
 func (h *dreamPolicyHandler) canOrg(r *http.Request, action, org string) (bool, error) {
 	actor, _ := actorFrom(r.Context())
-	resource := dreamOrgResourceURI(actor.Ticket.EnterpriseID, org)
-	located, err := h.deps.Nexus.LocateEvidence(r.Context(), nexus.LocateEvidenceRequest{TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, ResourceURI: resource, QueryIntent: action})
+	if h.deps.OrgAuthorization == nil {
+		return false, errors.New("AgentNexus organization authorization unavailable")
+	}
+	decision, err := h.deps.OrgAuthorization.AuthorizeTicketOperation(r.Context(), actor.TicketID, nexus.BrowserAuthorizationRequest{
+		OrgUnitID:    org,
+		OrgVersion:   actor.Ticket.OrgVersion,
+		ResourceType: "dream_policy",
+		ResourceID:   org,
+		Action:       action,
+	})
 	if errors.Is(err, nexusclient.ErrDenied) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	return located.ResourceURI == resource, nil
+	// Only an explicit allow is permission.
+	return decision.Decision == "allow", nil
 }
 
 func (h *dreamPolicyHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -589,7 +605,7 @@ func (h *dreamPolicyHandler) backfill(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *dreamPolicyHandler) authorizeOrg(w http.ResponseWriter, r *http.Request, action, org string) bool {
-	return (&dreamRunHandler{nexus: h.deps.Nexus}).authorizeOrg(w, r, action, org)
+	return (&dreamRunHandler{nexus: h.deps.Nexus, orgAuthorization: h.deps.OrgAuthorization}).authorizeOrg(w, r, action, org)
 }
 func (h *dreamPolicyHandler) audit(w http.ResponseWriter, r *http.Request, action nexus.AuditAction, id string, details map[string]any) (string, bool) {
 	return h.auditWithKey(w, r, action, id, "", details)

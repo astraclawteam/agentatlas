@@ -177,7 +177,7 @@ func TestOpenAPIContractsWellFormed(t *testing.T) {
 			"/v1/workflows", "/v1/workflows/{id}/publish", "/v1/workflows/{id}/runs", "/v1/dream-policies",
 		},
 		"../api/openapi/agentnexus-client.yaml": {
-			"/v1/tickets/verify", "/v1/evidence/locate", "/v1/evidence/read",
+			"/v1/tickets/verify", "/v1/runtime/locate", "/v1/runtime/read",
 			"/v1/audit/evidence", "/v1/org-events",
 		},
 	}

@@ -34,7 +34,7 @@ func TestDecisionRequiresIdempotencyKey(t *testing.T) {
 }
 
 func TestScopedTicketCannotReachUnrelatedAgentRoutes(t *testing.T) {
-	router := NewAgentRouter(AgentRouterDeps{Nexus: scopedWorkflowTicket("wf-bound", "workflow.edit", "publish")})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, Nexus: scopedWorkflowTicket("wf-bound", "workflow.edit", "publish")})
 	paths := []struct{ method, path string }{
 		{http.MethodPost, "/v1/workflows"}, {http.MethodGet, "/v1/workflows"},
 		{http.MethodGet, "/v1/workflows/wf-bound"}, {http.MethodPut, "/v1/workflows/wf-bound"},
@@ -67,7 +67,7 @@ func TestScopedWorkflowPublishRequiresExactResourceAndActions(t *testing.T) {
 		{name: "missing publish", resource: "wf-bound", actions: []string{"workflow.edit"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			router := NewAgentRouter(AgentRouterDeps{Nexus: scopedWorkflowTicket(tc.resource, tc.actions...)})
+			router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, Nexus: scopedWorkflowTicket(tc.resource, tc.actions...)})
 			req := httptest.NewRequest(http.MethodPost, "/v1/workflows/wf-bound/publish", nil)
 			req.Header.Set("X-Nexus-Ticket", "scoped")
 			rr := httptest.NewRecorder()

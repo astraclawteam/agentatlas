@@ -17,7 +17,7 @@ func TestAgentServerHealthAndTicketGuard(t *testing.T) {
 		Valid: true, EnterpriseID: "ent_1", ActorUserID: "admin",
 		Scopes: []string{"admin"}, ExpiresAt: time.Now().Add(time.Hour),
 	}
-	router := NewAgentRouter(AgentRouterDeps{Nexus: mock})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, Nexus: mock})
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 

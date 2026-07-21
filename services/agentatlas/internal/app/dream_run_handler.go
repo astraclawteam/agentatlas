@@ -34,10 +34,14 @@ type dreamRerunner interface {
 }
 
 type dreamRunHandler struct {
-	store      dreamRunStore
-	nexus      nexus.Client
-	rerun      dreamRerunner
-	operations *dream.PolicyService
+	store dreamRunStore
+	nexus nexus.Client
+	// orgAuthorization answers "may this actor act on this org unit?". It is a
+	// separate dependency from nexus because that question belongs to the
+	// authorization surface, not to evidence lookup.
+	orgAuthorization nexus.OrgAuthorizationClient
+	rerun            dreamRerunner
+	operations       *dream.PolicyService
 }
 
 func (h *dreamRunHandler) detail(w http.ResponseWriter, r *http.Request) {
@@ -275,12 +279,19 @@ func (h *dreamRunHandler) authorizeOrg(w http.ResponseWriter, r *http.Request, a
 		writeError(w, http.StatusForbidden, "forbidden", action+" is required")
 		return false
 	}
-	if h.nexus == nil || actor.Ticket.EnterpriseID == "" || strings.TrimSpace(orgUnitID) == "" {
+	if h.orgAuthorization == nil || actor.Ticket.EnterpriseID == "" || strings.TrimSpace(orgUnitID) == "" {
 		writeError(w, http.StatusServiceUnavailable, "authorization_unavailable", "AgentNexus organization authorization unavailable")
 		return false
 	}
-	resourceURI := dreamOrgResourceURI(actor.Ticket.EnterpriseID, orgUnitID)
-	located, err := h.nexus.LocateEvidence(r.Context(), nexus.LocateEvidenceRequest{TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, ResourceURI: resourceURI, QueryIntent: action})
+	// Ask the authorization surface for a decision instead of inferring one
+	// from an evidence lookup echoing back a synthesized resource URI.
+	decision, err := h.orgAuthorization.AuthorizeTicketOperation(r.Context(), actor.TicketID, nexus.BrowserAuthorizationRequest{
+		OrgUnitID:    orgUnitID,
+		OrgVersion:   actor.Ticket.OrgVersion,
+		ResourceType: "dream_run",
+		ResourceID:   orgUnitID,
+		Action:       action,
+	})
 	if errors.Is(err, nexusclient.ErrDenied) {
 		writeError(w, http.StatusForbidden, "forbidden", "AgentNexus denied organization access")
 		return false
@@ -289,8 +300,10 @@ func (h *dreamRunHandler) authorizeOrg(w http.ResponseWriter, r *http.Request, a
 		writeError(w, http.StatusBadGateway, "authorization_failed", err.Error())
 		return false
 	}
-	if located.ResourceURI != resourceURI {
-		writeError(w, http.StatusForbidden, "forbidden", "AgentNexus organization binding mismatch")
+	// Anything that is not an explicit allow is a denial: an unrecognised
+	// decision value must never read as permission.
+	if decision.Decision != "allow" {
+		writeError(w, http.StatusForbidden, "forbidden", "AgentNexus denied organization access")
 		return false
 	}
 	return true

@@ -207,7 +207,7 @@ func TestDreamRunReadAndAppendOnlyAnnotation(t *testing.T) {
 	nx := &evidenceNexus{scopes: []string{"dream:read", "dream:annotate"}}
 	allowDreamOrg(nx, "dream:read", "ent-1", "department:rd")
 	allowDreamOrg(nx, "dream:annotate", "ent-1", "department:rd")
-	router := NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRuns: store})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, Nexus: nx, DreamRuns: store})
 
 	resp := requestDream(t, router, http.MethodGet, "/v1/dream/runs/run-1", nil)
 	if resp.Code != http.StatusOK || !bytes.Contains(resp.Body.Bytes(), []byte(`"parent_run_ids":["child-1","child-2"]`)) || !bytes.Contains(resp.Body.Bytes(), []byte(`"trend-1"`)) {
@@ -226,7 +226,7 @@ func TestDreamRoutesRequireScopeAndOrgBoundNexusAuthorization(t *testing.T) {
 
 	t.Run("read scope", func(t *testing.T) {
 		nx := &evidenceNexus{}
-		resp := requestDream(t, NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRuns: store}), http.MethodGet, "/v1/dream/runs/run-1", nil)
+		resp := requestDream(t, NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{decision: "deny"}, Nexus: nx, DreamRuns: store}), http.MethodGet, "/v1/dream/runs/run-1", nil)
 		if resp.Code != http.StatusForbidden {
 			t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 		}
@@ -234,17 +234,23 @@ func TestDreamRoutesRequireScopeAndOrgBoundNexusAuthorization(t *testing.T) {
 	t.Run("cross org list denied before query", func(t *testing.T) {
 		store.listCalls = 0
 		nx := &evidenceNexus{scopes: []string{"dream:read"}, orgAuth: map[string]bool{}}
-		resp := requestDream(t, NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRuns: store}), http.MethodGet, "/v1/dream/runs?org_unit_id=department:other", nil)
+		authz := &allowOrgAuthorization{decision: "deny"}
+		resp := requestDream(t, NewAgentRouter(AgentRouterDeps{OrgAuthorization: authz, Nexus: nx, DreamRuns: store}), http.MethodGet, "/v1/dream/runs?org_unit_id=department:other", nil)
 		if resp.Code != http.StatusForbidden || store.listCalls != 0 {
 			t.Fatalf("status=%d listCalls=%d body=%s", resp.Code, store.listCalls, resp.Body.String())
 		}
-		if len(nx.locates) != 1 || nx.locates[0].EnterpriseID != "ent-1" || nx.locates[0].ResourceURI != dreamOrgResourceURI("ent-1", "department:other") {
-			t.Fatalf("authorization binding=%+v", nx.locates)
+		// The denial must come from the AUTHORIZATION surface, bound to the exact
+		// org unit - not from an evidence lookup echoing a synthesized URI.
+		if authz.lastRequest.OrgUnitID != "department:other" || authz.lastRequest.Action == "" {
+			t.Fatalf("authorization binding=%+v", authz.lastRequest)
+		}
+		if len(nx.locates) != 0 {
+			t.Fatalf("authorization still went through evidence locate: %+v", nx.locates)
 		}
 	})
 	t.Run("cross org detail denied", func(t *testing.T) {
 		nx := &evidenceNexus{scopes: []string{"dream:read"}, orgAuth: map[string]bool{}}
-		resp := requestDream(t, NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRuns: store}), http.MethodGet, "/v1/dream/runs/run-1", nil)
+		resp := requestDream(t, NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{decision: "deny"}, Nexus: nx, DreamRuns: store}), http.MethodGet, "/v1/dream/runs/run-1", nil)
 		if resp.Code != http.StatusForbidden {
 			t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 		}
@@ -252,7 +258,7 @@ func TestDreamRoutesRequireScopeAndOrgBoundNexusAuthorization(t *testing.T) {
 	t.Run("cross org annotation denied", func(t *testing.T) {
 		store.annotations = nil
 		nx := &evidenceNexus{scopes: []string{"dream:annotate"}, orgAuth: map[string]bool{}}
-		resp := requestDream(t, NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRuns: store}), http.MethodPost, "/v1/dream/runs/run-1/annotations", map[string]any{"action": "comment", "comment": "x"})
+		resp := requestDream(t, NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{decision: "deny"}, Nexus: nx, DreamRuns: store}), http.MethodPost, "/v1/dream/runs/run-1/annotations", map[string]any{"action": "comment", "comment": "x"})
 		if resp.Code != http.StatusForbidden || len(store.annotations) != 0 {
 			t.Fatalf("status=%d annotations=%v", resp.Code, store.annotations)
 		}
@@ -264,14 +270,14 @@ func TestDreamRoutesRequireScopeAndOrgBoundNexusAuthorization(t *testing.T) {
 		req.Header.Set("X-Nexus-Ticket", "ticket-1")
 		req.Header.Set("Idempotency-Key", "idem")
 		resp := httptest.NewRecorder()
-		NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRuns: store, DreamRerun: rerunner}).ServeHTTP(resp, req)
+		NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{decision: "deny"}, Nexus: nx, DreamRuns: store, DreamRerun: rerunner}).ServeHTTP(resp, req)
 		if resp.Code != http.StatusForbidden || rerunner.calls != 0 {
 			t.Fatalf("status=%d calls=%d", resp.Code, rerunner.calls)
 		}
 	})
 	t.Run("cross org evidence denied before grant", func(t *testing.T) {
 		nx := &evidenceNexus{scopes: []string{"dream:evidence:read"}, orgAuth: map[string]bool{}}
-		resp := requestDream(t, NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRuns: store}), http.MethodPost, "/v1/dream/runs/run-1/evidence-access", nil)
+		resp := requestDream(t, NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{decision: "deny"}, Nexus: nx, DreamRuns: store}), http.MethodPost, "/v1/dream/runs/run-1/evidence-access", nil)
 		if resp.Code != http.StatusForbidden || len(nx.reads) != 0 {
 			t.Fatalf("status=%d reads=%v", resp.Code, nx.reads)
 		}
@@ -285,7 +291,7 @@ func TestDreamRerunReceiptReconcilesAfterRunBeforeCompletionFailure(t *testing.T
 	rerunner := &fakeDreamRerunner{}
 	policyStore := newFakePolicyStore()
 	policyStore.failCompleteOnce = true
-	router := NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRuns: store, DreamRerun: rerunner, Dreams: dream.NewPolicyService(policyStore)})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, Nexus: nx, DreamRuns: store, DreamRerun: rerunner, Dreams: dream.NewPolicyService(policyStore)})
 	request := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/v1/dream/runs/run-1/reruns", nil)
 		req.Header.Set("X-Nexus-Ticket", "ticket-1")
@@ -313,7 +319,7 @@ func TestDreamBackfillReceiptReconcilesAfterRunBeforeCompletionFailure(t *testin
 	raw, _ := json.Marshal(canonicalDreamPolicyBody())
 	policyStore.policies["policy-1"] = db.DreamPolicy{ID: "policy-1", EnterpriseID: "ent-1", OrgScope: "department:rd", Status: "published", Draft: raw, RequesterUserID: "manager-1", PermissionMode: "direct_edit", RiskReasons: []byte(`[]`), ReviewOrgPath: []byte(`[]`)}
 	policyStore.failCompleteOnce = true
-	router := NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRerun: runner, Dreams: dream.NewPolicyService(policyStore)})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, Nexus: nx, DreamRerun: runner, Dreams: dream.NewPolicyService(policyStore)})
 	body := map[string]any{"window_start": "2026-07-01T00:00:00Z", "window_end": "2026-07-02T00:00:00Z"}
 	request := func() *httptest.ResponseRecorder {
 		raw, _ := json.Marshal(body)
@@ -366,7 +372,7 @@ func TestDreamEvidenceAccessRequiresScopeBoundGrantAndAudit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			nx := &evidenceNexus{scopes: tc.scopes, failAudit: tc.failAudit, emptyAudit: tc.emptyAudit}
 			allowDreamOrg(nx, "dream:evidence:read", "ent-1", "department:rd")
-			resp := requestDream(t, NewAgentRouter(AgentRouterDeps{Nexus: nx, DreamRuns: store}), http.MethodPost, "/v1/dream/runs/run-1/evidence-access", nil)
+			resp := requestDream(t, NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, Nexus: nx, DreamRuns: store}), http.MethodPost, "/v1/dream/runs/run-1/evidence-access", nil)
 			if resp.Code != tc.want {
 				t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 			}

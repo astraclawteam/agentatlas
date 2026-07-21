@@ -163,6 +163,20 @@ type ApprovalClient interface {
 	ResolveApprovalRoute(ctx context.Context, req ApprovalResolveRequest) (ApprovalRoute, error)
 }
 
+// OrgAuthorizationClient is the AgentNexus authorization-decision subset used
+// when AgentAtlas holds a CaseTicket rather than a browser session.
+//
+// It is separate from Client for the same reason ApprovalClient is: an
+// evidence-only test double stays compatible. It exists at all because two
+// call sites used to answer "may this actor touch this org unit?" by calling
+// evidence LOCATE with a synthesized resource URI and treating the echoed URI
+// as permission. That put connector topology on the wire, used an evidence
+// lookup as an authorization oracle, and inferred a grant from an echo. The
+// authorization decision has its own surface, and this is it.
+type OrgAuthorizationClient interface {
+	AuthorizeTicketOperation(ctx context.Context, ticketID string, req BrowserAuthorizationRequest) (BrowserAuthorizationDecision, error)
+}
+
 type BrowserAuthorizationRequest struct {
 	TicketID     string `json:"ticket_id,omitempty"`
 	OrgUnitID    string `json:"org_unit_id"`

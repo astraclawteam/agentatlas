@@ -301,7 +301,7 @@ func TestContractDrift(t *testing.T) {
 	}
 
 	agentSpec := specPaths(t, "atlas-agent.yaml")
-	agentRoutes := servedRoutes(t, NewAgentRouter(AgentRouterDeps{Nexus: adminMock()}))
+	agentRoutes := servedRoutes(t, NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, Nexus: adminMock()}))
 	if m := diffSets(agentRoutes, agentSpec); len(m) > 0 {
 		t.Fatalf("atlas-agent serves routes missing from atlas-agent.yaml: %v", m)
 	}

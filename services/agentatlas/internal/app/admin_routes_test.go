@@ -728,7 +728,7 @@ func newAgentTestServerWithProvidedPolicyStore(t *testing.T, nexusClient nexus.C
 	producer := tasks.NewRunner(tasks.NewMemBus())
 	producer.AllowEnqueue(retrieval.JobTypeIndex)
 	router := NewAgentRouter(AgentRouterDeps{
-		Nexus: nexusClient, Agent: agentRunner, Workflows: wfSvc,
+		Nexus: nexusClient, OrgAuthorization: &allowOrgAuthorization{}, Agent: agentRunner, Workflows: wfSvc,
 		Dreams:   dream.NewPolicyService(policies),
 		Outlines: outlines, Runner: producer,
 		Changes: governance.NewService(governance.NewMemoryStore(time.Now), governance.StaticRouteResolver{ReviewerUserID: "manager", OrgPath: []string{"team", "company"}}, &governance.MemoryAuditAppender{}, governance.NewMemoryPublisher(), time.Now),
