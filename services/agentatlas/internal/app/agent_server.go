@@ -32,6 +32,14 @@ type AgentRouterDeps struct {
 	// names the deployment's approval authority (the customer OA/BPM system).
 	ApprovalTransmitter governance.ApprovalTransmitter
 	ApprovalAuthority   string
+	// WorkCaseContextFor reports the WorkCase handle a governed change belongs
+	// to. Transmission needs one because the frozen ApprovalRequest requires an
+	// opaque wc_* business context, and dream policy ids are pol_*, so with the
+	// default this is dormant until C1 makes governed changes WorkCase-backed.
+	// It is a dependency rather than a direct call so both branches stay
+	// exercisable: a test can supply a WorkCase-backed change and drive the
+	// real transmit-and-refresh path that ships.
+	WorkCaseContextFor func(changeID string) (string, bool)
 	// Evidence is the frozen-contract evidence surface.
 	Evidence               FrozenEvidenceClient
 	Agent                  *agent.Runner
@@ -193,7 +201,7 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 		if candidate, ok := deps.DreamRerun.(dreamBackfiller); ok {
 			browserBackfill = candidate
 		}
-		browserDream := &browserDreamHandler{store: dreamRuns, orgs: orgStore, authorizer: deps.BrowserAuthorizer, evidence: browserDreamEvidence, rerun: deps.DreamRerun, backfill: browserBackfill, operations: deps.Dreams, approvals: deps.ApprovalTransmitter, approvalAuthority: deps.ApprovalAuthority, handles: newBrowserDreamHandleCodec(deps.BrowserHandleProtector, nil), bindings: workflowDreamBindingLister{workflows: deps.Workflows, orgs: orgStore}}
+		browserDream := &browserDreamHandler{store: dreamRuns, orgs: orgStore, authorizer: deps.BrowserAuthorizer, evidence: browserDreamEvidence, rerun: deps.DreamRerun, backfill: browserBackfill, operations: deps.Dreams, approvals: deps.ApprovalTransmitter, approvalAuthority: deps.ApprovalAuthority, workCaseContextFor: deps.WorkCaseContextFor, handles: newBrowserDreamHandleCodec(deps.BrowserHandleProtector, nil), bindings: workflowDreamBindingLister{workflows: deps.Workflows, orgs: orgStore}}
 		if deps.Changes != nil {
 			knowledge.changes = deps.Changes
 		}

@@ -316,9 +316,20 @@ func (h *dreamPolicyHandler) review(w http.ResponseWriter, r *http.Request) {
 	needsAuthority := assessment.RiskLevel != governance.RiskLow
 	planHash := "sha256:" + operationHash(map[string]any{"change": id, "revision": req.Revision, "action": req.Action, "fields": changed})
 	planRef := governanceinternal.ApprovalPlanRefFor(actor.Ticket.EnterpriseID, id, uint64(req.Revision))
+	// The frozen ApprovalRequest requires a wc_* WorkCase handle as its business
+	// context. A governed change does not have one until C1 builds the WorkCase
+	// orchestrator, so transmission is DORMANT rather than broken: a high-risk
+	// change still routes to the local administrator queue exactly as it did
+	// before the transmission surface existed. Transmitting a policy id instead
+	// would be rejected client-side by Validate() on every single call.
+	workCaseContextFor := h.deps.WorkCaseContextFor
+	if workCaseContextFor == nil {
+		workCaseContextFor = governanceinternal.WorkCaseContextFor
+	}
+	businessContextRef, transmissible := workCaseContextFor(id)
 	// reviewer stays empty until the authority has actually decided.
 	reviewer := ""
-	if !needsAuthority {
+	if !needsAuthority || !transmissible {
 		// Nothing to transmit and nothing to wait for.
 	} else if refresh {
 		// Refresh READS the authority's decision; it does not re-submit. The
@@ -348,7 +359,7 @@ func (h *dreamPolicyHandler) review(w http.ResponseWriter, r *http.Request) {
 		reviewer = status.Authority
 	} else if _, err := h.deps.ApprovalTransmitter.TransmitApprovalPlan(r.Context(), nexusruntime.ApprovalRequest{
 		RequestID:          "aprq-" + op.Row.OperationKey,
-		BusinessContextRef: id,
+		BusinessContextRef: businessContextRef,
 		Capability:         "dream_policy." + req.Action,
 		ParameterHash:      planHash,
 		Purpose:            "governed_change_approval",

@@ -136,6 +136,7 @@ func (c *HTTPClient) doPost(ctx context.Context, path string, in, out any) error
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if path == "/v1/audit/evidence" || path == "/v1/authorization/decisions" || path == "/v1/tickets/verify" ||
+		path == "/v1/approvals/transmissions" ||
 		path == "/v1/actions/request" || path == "/v1/actions/receipt" || path == "/v1/actions/observation" {
 		req.SetBasicAuth(c.serviceClientID, c.serviceSecret)
 		if auditReq, ok := in.(nexus.AppendAuditEvidenceRequest); ok && auditReq.IdempotencyKey != "" {

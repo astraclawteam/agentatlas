@@ -31,17 +31,18 @@ type browserDreamEvidenceClient interface {
 }
 
 type browserDreamHandler struct {
-	store             dreamRunStore
-	orgs              browserSessionOrgStore
-	authorizer        nexus.BrowserBFFClient
-	evidence          browserDreamEvidenceClient
-	approvals         governanceinternal.ApprovalTransmitter
-	approvalAuthority string
-	rerun             dreamRerunner
-	backfill          dreamBackfiller
-	operations        *dream.PolicyService
-	handles           *browserDreamHandleCodec
-	bindings          publishedDreamWorkflowBindingLister
+	store              dreamRunStore
+	orgs               browserSessionOrgStore
+	authorizer         nexus.BrowserBFFClient
+	evidence           browserDreamEvidenceClient
+	workCaseContextFor func(string) (string, bool)
+	approvals          governanceinternal.ApprovalTransmitter
+	approvalAuthority  string
+	rerun              dreamRerunner
+	backfill           dreamBackfiller
+	operations         *dream.PolicyService
+	handles            *browserDreamHandleCodec
+	bindings           publishedDreamWorkflowBindingLister
 }
 
 type browserDreamWorkflowBinding struct {
@@ -905,9 +906,18 @@ func (h *browserDreamHandler) reviewPolicy(w http.ResponseWriter, r *http.Reques
 	// low-risk edit keeps its local single-confirmation fast path.
 	needsAuthority := assessment.RiskLevel != sdkgovernance.RiskLow
 	planRef := governanceinternal.ApprovalPlanRefFor(session.EnterpriseID, current.ID, uint64(input.Revision))
+	// Same guard as the service-credential path: the frozen ApprovalRequest
+	// needs a wc_* WorkCase handle, and a dream policy has none until C1, so
+	// transmission is dormant and the change routes to the local administrator
+	// queue instead of being rejected client-side on every attempt.
+	workCaseContextFor := h.workCaseContextFor
+	if workCaseContextFor == nil {
+		workCaseContextFor = governanceinternal.WorkCaseContextFor
+	}
+	businessContextRef, transmissible := workCaseContextFor(current.ID)
 	// reviewer stays empty until the authority has actually decided.
 	reviewer := ""
-	if !needsAuthority {
+	if !needsAuthority || !transmissible {
 		// Nothing to transmit and nothing to wait for.
 	} else if refresh {
 		// Refresh READS the authority's decision; it does not re-submit.
@@ -932,7 +942,7 @@ func (h *browserDreamHandler) reviewPolicy(w http.ResponseWriter, r *http.Reques
 	} else {
 		_, err = h.approvals.TransmitApprovalPlanWithBearer(r.Context(), session.UpstreamAccessToken, nexusruntime.ApprovalRequest{
 			RequestID:          "aprq-" + key,
-			BusinessContextRef: current.ID,
+			BusinessContextRef: businessContextRef,
 			Capability:         "dream_policy." + input.Action,
 			ParameterHash:      planHash,
 			Purpose:            "governed_change_approval",

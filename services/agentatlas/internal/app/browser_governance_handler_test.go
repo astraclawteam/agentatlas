@@ -39,7 +39,7 @@ func TestBrowserSessionEnrichesAuthorizedOrganizationTreeWithoutGrantingAncestor
 			{EnterpriseID: "ent-1", SpaceID: "space-rd", ScopeKind: "department", ScopeID: "dept-rd", ParentScopeKind: pgtype.Text{String: "company", Valid: true}, ParentScopeID: pgtype.Text{String: "root", Valid: true}},
 		},
 	}
-	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", Nexus: adminMock(), BrowserSessions: sessions, BrowserOrgStore: orgs})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", WorkCaseContextFor: alwaysWorkCaseBacked, Nexus: adminMock(), BrowserSessions: sessions, BrowserOrgStore: orgs})
 
 	login := httptest.NewRequest(http.MethodGet, "https://atlas.example/auth/login?return_to=%2Fknowledge", nil)
 	rr := httptest.NewRecorder()
@@ -216,7 +216,7 @@ func legacyRouterForProfile(t *testing.T, profile browsersession.Identity, orgs 
 	if err != nil {
 		t.Fatal(err)
 	}
-	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", Nexus: adminMock(), BrowserSessions: sessions, BrowserAuthorizer: authorizer, BrowserOrgStore: orgs})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", WorkCaseContextFor: alwaysWorkCaseBacked, Nexus: adminMock(), BrowserSessions: sessions, BrowserAuthorizer: authorizer, BrowserOrgStore: orgs})
 	login := httptest.NewRequest(http.MethodGet, "https://atlas.example/auth/login?return_to=%2Fknowledge", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, login)
@@ -275,7 +275,7 @@ func TestBrowserSessionRoutesUseSecureCookieAndCSRF(t *testing.T) {
 		t.Fatal(err)
 	}
 	changes := governance.NewService(governance.NewMemoryStore(clock), governance.StaticRouteResolver{ReviewerUserID: "manager", OrgPath: []string{"team", "department"}}, &governance.MemoryAuditAppender{}, governance.NewMemoryPublisher(), clock)
-	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", Nexus: adminMock(), BrowserSessions: sessions, Changes: changes})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", WorkCaseContextFor: alwaysWorkCaseBacked, Nexus: adminMock(), BrowserSessions: sessions, Changes: changes})
 	login := httptest.NewRequest(http.MethodGet, "https://atlas.example/auth/login?return_to=%2Fchanges%2Fchg-1", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, login)
@@ -392,7 +392,7 @@ func TestBrowserAuthErrorsAreStableAndDoNotLeakInternalCause(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", Nexus: adminMock(), BrowserSessions: sessions})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", WorkCaseContextFor: alwaysWorkCaseBacked, Nexus: adminMock(), BrowserSessions: sessions})
 	invalidLogin := httptest.NewRequest(http.MethodGet, "https://atlas.example/auth/login?return_to=%2F%2Fevil.example", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, invalidLogin)

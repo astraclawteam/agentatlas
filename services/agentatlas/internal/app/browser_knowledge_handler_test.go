@@ -204,7 +204,7 @@ func browserKnowledgeRouter(t *testing.T, orgs browserSessionOrgStore, knowledge
 	if err != nil {
 		t.Fatal(err)
 	}
-	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", Nexus: adminMock(), BrowserSessions: sessions, BrowserOrgStore: orgs, BrowserKnowledgeStore: knowledge, BrowserAuthorizer: authorizer, Changes: changes})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", WorkCaseContextFor: alwaysWorkCaseBacked, Nexus: adminMock(), BrowserSessions: sessions, BrowserOrgStore: orgs, BrowserKnowledgeStore: knowledge, BrowserAuthorizer: authorizer, Changes: changes})
 	login := httptest.NewRequest(http.MethodGet, "https://atlas.example/auth/login?return_to=%2Fknowledge", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, login)

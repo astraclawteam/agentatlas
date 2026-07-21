@@ -111,13 +111,30 @@ func (r NexusRouteResolver) Resolve(ctx context.Context, actor Actor, rec Record
 		// will not stand in for one.
 		return model.ReviewRoute{}, ErrForbidden
 	}
+	// Transmission requires a wc_* WorkCase handle as the business context, and
+	// a governed change has none until C1 builds the WorkCase orchestrator.
+	// Until then the route is resolved locally and nothing is transmitted:
+	// sending the change id would be rejected by Validate() on every call, so
+	// attempting it could only ever turn a resolvable route into ErrForbidden.
+	businessContextRef, transmissible := WorkCaseContextFor(rec.Draft.ChangeID)
+	if !transmissible {
+		localRisk := assessment.RiskLevel
+		if localRisk != model.RiskLow {
+			localRisk = model.RiskHigh
+		}
+		return model.ReviewRoute{
+			ChangeID: rec.Draft.ChangeID, ResourceType: rec.Draft.ResourceType, ResourceID: rec.Draft.ResourceID,
+			RequesterUserID: rec.Draft.RequesterUserID, ReviewerUserID: "", RiskLevel: localRisk,
+			Mode: model.ReviewAdminQueue, Queue: r.Authority, State: model.RoutePending, OrgPath: []string{},
+		}, nil
+	}
 	fields := changedFields(rec.Content)
 	// The plan hash binds the exact change under approval, so an authority
 	// cannot be handed one plan and later shown another.
 	planHash := "sha256:" + hexDigest(actor.EnterpriseID, rec.Draft.ChangeID, fmt.Sprint(rec.Draft.Revision), string(rec.Draft.Action), strings.Join(fields, ","))
 	req := nexusruntime.ApprovalRequest{
 		RequestID:          stableID("aprq", actor.EnterpriseID, rec.Draft.ChangeID, fmt.Sprint(rec.Draft.Revision)),
-		BusinessContextRef: rec.Draft.ChangeID,
+		BusinessContextRef: businessContextRef,
 		Capability:         string(rec.Draft.ResourceType) + "." + string(rec.Draft.Action),
 		ParameterHash:      planHash,
 		Purpose:            "governed_change_approval",

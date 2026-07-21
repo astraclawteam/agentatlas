@@ -63,7 +63,7 @@ func TestDreamPolicyLifecycleAuditFailurePreventsUpdate(t *testing.T) {
 	store := newFakePolicyStore()
 	raw, _ := json.Marshal(canonicalDreamPolicyBody())
 	store.policies["policy-audit"] = db.DreamPolicy{ID: "policy-audit", EnterpriseID: "ent_1", OrgScope: "pg_mes", Status: "draft", Draft: raw, RequesterUserID: "editor", PermissionMode: "direct_edit", RiskReasons: []byte(`[]`), ReviewOrgPath: []byte(`[]`)}
-	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", Nexus: &failingAuditNexus{Mock: base}, Dreams: dream.NewPolicyService(store)})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", WorkCaseContextFor: alwaysWorkCaseBacked, Nexus: &failingAuditNexus{Mock: base}, Dreams: dream.NewPolicyService(store)})
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 	resp := doLifecycleJSON(t, http.MethodPut, srv.URL+"/v1/dream-policies/policy-audit", "tick_editor", "", map[string]any{"revision": 0, "policy": canonicalDreamPolicyBody()})
@@ -82,7 +82,7 @@ func TestDreamPolicyLifecycleMapsNexusAuditConflictTo409(t *testing.T) {
 	store := newFakePolicyStore()
 	raw, _ := json.Marshal(canonicalDreamPolicyBody())
 	store.policies["policy-conflict"] = db.DreamPolicy{ID: "policy-conflict", EnterpriseID: "ent_1", OrgScope: "pg_mes", Status: "draft", Draft: raw, RequesterUserID: "editor", PermissionMode: "direct_edit", RiskReasons: []byte(`[]`), ReviewOrgPath: []byte(`[]`)}
-	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", Nexus: &conflictAuditNexus{Mock: base}, Dreams: dream.NewPolicyService(store)})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", WorkCaseContextFor: alwaysWorkCaseBacked, Nexus: &conflictAuditNexus{Mock: base}, Dreams: dream.NewPolicyService(store)})
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 	resp := doLifecycleJSON(t, http.MethodPut, srv.URL+"/v1/dream-policies/policy-conflict", "tick_editor", "audit-conflict-op-0001", map[string]any{"revision": 0, "policy": canonicalDreamPolicyBody()})

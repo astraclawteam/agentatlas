@@ -37,8 +37,37 @@ func TestNexusRouteRiskIsLocalAndTransmitNamesNoReviewer(t *testing.T) {
 	if route.ReviewerUserID != "" || len(route.OrgPath) != 0 {
 		t.Fatalf("a transmitted plan must name no reviewer yet: %+v", route)
 	}
+	// Nothing was transmitted: "chg" is not a wc_* WorkCase handle, and the
+	// frozen ApprovalRequest rejects anything else client-side. Transmission is
+	// dormant until C1 makes governed changes WorkCase-backed; the route is
+	// still resolved, so governance keeps working locally in the meantime.
+	if len(transmitter.sent) != 0 {
+		t.Fatalf("transmitted a plan for a change with no WorkCase: %+v", transmitter.sent)
+	}
+}
+
+// The transmit branch is still real, and this is what proves it: give the
+// change a WorkCase handle and the plan goes out. Without this the dormant
+// path above would be the only one covered, and the transmission code would
+// rot untested until C1 lands.
+func TestNexusRouteTransmitsOnceTheChangeIsWorkCaseBacked(t *testing.T) {
+	transmitter := &fakeApprovalTransmitter{}
+	resolver := NexusRouteResolver{Client: fakeBrowserNexus{}, Transmit: transmitter, Authority: "oa.example", Now: func() time.Time { return time.Date(2026, 7, 12, 10, 0, 0, 0, time.UTC) }}
+	rec := Record{Draft: model.ChangeDraft{ChangeID: "wc_0123456789abcdef", EnterpriseID: "ent", OrgUnitID: "team", ResourceType: model.ResourceWorkflow, ResourceID: "wf", Action: model.ActionPublish, RequesterUserID: "editor", Revision: 1}, Content: []byte(`{"nodes":[]}`)}
+	actor := Actor{EnterpriseID: "ent", UserID: "editor", UpstreamAccessToken: "upstream-access-token", OrgVersion: 7}
+
+	route, err := resolver.Resolve(context.Background(), actor, rec, model.RiskAssessment{RiskLevel: model.RiskHigh})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
 	if len(transmitter.sent) != 1 || transmitter.sent[0].Plan.Authority != "oa.example" {
 		t.Fatalf("plan not transmitted to the configured authority: %+v", transmitter.sent)
+	}
+	if transmitter.sent[0].BusinessContextRef != "wc_0123456789abcdef" {
+		t.Fatalf("business context must be the WorkCase handle: %+v", transmitter.sent[0])
+	}
+	if route.Mode != model.ReviewAdminQueue || route.ReviewerUserID != "" {
+		t.Fatalf("a transmitted plan must name no reviewer yet: %+v", route)
 	}
 }
 
@@ -82,9 +111,11 @@ func TestCaseTicketActorUsesServiceCredentialGovernanceAdapters(t *testing.T) {
 	if _, err := (NexusAuditAppender{Client: client}).Append(context.Background(), actor, rec, "ticket-audit-key-123"); err != nil {
 		t.Fatalf("ticket audit: %v", err)
 	}
-	// The route no longer travels through the nexus client: it is transmitted.
-	// The audit still goes through the service-credential path.
-	if len(transmitter.sent) != 1 || client.ticketAuditCalls != 1 {
+	// The route no longer travels through the nexus client. Nothing is
+	// transmitted either: "chg" is not a WorkCase handle, so transmission stays
+	// dormant until C1. What this test is actually about is unchanged -- the
+	// audit still goes through the service-credential path.
+	if len(transmitter.sent) != 0 || client.ticketAuditCalls != 1 {
 		t.Fatalf("transmit/audit calls=%d/%d", len(transmitter.sent), client.ticketAuditCalls)
 	}
 }

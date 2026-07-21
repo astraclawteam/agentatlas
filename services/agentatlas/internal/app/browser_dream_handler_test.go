@@ -30,7 +30,7 @@ func TestBrowserDreamReadRequiresExactSessionAndNexusOrganization(t *testing.T) 
 	run := dreamRunFixture()
 	store := &fakeDreamRunStore{run: run, runs: []db.DreamRun{{ID: run.ID, EnterpriseID: run.EnterpriseID, OrgUnitID: run.OrgUnitID}}}
 	auth := &fakeBrowserAuthorizer{}
-	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", store: store, authorizer: auth, handles: browserDreamTestCodec(t)}
+	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", workCaseContextFor: alwaysWorkCaseBacked, store: store, authorizer: auth, handles: browserDreamTestCodec(t)}
 	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"department:rd"}, Permissions: []string{"dream:read"}}, FamilyID: "family-read", UpstreamAccessToken: "bearer-session"}
 
 	rec := httptest.NewRecorder()
@@ -54,7 +54,7 @@ func TestBrowserDreamBasicListReturnsOnlySanitizedShapeAndSessionBoundHandle(t *
 	run := dreamRunFixture()
 	store := &fakeDreamRunStore{run: run, runs: []db.DreamRun{{ID: run.ID, EnterpriseID: run.EnterpriseID, OrgUnitID: run.OrgUnitID}}}
 	auth := &fakeBrowserAuthorizer{}
-	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", store: store, authorizer: auth, handles: browserDreamTestCodec(t)}
+	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", workCaseContextFor: alwaysWorkCaseBacked, store: store, authorizer: auth, handles: browserDreamTestCodec(t)}
 	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"department:rd"}, Permissions: []string{"dream:read"}}, FamilyID: "family-1", UpstreamAccessToken: "bearer-session"}
 
 	rec := httptest.NewRecorder()
@@ -140,7 +140,7 @@ func browserBasicPolicyBody(t *testing.T, h *browserDreamHandler, session browse
 
 func TestBrowserDreamPolicyRejectsStalePublishedBindingHandle(t *testing.T) {
 	nx := &fakeBrowserDreamNexus{}
-	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", authorizer: nx, evidence: nx, operations: dream.NewPolicyService(newFakePolicyStore()), handles: browserDreamTestCodec(t)}
+	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", workCaseContextFor: alwaysWorkCaseBacked, authorizer: nx, evidence: nx, operations: dream.NewPolicyService(newFakePolicyStore()), handles: browserDreamTestCodec(t)}
 	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes"}, Permissions: []string{"edit"}}, FamilyID: "family-policy-stale", UpstreamAccessToken: "bearer-session"}
 	body := browserBasicPolicyBody(t, h, session)
 	h.bindings = fakePublishedDreamBindingLister{}
@@ -154,7 +154,7 @@ func TestBrowserDreamPolicyRejectsStalePublishedBindingHandle(t *testing.T) {
 func TestBrowserDreamBasicUpdatePreservesAdvancedFieldsAndOrganization(t *testing.T) {
 	nx := &fakeBrowserDreamNexus{}
 	store := &browserPolicyStore{fakePolicyStore: newFakePolicyStore()}
-	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", authorizer: nx, evidence: nx, operations: dream.NewPolicyService(store), handles: browserDreamTestCodec(t)}
+	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", workCaseContextFor: alwaysWorkCaseBacked, authorizer: nx, evidence: nx, operations: dream.NewPolicyService(store), handles: browserDreamTestCodec(t)}
 	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes", "pg_other"}, Permissions: []string{"edit"}}, FamilyID: "family-policy-merge", UpstreamAccessToken: "bearer-session"}
 	body := browserBasicPolicyBody(t, h, session)
 	created := callBrowserPolicy(t, h.createPolicy, http.MethodPost, "/api/dream/policies", session, "", "merge-create-0001", string(body))
@@ -208,7 +208,7 @@ func TestBrowserDreamBasicUpdatePreservesAdvancedFieldsAndOrganization(t *testin
 func TestBrowserDreamAdvancedPolicyRequiresEntitlementAndExplicitMode(t *testing.T) {
 	nx := &fakeBrowserDreamNexus{}
 	store := &browserPolicyStore{fakePolicyStore: newFakePolicyStore()}
-	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", authorizer: nx, evidence: nx, operations: dream.NewPolicyService(store), handles: browserDreamTestCodec(t)}
+	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", workCaseContextFor: alwaysWorkCaseBacked, authorizer: nx, evidence: nx, operations: dream.NewPolicyService(store), handles: browserDreamTestCodec(t)}
 	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "provider-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes"}, Permissions: []string{"edit"}, AdvancedModeAllowed: true}, FamilyID: "family-advanced", UpstreamAccessToken: "bearer-session"}
 	created := callBrowserPolicy(t, h.createPolicy, http.MethodPost, "/api/dream/policies", session, "", "advanced-create-001", string(browserBasicPolicyBody(t, h, session)))
 	var summary browserDreamPolicySummary
@@ -249,7 +249,7 @@ func TestBrowserDreamMutationIsCSRFAndIdempotencyReadyAndAppendOnly(t *testing.T
 	run.ParentRunIds = nil
 	store := &fakeDreamRunStore{run: run}
 	auth := &fakeBrowserAuthorizer{}
-	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", store: store, authorizer: auth, handles: browserDreamTestCodec(t)}
+	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", workCaseContextFor: alwaysWorkCaseBacked, store: store, authorizer: auth, handles: browserDreamTestCodec(t)}
 	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"department:rd"}, Permissions: []string{"dream:annotate", "dream:read"}}, FamilyID: "family-annotation", UpstreamAccessToken: "bearer-session"}
 
 	handle, _ := h.handles.issue(session, "run", run.OrgUnitID, run.ID)
@@ -285,7 +285,7 @@ func TestBrowserDreamMutationRejectsOversizedAndMultipleJSONBodies(t *testing.T)
 	run := dreamRunFixture()
 	store := &fakeDreamRunStore{run: run}
 	auth := &fakeBrowserAuthorizer{}
-	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", store: store, authorizer: auth, handles: browserDreamTestCodec(t)}
+	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", workCaseContextFor: alwaysWorkCaseBacked, store: store, authorizer: auth, handles: browserDreamTestCodec(t)}
 	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"department:rd"}, Permissions: []string{"dream:annotate"}}, FamilyID: "family-body", UpstreamAccessToken: "bearer-session"}
 	handle, _ := h.handles.issue(session, "run", run.OrgUnitID, run.ID)
 
@@ -312,7 +312,7 @@ func TestBrowserDreamEvidenceFailsClosedBeforeReturningSanitizedDetail(t *testin
 	run := dreamRunFixture()
 	store := &fakeDreamRunStore{run: run}
 	nx := &fakeBrowserDreamNexus{detail: "sanitized detail"}
-	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", store: store, authorizer: nx, evidence: nx, handles: browserDreamTestCodec(t)}
+	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", workCaseContextFor: alwaysWorkCaseBacked, store: store, authorizer: nx, evidence: nx, handles: browserDreamTestCodec(t)}
 	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"department:rd"}, Permissions: []string{"dream:evidence:read"}}, FamilyID: "family-evidence", UpstreamAccessToken: "bearer-session"}
 
 	handle, _ := h.handles.issue(session, "run", run.OrgUnitID, run.ID)
@@ -338,7 +338,7 @@ func TestBrowserDreamDetailUsesHumanOrganizationLineageWithoutRawIDs(t *testing.
 	child.OrgUnitID = "team:child-secret"
 	store := &fakeDreamRunStore{run: run, views: map[string]db.GetDreamRunViewRow{child.ID: child}}
 	orgs := &fakeBrowserOrgStore{spaces: []db.KnowledgeSpace{{ID: "space-child", EnterpriseID: "ent-1", Name: "研发二组", OrgScope: "team:child-secret", OrgVersion: 7}}}
-	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", store: store, orgs: orgs, authorizer: &fakeBrowserAuthorizer{}, handles: browserDreamTestCodec(t)}
+	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", workCaseContextFor: alwaysWorkCaseBacked, store: store, orgs: orgs, authorizer: &fakeBrowserAuthorizer{}, handles: browserDreamTestCodec(t)}
 	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"department:rd", "team:child-secret"}, Permissions: []string{"dream:read"}}, FamilyID: "family-lineage", UpstreamAccessToken: "bearer"}
 	handle, _ := h.handles.issue(session, "run", run.OrgUnitID, run.ID)
 	req := browserDreamRequest(http.MethodGet, "/api/dream/runs/"+handle, session, "")
@@ -358,7 +358,7 @@ func TestBrowserDreamRerunUsesBearerAuditAndPinnedIdempotency(t *testing.T) {
 	nx := &fakeBrowserDreamNexus{}
 	rerunner := &fakeDreamRerunner{}
 	operations := dream.NewPolicyService(newFakePolicyStore())
-	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", store: store, authorizer: nx, evidence: nx, rerun: rerunner, operations: operations, handles: browserDreamTestCodec(t)}
+	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", workCaseContextFor: alwaysWorkCaseBacked, store: store, authorizer: nx, evidence: nx, rerun: rerunner, operations: operations, handles: browserDreamTestCodec(t)}
 	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"department:rd"}, Permissions: []string{"dream:rerun"}}, FamilyID: "family-rerun", UpstreamAccessToken: "bearer-session"}
 	handle, _ := h.handles.issue(session, "run", run.OrgUnitID, run.ID)
 	req := browserDreamRequest(http.MethodPost, "/api/dream/runs/"+handle+"/reruns", session, "{}")
@@ -379,7 +379,7 @@ func TestBrowserDreamRerunUsesBearerAuditAndPinnedIdempotency(t *testing.T) {
 func TestBrowserDreamPolicyCreateIsDraftOnlyAuthorizedAndAudited(t *testing.T) {
 	nx := &fakeBrowserDreamNexus{}
 	policies := dream.NewPolicyService(newFakePolicyStore())
-	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", authorizer: nx, evidence: nx, operations: policies, handles: browserDreamTestCodec(t)}
+	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", workCaseContextFor: alwaysWorkCaseBacked, authorizer: nx, evidence: nx, operations: policies, handles: browserDreamTestCodec(t)}
 	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes"}, Permissions: []string{"edit"}}, FamilyID: "family-policy", UpstreamAccessToken: "bearer-session"}
 	body := browserBasicPolicyBody(t, h, session)
 	req := browserDreamRequest(http.MethodPost, "/api/dream/policies", session, string(body))
@@ -405,7 +405,7 @@ func TestBrowserDreamPolicyCreateIsDraftOnlyAuthorizedAndAudited(t *testing.T) {
 
 func TestBrowserDreamPublishedBindingListReturnsHumanLabelsAndOpaqueHandlesOnly(t *testing.T) {
 	auth := &fakeBrowserAuthorizer{}
-	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", authorizer: auth, handles: browserDreamTestCodec(t), bindings: fakePublishedDreamBindingLister{items: []publishedDreamWorkflowBinding{{WorkflowID: "workflow-secret", WorkflowVersion: 7, WorkflowName: "企业梦境整理", OutputSpaceID: "space-secret", OutputName: "研发知识"}}}}
+	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", workCaseContextFor: alwaysWorkCaseBacked, authorizer: auth, handles: browserDreamTestCodec(t), bindings: fakePublishedDreamBindingLister{items: []publishedDreamWorkflowBinding{{WorkflowID: "workflow-secret", WorkflowVersion: 7, WorkflowName: "企业梦境整理", OutputSpaceID: "space-secret", OutputName: "研发知识"}}}}
 	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "editor-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes"}, Permissions: []string{"dream:read"}}, FamilyID: "binding-family", UpstreamAccessToken: "bearer"}
 	rec := httptest.NewRecorder()
 	h.listWorkflowBindings(rec, browserDreamRequest(http.MethodGet, "/api/dream/workflow-bindings?org_unit_id=pg_mes", session, ""))
@@ -430,7 +430,7 @@ func TestBrowserDreamPolicyGovernedLifecycleAndBackfill(t *testing.T) {
 	nx := &fakeBrowserDreamNexus{}
 	policies := dream.NewPolicyService(policyStore)
 	backfiller := &fakeDreamRerunner{}
-	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", authorizer: nx, evidence: nx, operations: policies, backfill: backfiller, handles: browserDreamTestCodec(t)}
+	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", workCaseContextFor: alwaysWorkCaseBacked, authorizer: nx, evidence: nx, operations: policies, backfill: backfiller, handles: browserDreamTestCodec(t)}
 	creator := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent_1", UserID: "creator-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes"}, Permissions: []string{"edit", "dream:read"}, AdvancedModeAllowed: true}, FamilyID: "family-lifecycle", UpstreamAccessToken: "bearer-session"}
 	_ = browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent_1", UserID: "manager-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes"}, Permissions: []string{"approve_high_risk"}}, FamilyID: "family-lifecycle", UpstreamAccessToken: "bearer-reviewer"}
 	body := browserBasicPolicyBody(t, h, creator)
@@ -510,7 +510,7 @@ func TestBrowserDreamBackfillFailsBeforeWorkWithoutAuditClient(t *testing.T) {
 	policies := dream.NewPolicyService(newFakePolicyStore())
 	nx := &fakeBrowserDreamNexus{}
 	runner := &fakeDreamRerunner{}
-	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", authorizer: nx, evidence: nx, operations: policies, backfill: runner, handles: browserDreamTestCodec(t)}
+	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", workCaseContextFor: alwaysWorkCaseBacked, authorizer: nx, evidence: nx, operations: policies, backfill: runner, handles: browserDreamTestCodec(t)}
 	session := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "editor-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes"}, Permissions: []string{"edit"}, AdvancedModeAllowed: true}, FamilyID: "family-no-audit", UpstreamAccessToken: "bearer"}
 	body := browserBasicPolicyBody(t, h, session)
 	created := callBrowserPolicy(t, h.createPolicy, http.MethodPost, "/api/dream/policies", session, "", "create-no-audit-0001", string(body))
@@ -530,7 +530,7 @@ func TestBrowserDreamSuggestionAdoptionCreatesImmutableDirectEditLineageAndRepla
 	nx := &fakeBrowserDreamNexus{}
 	store := &browserPolicyStore{fakePolicyStore: newFakePolicyStore()}
 	policies := dream.NewPolicyService(store)
-	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", authorizer: nx, evidence: nx, operations: policies, handles: browserDreamTestCodec(t)}
+	h := &browserDreamHandler{approvals: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, approvalAuthority: "oa.example", workCaseContextFor: alwaysWorkCaseBacked, authorizer: nx, evidence: nx, operations: policies, handles: browserDreamTestCodec(t)}
 	employee := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "employee-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes"}, Permissions: []string{"suggest", "dream:read"}}, FamilyID: "employee-family", UpstreamAccessToken: "employee-bearer"}
 	editor := browsersession.Session{Identity: browsersession.Identity{EnterpriseID: "ent-1", UserID: "editor-1", OrgVersion: 7, OrgUnitIDs: []string{"pg_mes"}, Permissions: []string{"edit", "dream:read"}}, FamilyID: "editor-family", UpstreamAccessToken: "editor-bearer"}
 	created := callBrowserPolicy(t, h.createPolicy, http.MethodPost, "/api/dream/policies", employee, "", "suggestion-create-0001", string(browserBasicPolicyBody(t, h, employee)))
@@ -582,7 +582,7 @@ func TestBrowserDreamRouterRequiresSessionForEveryRouteAndCSRFForeveryMutation(t
 	run.ParentRunIds = nil
 	store := &fakeDreamRunStore{run: run, runs: []db.DreamRun{{ID: run.ID, EnterpriseID: run.EnterpriseID, OrgUnitID: run.OrgUnitID}}}
 	nx := &fakeBrowserDreamNexus{}
-	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", Nexus: adminMock(), BrowserSessions: sessions, BrowserHandleProtector: protector, BrowserAuthorizer: nx, DreamRuns: store, Dreams: dream.NewPolicyService(&browserPolicyStore{fakePolicyStore: newFakePolicyStore()}), DreamRerun: &fakeDreamRerunner{}})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", WorkCaseContextFor: alwaysWorkCaseBacked, Nexus: adminMock(), BrowserSessions: sessions, BrowserHandleProtector: protector, BrowserAuthorizer: nx, DreamRuns: store, Dreams: dream.NewPolicyService(&browserPolicyStore{fakePolicyStore: newFakePolicyStore()}), DreamRerun: &fakeDreamRerunner{}})
 	login := httptest.NewRequest(http.MethodGet, "https://atlas.example/auth/login?return_to=%2Fdream", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, login)

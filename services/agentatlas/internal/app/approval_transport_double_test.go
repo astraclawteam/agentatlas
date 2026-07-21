@@ -17,6 +17,15 @@ type fakeApprovalTransmitter struct {
 }
 
 func (f *fakeApprovalTransmitter) TransmitApprovalPlan(_ context.Context, req nexusruntime.ApprovalRequest) (nexusclient.ApprovalTransmissionStatus, error) {
+	// Validate exactly as the real client does, BEFORE recording the send.
+	// Omitting this is what let the whole transmit path look green while every
+	// real call was rejected locally: the production client calls
+	// req.Validate() before it ever reaches the network, and this double did
+	// not, so the tests were exercising a surface strictly more permissive than
+	// the one that ships.
+	if err := req.Validate(); err != nil {
+		return nexusclient.ApprovalTransmissionStatus{}, err
+	}
 	f.sent = append(f.sent, req)
 	if f.err != nil {
 		return nexusclient.ApprovalTransmissionStatus{}, f.err
@@ -35,4 +44,13 @@ func (f *fakeApprovalTransmitter) GetApprovalTransmission(_ context.Context, pla
 		PlanRef: planRef, Status: nexusclient.TransmissionEvidenceRecorded,
 		Decision: f.decision, Authority: f.authority,
 	}, nil
+}
+
+// alwaysWorkCaseBacked makes a governed change look WorkCase-backed so the
+// transmit-and-refresh path stays exercisable. Production changes are pol_*
+// today, so without this every governance test would only ever cover the
+// dormant branch and the shipping transmission code would rot untested until
+// C1 lands.
+func alwaysWorkCaseBacked(changeID string) (string, bool) {
+	return "wc_" + changeID + "0000000000000000", true
 }

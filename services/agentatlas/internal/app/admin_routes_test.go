@@ -729,7 +729,7 @@ func newAgentTestServerWithProvidedPolicyStore(t *testing.T, nexusClient nexus.C
 	producer.AllowEnqueue(retrieval.JobTypeIndex)
 	router := NewAgentRouter(AgentRouterDeps{
 		Nexus: nexusClient, OrgAuthorization: &allowOrgAuthorization{},
-		ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example",
+		ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", WorkCaseContextFor: alwaysWorkCaseBacked,
 		Agent: agentRunner, Workflows: wfSvc,
 		Dreams:   dream.NewPolicyService(policies),
 		Outlines: outlines, Runner: producer,

@@ -17,7 +17,7 @@ func TestAgentServerHealthAndTicketGuard(t *testing.T) {
 		Valid: true, EnterpriseID: "ent_1", ActorUserID: "admin",
 		Scopes: []string{"admin"}, ExpiresAt: time.Now().Add(time.Hour),
 	}
-	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", Nexus: mock})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", WorkCaseContextFor: alwaysWorkCaseBacked, Nexus: mock})
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 

@@ -17,6 +17,12 @@ type fakeApprovalTransmitter struct {
 }
 
 func (f *fakeApprovalTransmitter) TransmitApprovalPlan(_ context.Context, req nexusruntime.ApprovalRequest) (nexusclient.ApprovalTransmissionStatus, error) {
+	// Validate as the real client does, before recording. See the sibling
+	// double in internal/app: a double looser than the surface it stands in for
+	// is how a path that cannot work anywhere stays green everywhere.
+	if err := req.Validate(); err != nil {
+		return nexusclient.ApprovalTransmissionStatus{}, err
+	}
 	f.sent = append(f.sent, req)
 	if f.err != nil {
 		return nexusclient.ApprovalTransmissionStatus{}, f.err
