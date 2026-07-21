@@ -67,3 +67,25 @@ func (c *HTTPClient) Read(ctx context.Context, req nexusruntime.EvidenceReadRequ
 	err := c.post(ctx, "/v1/runtime/read", req, &out)
 	return out, err
 }
+
+// LocateWithBearer and ReadWithBearer are the browser-session variants. The
+// console BFF holds an opaque browser access token rather than the service
+// credential, but the request shape is identical: the token establishes WHO is
+// asking, and the body still declares only WHAT is needed.
+func (c *HTTPClient) LocateWithBearer(ctx context.Context, accessToken string, req nexusruntime.EvidenceRequest) (LocateEvidenceResult, error) {
+	var out LocateEvidenceResult
+	if err := req.Validate(); err != nil {
+		return out, fmt.Errorf("nexus evidence request: %w", err)
+	}
+	err := c.bearerPost(ctx, "/v1/runtime/locate", accessToken, "", req, &out, nil)
+	return out, err
+}
+
+func (c *HTTPClient) ReadWithBearer(ctx context.Context, accessToken string, req nexusruntime.EvidenceReadRequest) (ReadEvidenceResult, error) {
+	var out ReadEvidenceResult
+	if err := req.Validate(); err != nil {
+		return out, fmt.Errorf("nexus evidence read request: %w", err)
+	}
+	err := c.bearerPost(ctx, "/v1/runtime/read", accessToken, "", req, &out, nil)
+	return out, err
+}

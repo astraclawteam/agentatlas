@@ -15,6 +15,8 @@ import (
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/browsersession"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
+	nexusruntime "github.com/astraclawteam/agentnexus/sdk/go/runtime"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 )
@@ -712,13 +714,20 @@ func (f *fakeBrowserDreamNexus) AppendAuditEvidenceWithBearer(_ context.Context,
 	f.lastAudit = request
 	return nexus.AppendAuditEvidenceResponse{AuditRefID: "audit-secret"}, nil
 }
-func (f *fakeBrowserDreamNexus) LocateEvidenceWithBearer(context.Context, string, nexus.LocateEvidenceRequest) (nexus.LocateEvidenceResponse, error) {
+func (f *fakeBrowserDreamNexus) LocateWithBearer(_ context.Context, _ string, _ nexusruntime.EvidenceRequest) (nexusclient.LocateEvidenceResult, error) {
 	f.locates++
-	return nexus.LocateEvidenceResponse{ResourceURI: "sealed://detail"}, nil
+	return nexusclient.LocateEvidenceResult{
+		BusinessContextRef: "wc_0123456789abcdef0123",
+		Evidence:           []nexusruntime.EvidenceHandle{{EvidenceRef: "evd_0123456789abcdef0123", DataClass: dreamEvidenceDataClass}},
+	}, nil
 }
-func (f *fakeBrowserDreamNexus) ReadEvidenceWithBearer(context.Context, string, nexus.ReadEvidenceRequest) (nexus.ReadEvidenceResponse, error) {
+func (f *fakeBrowserDreamNexus) ReadWithBearer(_ context.Context, _ string, _ nexusruntime.EvidenceReadRequest) (nexusclient.ReadEvidenceResult, error) {
 	f.reads++
-	return nexus.ReadEvidenceResponse{GrantID: "grant-secret", SanitizedExcerpt: f.detail, ContentType: "text/plain", ContentHash: "sha256:test"}, nil
+	return nexusclient.ReadEvidenceResult{
+		Decision: "allow", GrantRef: "grant-secret",
+		Data:          map[string]any{"detail": f.detail},
+		SourceVersion: 7, AsOf: "2026-07-21T00:00:00Z", ServedFromCache: false,
+	}, nil
 }
 
 func stringsReader(value string) *strings.Reader { return strings.NewReader(value) }

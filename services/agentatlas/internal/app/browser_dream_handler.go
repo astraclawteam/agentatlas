@@ -19,12 +19,13 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/browsersession"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
+	nexusruntime "github.com/astraclawteam/agentnexus/sdk/go/runtime"
 	"github.com/go-chi/chi/v5"
 )
 
 type browserDreamEvidenceClient interface {
-	LocateEvidenceWithBearer(context.Context, string, nexus.LocateEvidenceRequest) (nexus.LocateEvidenceResponse, error)
-	ReadEvidenceWithBearer(context.Context, string, nexus.ReadEvidenceRequest) (nexus.ReadEvidenceResponse, error)
+	LocateWithBearer(context.Context, string, nexusruntime.EvidenceRequest) (nexusclient.LocateEvidenceResult, error)
+	ReadWithBearer(context.Context, string, nexusruntime.EvidenceReadRequest) (nexusclient.ReadEvidenceResult, error)
 	AppendAuditEvidenceWithBearer(context.Context, string, nexus.AppendAuditEvidenceRequest) (nexus.AppendAuditEvidenceResponse, error)
 }
 
@@ -414,26 +415,51 @@ func (h *browserDreamHandler) evidenceAccess(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusServiceUnavailable, "evidence_unavailable", "Evidence authorization is unavailable")
 		return
 	}
-	loc, err := h.evidence.LocateEvidenceWithBearer(r.Context(), session.UpstreamAccessToken, nexus.LocateEvidenceRequest{EnterpriseID: session.EnterpriseID, EvidencePointerID: view.EvidencePointerID, QueryIntent: "dream evidence drill-down"})
+	located, err := h.evidence.LocateWithBearer(r.Context(), session.UpstreamAccessToken, nexusruntime.EvidenceRequest{
+		RequestID: "browser-dream-locate-" + view.RunID,
+		Purpose:   dreamEvidencePurpose,
+		DataNeeds: []nexusruntime.DataNeed{{
+			NeedID:    view.EvidencePointerID,
+			DataClass: dreamEvidenceDataClass,
+			Purpose:   dreamEvidencePurpose,
+		}},
+		ExpiresAt: time.Now().Add(evidenceRequestTTL).UTC(),
+	})
 	if err != nil {
 		h.evidenceError(w, err)
 		return
 	}
-	read, err := h.evidence.ReadEvidenceWithBearer(r.Context(), session.UpstreamAccessToken, nexus.ReadEvidenceRequest{EnterpriseID: session.EnterpriseID, ResourceURI: loc.ResourceURI, EvidencePointerID: view.EvidencePointerID, MaxBytes: 100000})
+	if len(located.Evidence) == 0 {
+		writeError(w, http.StatusNotFound, "dream_evidence_not_found", "AgentNexus located no evidence for this pointer")
+		return
+	}
+	read, err := h.evidence.ReadWithBearer(r.Context(), session.UpstreamAccessToken, nexusruntime.EvidenceReadRequest{
+		RequestID:          "browser-dream-read-" + view.RunID,
+		BusinessContextRef: located.BusinessContextRef,
+		EvidenceRef:        located.Evidence[0].EvidenceRef,
+		Purpose:            dreamEvidencePurpose,
+		ExpiresAt:          time.Now().Add(evidenceRequestTTL).UTC(),
+	})
 	if err != nil {
 		h.evidenceError(w, err)
 		return
 	}
-	if strings.TrimSpace(read.GrantID) == "" {
+	if strings.TrimSpace(read.GrantRef) == "" {
 		writeError(w, http.StatusForbidden, "grant_required", "AgentNexus returned no bound Step Grant")
 		return
 	}
-	audit, err := h.evidence.AppendAuditEvidenceWithBearer(r.Context(), session.UpstreamAccessToken, nexus.AppendAuditEvidenceRequest{IdempotencyKey: browserDreamID("audit", session.EnterpriseID, view.RunID, read.GrantID), EnterpriseID: session.EnterpriseID, OrgVersion: session.OrgVersion, OrgUnitID: view.OrgUnitID, AuthorizedAction: "dream.evidence.read", Action: nexus.AuditEvidenceRead, ResourceType: "dream_run", ResourceID: view.RunID, Details: map[string]any{"evidence_pointer_id": view.EvidencePointerID, "grant_id": read.GrantID, "actor_user_id": session.UserID}})
+	audit, err := h.evidence.AppendAuditEvidenceWithBearer(r.Context(), session.UpstreamAccessToken, nexus.AppendAuditEvidenceRequest{IdempotencyKey: browserDreamID("audit", session.EnterpriseID, view.RunID, read.GrantRef), EnterpriseID: session.EnterpriseID, OrgVersion: session.OrgVersion, OrgUnitID: view.OrgUnitID, AuthorizedAction: "dream.evidence.read", Action: nexus.AuditEvidenceRead, ResourceType: "dream_run", ResourceID: view.RunID, Details: map[string]any{"evidence_pointer_id": view.EvidencePointerID, "grant_ref": read.GrantRef, "actor_user_id": session.UserID}})
 	if err != nil || strings.TrimSpace(audit.AuditRefID) == "" {
 		writeError(w, http.StatusServiceUnavailable, "audit_failed", "Evidence access could not be audited")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"content_type": read.ContentType, "sanitized_detail": read.SanitizedExcerpt, "content_hash": read.ContentHash})
+	// The freshness disclosure travels to the console too: a staged answer must
+	// never render as a live one.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"decision": read.Decision, "data": read.Data,
+		"source_version": read.SourceVersion, "as_of": read.AsOf,
+		"served_from_cache": read.ServedFromCache,
+	})
 }
 
 func (h *browserDreamHandler) rerunRun(w http.ResponseWriter, r *http.Request) {
