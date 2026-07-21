@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	sdkworkflow "github.com/astraclawteam/agentatlas/sdk/go/workflow"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/agent"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
@@ -277,18 +276,37 @@ func TestRetrievalSearchExcludesNonAuthoritativeFromGeneratedAnswer(t *testing.T
 	}
 }
 
-func TestNexusExecutorsFailClosedWithoutTicket(t *testing.T) {
-	mock := nexusclient.NewMock()
-	mock.Locations["ev_1"] = nexus.LocateEvidenceResponse{ResourceURI: "fs://x", SourceSystem: "filesystem"}
-	r := NewRegistryWithServices(Executors{Nexus: mock})
+// TestNexusEvidenceNodesCarryNoCallerIdentity replaces the old
+// fail-closed-without-ticket test. The nodes used to require a ticket_id in
+// workflow config; identity is now derived from the verified service
+// credential at ingress, so a caller-supplied identity field in node config
+// would be the retired model kept alive in configuration.
+func TestNexusEvidenceNodesCarryNoCallerIdentity(t *testing.T) {
+	evidence := &fakeWorkflowEvidence{}
+	r := NewRegistryWithServices(Executors{Evidence: evidence})
 	run := &RunContext{EnterpriseID: "ent_1", Input: map[string]any{"evidence_pointer_id": "ev_1"}, Outputs: map[string]map[string]any{}}
-	if _, err := r[sdkworkflow.NodeNexusLocate].Execute(context.Background(), sdkworkflow.Node{ID: "l", Type: sdkworkflow.NodeNexusLocate}, run); err == nil || !strings.Contains(err.Error(), "ticket_id") {
-		t.Fatalf("nexus.locate without ticket must fail closed, got %v", err)
-	}
-	run.Input["ticket_id"] = "tick_1"
+
+	// No ticket_id anywhere in config, and locate still succeeds.
 	out := execNode(t, r, sdkworkflow.Node{ID: "l", Type: sdkworkflow.NodeNexusLocate}, run)
-	if out["resource_uri"] != "fs://x" {
+	if out["evidence_ref"] != "evd_0123456789abcdef0123" {
 		t.Fatalf("locate out = %v", out)
+	}
+	// The node emits an opaque handle, never a connector location.
+	if _, leaked := out["resource_uri"]; leaked {
+		t.Fatalf("locate emitted a connector location: %v", out)
+	}
+	if len(evidence.locates) != 1 || evidence.locates[0].DataNeeds[0].NeedID != "ev_1" {
+		t.Fatalf("locate request = %+v", evidence.locates)
+	}
+}
+
+// TestNexusEvidenceNodesFailClosedWithoutEvidenceClient keeps the fail-closed
+// property the old test protected, moved to the dependency that now matters.
+func TestNexusEvidenceNodesFailClosedWithoutEvidenceClient(t *testing.T) {
+	r := NewRegistryWithServices(Executors{})
+	run := &RunContext{EnterpriseID: "ent_1", Input: map[string]any{"evidence_pointer_id": "ev_1"}, Outputs: map[string]map[string]any{}}
+	if _, err := r[sdkworkflow.NodeNexusLocate].Execute(context.Background(), sdkworkflow.Node{ID: "l", Type: sdkworkflow.NodeNexusLocate}, run); err == nil || !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("nexus.locate without an evidence client must fail closed, got %v", err)
 	}
 }
 

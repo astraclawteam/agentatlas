@@ -17,6 +17,7 @@ import (
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/parsergateway"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/retrieval"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/trace"
+	nexusruntime "github.com/astraclawteam/agentnexus/sdk/go/runtime"
 )
 
 // The executor dependency surfaces. Each node type delegates to the real
@@ -94,9 +95,11 @@ type Executors struct {
 	Summarize DocSummarizer
 	Retrieval Retriever
 	Nexus     nexus.Client
-	Dream     DreamAggregator
-	Answer    AnswerGenerator
-	Traces    *trace.Service
+	// Evidence is the frozen-contract evidence surface used by the nexus nodes.
+	Evidence EvidenceClient
+	Dream    DreamAggregator
+	Answer   AnswerGenerator
+	Traces   *trace.Service
 }
 
 // resolveString finds a node parameter: node config wins, then run input,
@@ -307,50 +310,73 @@ func NewRegistryWithServices(e Executors) Registry {
 
 	r.Register(sdkworkflow.NodeNexusLocate, executorFunc(
 		func(ctx context.Context, node sdkworkflow.Node, run *RunContext) (map[string]any, error) {
-			if err := requireDep("nexus", e.Nexus != nil); err != nil {
+			if err := requireDep("evidence", e.Evidence != nil); err != nil {
 				return nil, err
 			}
-			ticketID, ok := resolveString(node, run, "ticket_id")
-			if !ok {
-				return nil, fmt.Errorf("node %s: ticket_id required for nexus.locate (fail closed)", node.ID)
-			}
+			// No ticket_id is read from node config: identity is derived from the
+			// verified service credential at ingress. A caller-supplied identity
+			// field is exactly what the frozen contract removed, so requiring one
+			// here would have kept the retired model alive in workflow config.
 			pointerID, _ := resolveString(node, run, "evidence_pointer_id")
 			if pointerID == "" {
 				return nil, fmt.Errorf("node %s: evidence_pointer_id missing", node.ID)
 			}
-			resp, err := e.Nexus.LocateEvidence(ctx, nexus.LocateEvidenceRequest{
-				TicketID: ticketID, EnterpriseID: run.EnterpriseID, EvidencePointerID: pointerID,
+			located, err := e.Evidence.Locate(ctx, nexusruntime.EvidenceRequest{
+				RequestID: "workflow-locate-" + node.ID,
+				Purpose:   workflowEvidencePurpose,
+				DataNeeds: []nexusruntime.DataNeed{{
+					NeedID:    pointerID,
+					DataClass: workflowEvidenceDataClass,
+					Purpose:   workflowEvidencePurpose,
+				}},
+				ExpiresAt: time.Now().Add(workflowEvidenceTTL).UTC(),
 			})
 			if err != nil {
 				return nil, fmt.Errorf("node %s: %w", node.ID, err)
 			}
-			return map[string]any{"resource_uri": resp.ResourceURI, "source_system": resp.SourceSystem}, nil
+			if len(located.Evidence) == 0 {
+				return nil, fmt.Errorf("node %s: no readable evidence located for pointer %s", node.ID, pointerID)
+			}
+			// The node now emits the opaque handle it was given, not a connector
+			// location. Naming the key resource_uri while it carried a handle would
+			// have been actively misleading to whoever wires the next node.
+			return map[string]any{
+				"evidence_ref":         located.Evidence[0].EvidenceRef,
+				"business_context_ref": located.BusinessContextRef,
+				"data_class":           located.Evidence[0].DataClass,
+			}, nil
 		}))
 
 	r.Register(sdkworkflow.NodeNexusRead, executorFunc(
 		func(ctx context.Context, node sdkworkflow.Node, run *RunContext) (map[string]any, error) {
-			if err := requireDep("nexus", e.Nexus != nil); err != nil {
+			if err := requireDep("evidence", e.Evidence != nil); err != nil {
 				return nil, err
 			}
-			ticketID, ok := resolveString(node, run, "ticket_id")
+			// No ticket_id is read from node config: identity is derived from the
+			// verified service credential at ingress. A caller-supplied identity
+			// field is exactly what the frozen contract removed, so requiring one
+			// here would have kept the retired model alive in workflow config.
+			evidenceRef, ok := resolveString(node, run, "evidence_ref")
 			if !ok {
-				return nil, fmt.Errorf("node %s: ticket_id required for nexus.read (fail closed)", node.ID)
+				return nil, fmt.Errorf("node %s: evidence_ref missing (locate first)", node.ID)
 			}
-			uri, ok := resolveString(node, run, "resource_uri")
-			if !ok {
-				return nil, fmt.Errorf("node %s: resource_uri missing (locate first)", node.ID)
-			}
-			pointerID, _ := resolveString(node, run, "evidence_pointer_id")
-			resp, err := e.Nexus.ReadEvidence(ctx, nexus.ReadEvidenceRequest{
-				TicketID: ticketID, EnterpriseID: run.EnterpriseID,
-				ResourceURI: uri, EvidencePointerID: pointerID,
+			businessContextRef, _ := resolveString(node, run, "business_context_ref")
+			read, err := e.Evidence.Read(ctx, nexusruntime.EvidenceReadRequest{
+				RequestID:          "workflow-read-" + node.ID,
+				BusinessContextRef: businessContextRef,
+				EvidenceRef:        evidenceRef,
+				Purpose:            workflowEvidencePurpose,
+				ExpiresAt:          time.Now().Add(workflowEvidenceTTL).UTC(),
 			})
 			if err != nil {
 				return nil, fmt.Errorf("node %s: %w", node.ID, err)
 			}
+			// The freshness trio travels with the data: a downstream node must be
+			// able to tell a staged read from a live one.
 			return map[string]any{
-				"grant_id": resp.GrantID, "sanitized_excerpt": resp.SanitizedExcerpt,
-				"content_hash": resp.ContentHash,
+				"grant_ref": read.GrantRef, "data": read.Data,
+				"receipt_ref": read.ReceiptRef, "source_version": read.SourceVersion,
+				"as_of": read.AsOf, "served_from_cache": read.ServedFromCache,
 			}, nil
 		}))
 
