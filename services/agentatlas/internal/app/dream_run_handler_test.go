@@ -372,16 +372,22 @@ func TestDreamEvidenceAccessRequiresScopeBoundGrantAndAudit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			nx := &evidenceNexus{scopes: tc.scopes, failAudit: tc.failAudit, emptyAudit: tc.emptyAudit}
 			allowDreamOrg(nx, "dream:evidence:read", "ent-1", "department:rd")
-			resp := requestDream(t, NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, Nexus: nx, DreamRuns: store}), http.MethodPost, "/v1/dream/runs/run-1/evidence-access", nil)
+			evd := &fakeFrozenEvidence{}
+			resp := requestDream(t, NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, Evidence: evd, Nexus: nx, DreamRuns: store}), http.MethodPost, "/v1/dream/runs/run-1/evidence-access", nil)
 			if resp.Code != tc.want {
 				t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 			}
 			if tc.want == http.StatusOK {
-				if len(nx.reads) != 1 || nx.reads[0].EvidencePointerID != "ev-sealed" || len(nx.audits) != 1 || nx.audits[0].Details["grant_id"] != "grant-bound" || !bytes.Contains(resp.Body.Bytes(), []byte("sanitized detail")) {
-					t.Fatalf("binding/audit/response = %+v %+v %s", nx.reads, nx.audits, resp.Body.String())
+				// The read must be bound to the located opaque handle, and the
+				// freshness disclosure must survive to the caller.
+				if len(evd.reads) != 1 || evd.reads[0].EvidenceRef != "evd_0123456789abcdef0123" || len(nx.audits) != 1 || nx.audits[0].Details["grant_ref"] != "grn_bound" {
+					t.Fatalf("binding/audit = %+v %+v", evd.reads, nx.audits)
+				}
+				if !bytes.Contains(resp.Body.Bytes(), []byte("served_from_cache")) {
+					t.Fatalf("freshness disclosure dropped: %s", resp.Body.String())
 				}
 			}
-			if (tc.failAudit || tc.emptyAudit) && bytes.Contains(resp.Body.Bytes(), []byte("sanitized detail")) {
+			if (tc.failAudit || tc.emptyAudit) && bytes.Contains(resp.Body.Bytes(), []byte("sealed-detail")) {
 				t.Fatal("detail leaked before mandatory audit")
 			}
 		})

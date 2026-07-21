@@ -9,12 +9,14 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
+	nexusruntime "github.com/astraclawteam/agentnexus/sdk/go/runtime"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -35,7 +37,9 @@ type dreamRerunner interface {
 
 type dreamRunHandler struct {
 	store dreamRunStore
-	nexus nexus.Client
+	// evidence is the frozen-contract evidence surface.
+	evidence FrozenEvidenceClient
+	nexus    nexus.Client
 	// orgAuthorization answers "may this actor act on this org unit?". It is a
 	// separate dependency from nexus because that question belongs to the
 	// authorization surface, not to evidence lookup.
@@ -243,21 +247,50 @@ func (h *dreamRunHandler) evidenceAccess(w http.ResponseWriter, r *http.Request)
 	if !h.authorizeOrg(w, r, "dream:evidence:read", view.OrgUnitID) {
 		return
 	}
-	loc, err := h.nexus.LocateEvidence(r.Context(), nexus.LocateEvidenceRequest{TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, EvidencePointerID: view.EvidencePointerID, QueryIntent: "dream evidence drill-down"})
+	if h.evidence == nil {
+		writeError(w, http.StatusServiceUnavailable, "evidence_unavailable", "AgentNexus evidence surface unavailable")
+		return
+	}
+	// Declare WHAT is needed and receive opaque handles. Identity comes from
+	// the verified service credential at ingress, so no ticket or enterprise
+	// identifier travels in the body, and no resource URI is put on the wire.
+	located, err := h.evidence.Locate(r.Context(), nexusruntime.EvidenceRequest{
+		RequestID: "dream-evidence-" + view.RunID,
+		Purpose:   dreamEvidencePurpose,
+		DataNeeds: []nexusruntime.DataNeed{{
+			NeedID:    view.EvidencePointerID,
+			DataClass: dreamEvidenceDataClass,
+			Purpose:   dreamEvidencePurpose,
+		}},
+		ExpiresAt: time.Now().Add(evidenceRequestTTL).UTC(),
+	})
 	if err != nil {
 		h.writeNexusEvidenceError(w, err)
 		return
 	}
-	read, err := h.nexus.ReadEvidence(r.Context(), nexus.ReadEvidenceRequest{TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, ResourceURI: loc.ResourceURI, EvidencePointerID: view.EvidencePointerID, MaxBytes: 100000})
+	if len(located.Evidence) == 0 {
+		writeError(w, http.StatusNotFound, "dream_evidence_not_found", "AgentNexus located no evidence for this pointer")
+		return
+	}
+	// Fields is deliberately omitted: the retired surface read a byte-capped
+	// blob, and inventing a field list here would silently narrow what the
+	// drill-down returns. Omitted means every field the policy permits.
+	read, err := h.evidence.Read(r.Context(), nexusruntime.EvidenceReadRequest{
+		RequestID:          "dream-evidence-read-" + view.RunID,
+		BusinessContextRef: located.BusinessContextRef,
+		EvidenceRef:        located.Evidence[0].EvidenceRef,
+		Purpose:            dreamEvidencePurpose,
+		ExpiresAt:          time.Now().Add(evidenceRequestTTL).UTC(),
+	})
 	if err != nil {
 		h.writeNexusEvidenceError(w, err)
 		return
 	}
-	if strings.TrimSpace(read.GrantID) == "" {
+	if strings.TrimSpace(read.GrantRef) == "" {
 		writeError(w, http.StatusForbidden, "grant_required", "AgentNexus returned no bound Step Grant")
 		return
 	}
-	audit, err := h.nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, Action: nexus.AuditEvidenceRead, ResourceType: "dream_run", ResourceID: view.RunID, Details: map[string]any{"evidence_pointer_id": view.EvidencePointerID, "grant_id": read.GrantID, "actor_user_id": actor.Ticket.ActorUserID}})
+	audit, err := h.nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, Action: nexus.AuditEvidenceRead, ResourceType: "dream_run", ResourceID: view.RunID, Details: map[string]any{"evidence_pointer_id": view.EvidencePointerID, "grant_ref": read.GrantRef, "actor_user_id": actor.Ticket.ActorUserID}})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "audit_failed", err.Error())
 		return
@@ -266,7 +299,20 @@ func (h *dreamRunHandler) evidenceAccess(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "audit_failed", "AgentNexus returned no durable audit reference")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"grant_id": read.GrantID, "audit_ref_id": audit.AuditRefID, "content_type": read.ContentType, "sanitized_detail": read.SanitizedExcerpt, "content_hash": read.ContentHash})
+	// The freshness trio is carried through rather than dropped. The frozen
+	// contract states it on every allowed read precisely so a cached answer can
+	// never masquerade as a live one; swallowing it here would re-create that
+	// ambiguity one layer up.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"grant_ref":         read.GrantRef,
+		"audit_ref_id":      audit.AuditRefID,
+		"decision":          read.Decision,
+		"data":              read.Data,
+		"receipt_ref":       read.ReceiptRef,
+		"source_version":    read.SourceVersion,
+		"as_of":             read.AsOf,
+		"served_from_cache": read.ServedFromCache,
+	})
 }
 
 func dreamOrgResourceURI(enterpriseID, orgUnitID string) string {

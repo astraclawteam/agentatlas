@@ -27,7 +27,9 @@ type AgentRouterDeps struct {
 	// OrgAuthorization answers organization-scope authorization questions. It
 	// is separate from Nexus because that question belongs to the
 	// authorization surface, not to evidence lookup.
-	OrgAuthorization       nexus.OrgAuthorizationClient
+	OrgAuthorization nexus.OrgAuthorizationClient
+	// Evidence is the frozen-contract evidence surface.
+	Evidence               FrozenEvidenceClient
 	Agent                  *agent.Runner
 	Workflows              *workflow.Service
 	Runtime                *workflow.Runtime
@@ -161,7 +163,7 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 	if dreamRuns == nil && deps.Store != nil {
 		dreamRuns = deps.Store
 	}
-	dr := &dreamRunHandler{store: dreamRuns, nexus: deps.Nexus, orgAuthorization: deps.OrgAuthorization, rerun: deps.DreamRerun, operations: deps.Dreams}
+	dr := &dreamRunHandler{store: dreamRuns, evidence: deps.Evidence, nexus: deps.Nexus, orgAuthorization: deps.OrgAuthorization, rerun: deps.DreamRerun, operations: deps.Dreams}
 	ar := newAgentRunHandler(deps)
 	outlineStore := deps.Outlines
 	if outlineStore == nil && deps.Store != nil {
