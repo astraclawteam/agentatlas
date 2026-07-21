@@ -133,7 +133,6 @@ type Client interface {
 // ApprovalClient is the frozen AgentNexus /v1/approvals/resolve subset. It is
 // separate from Client so older evidence-only test doubles remain compatible.
 type ApprovalClient interface {
-	ResolveApprovalRoute(ctx context.Context, req ApprovalResolveRequest) (ApprovalRoute, error)
 }
 
 // OrgAuthorizationClient is the AgentNexus authorization-decision subset used
@@ -169,7 +168,6 @@ type BrowserAuthorizationDecision struct {
 }
 type BrowserBFFClient interface {
 	AuthorizeBrowserOperation(context.Context, string, BrowserAuthorizationRequest) (BrowserAuthorizationDecision, error)
-	ResolveApprovalRouteWithBearer(context.Context, string, ApprovalResolveRequest) (ApprovalRoute, error)
 	AppendAuditEvidenceWithBearer(context.Context, string, AppendAuditEvidenceRequest) (AppendAuditEvidenceResponse, error)
 }
 
@@ -178,7 +176,6 @@ type BrowserBFFClient interface {
 // authority for its enterprise, actor, organization, resource and action scope.
 type TicketGovernanceClient interface {
 	AuthorizeTicketOperation(context.Context, string, BrowserAuthorizationRequest) (BrowserAuthorizationDecision, error)
-	ResolveApprovalRoute(context.Context, ApprovalResolveRequest) (ApprovalRoute, error)
 	AppendAuditEvidence(context.Context, AppendAuditEvidenceRequest) (AppendAuditEvidenceResponse, error)
 }
 
@@ -187,35 +184,4 @@ type GovernanceClient interface {
 	TicketGovernanceClient
 }
 
-type ApprovalResolveRequest struct {
-	TicketID                string    `json:"-"`
-	EnterpriseID            string    `json:"-"`
-	ActorUserID             string    `json:"-"`
-	IdempotencyKey          string    `json:"-"`
-	OrgVersion              int64     `json:"org_version"`
-	OrgUnitID               string    `json:"org_unit_id"`
-	ResourceType            string    `json:"resource_type"`
-	ResourceID              string    `json:"resource_id"`
-	Action                  string    `json:"action"`
-	ChangedFields           []string  `json:"changed_fields"`
-	ImpactedOrgUnitIDs      []string  `json:"impacted_org_unit_ids"`
-	ImpactedUserCount       int       `json:"impacted_user_count"`
-	PublishedBehaviorChange bool      `json:"published_behavior_change"`
-	ExternalSideEffect      bool      `json:"external_side_effect"`
-	RequestedRisk           string    `json:"requested_risk"`
-	FactsIssuedAt           time.Time `json:"facts_issued_at"`
-	FactsExpiresAt          time.Time `json:"facts_expires_at"`
-	FactsNonce              string    `json:"facts_nonce"`
-}
 
-type ApprovalRoute struct {
-	Mode                string   `json:"mode"`
-	RiskLevel           string   `json:"risk_level"`
-	RiskReasons         []string `json:"risk_reasons"`
-	RequesterUserID     string   `json:"requester_user_id"`
-	ReviewerUserID      string   `json:"reviewer_user_id,omitempty"`
-	ReviewerDisplayName string   `json:"reviewer_display_name,omitempty"`
-	OrgPath             []string `json:"org_path"`
-	Queue               string   `json:"queue,omitempty"`
-	AutoPublish         bool     `json:"auto_publish"`
-}

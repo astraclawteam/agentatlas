@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -301,7 +302,7 @@ func TestContractDrift(t *testing.T) {
 	}
 
 	agentSpec := specPaths(t, "atlas-agent.yaml")
-	agentRoutes := servedRoutes(t, NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, Nexus: adminMock()}))
+	agentRoutes := servedRoutes(t, NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", Nexus: adminMock()}))
 	if m := diffSets(agentRoutes, agentSpec); len(m) > 0 {
 		t.Fatalf("atlas-agent serves routes missing from atlas-agent.yaml: %v", m)
 	}

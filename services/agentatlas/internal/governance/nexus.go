@@ -2,13 +2,17 @@ package governance
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	model "github.com/astraclawteam/agentatlas/sdk/go/governance"
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
+	nexusruntime "github.com/astraclawteam/agentnexus/sdk/go/runtime"
 )
 
 type NexusAuthorizer struct{ Client nexus.GovernanceClient }
@@ -79,9 +83,20 @@ func (a NexusAuthorizer) AuthorizeDecision(ctx context.Context, actor Actor, rec
 type NexusRouteResolver struct {
 	Client nexus.GovernanceClient
 	Now    func() time.Time
+	// Transmit delivers the authored plan to the approval authority.
+	Transmit ApprovalTransmitter
+	// Authority names the deployment's approval authority - the customer's
+	// OA/BPM system. AgentNexus transmits to it and never substitutes for it.
+	Authority string
 }
 
 func (NexusRouteResolver) Authoritative() bool { return true }
+
+// hexDigest binds the exact change under approval.
+func hexDigest(values ...string) string {
+	sum := sha256.Sum256([]byte(strings.Join(values, "\x1f")))
+	return hex.EncodeToString(sum[:])
+}
 
 func (r NexusRouteResolver) Resolve(ctx context.Context, actor Actor, rec Record, assessment model.RiskAssessment) (model.ReviewRoute, error) {
 	if r.Client == nil || (actor.UpstreamAccessToken == "" && actor.UpstreamTicketID == "") {
@@ -91,27 +106,52 @@ func (r NexusRouteResolver) Resolve(ctx context.Context, actor Actor, rec Record
 	if r.Now != nil {
 		now = r.Now().UTC()
 	}
-	fields := changedFields(rec.Content)
-	req := nexus.ApprovalResolveRequest{TicketID: actor.UpstreamTicketID, EnterpriseID: actor.EnterpriseID, ActorUserID: actor.UserID, IdempotencyKey: stableID("route", actor.EnterpriseID, rec.Draft.ChangeID, fmt.Sprint(rec.Draft.Revision)), OrgVersion: actor.OrgVersion, OrgUnitID: rec.Draft.OrgUnitID, ResourceType: string(rec.Draft.ResourceType), ResourceID: rec.Draft.ResourceID, Action: string(rec.Draft.Action), ChangedFields: fields, ImpactedOrgUnitIDs: []string{rec.Draft.OrgUnitID}, PublishedBehaviorChange: rec.Draft.ResourceType == model.ResourceWorkflow, RequestedRisk: string(assessment.RiskLevel), FactsIssuedAt: now, FactsExpiresAt: now.Add(5 * time.Minute), FactsNonce: stableID("nonce", rec.Draft.ChangeID, fmt.Sprint(rec.Draft.Revision))}
-	var route nexus.ApprovalRoute
-	var err error
-	if actor.UpstreamAccessToken != "" {
-		route, err = r.Client.ResolveApprovalRouteWithBearer(ctx, actor.UpstreamAccessToken, req)
-	} else {
-		route, err = r.Client.ResolveApprovalRoute(ctx, req)
-	}
-	if err != nil || route.AutoPublish {
+	if r.Transmit == nil || r.Authority == "" {
+		// An unset authority is a deployment gap, not a default. AgentNexus
+		// will not stand in for one.
 		return model.ReviewRoute{}, ErrForbidden
 	}
-	risk := model.RiskLevel(route.RiskLevel)
+	fields := changedFields(rec.Content)
+	// The plan hash binds the exact change under approval, so an authority
+	// cannot be handed one plan and later shown another.
+	planHash := "sha256:" + hexDigest(actor.EnterpriseID, rec.Draft.ChangeID, fmt.Sprint(rec.Draft.Revision), string(rec.Draft.Action), strings.Join(fields, ","))
+	req := nexusruntime.ApprovalRequest{
+		RequestID:          stableID("aprq", actor.EnterpriseID, rec.Draft.ChangeID, fmt.Sprint(rec.Draft.Revision)),
+		BusinessContextRef: rec.Draft.ChangeID,
+		Capability:         string(rec.Draft.ResourceType) + "." + string(rec.Draft.Action),
+		ParameterHash:      planHash,
+		Purpose:            "governed_change_approval",
+		Plan: nexusruntime.ApprovalPlanRef{
+			PlanRef:   ApprovalPlanRefFor(actor.EnterpriseID, rec.Draft.ChangeID, uint64(rec.Draft.Revision)),
+			PlanHash:  planHash,
+			Authority: r.Authority,
+		},
+		ExpiresAt: now.Add(approvalPlanTTL),
+	}
+	var err error
+	if actor.UpstreamAccessToken != "" {
+		_, err = r.Transmit.TransmitApprovalPlanWithBearer(ctx, actor.UpstreamAccessToken, req)
+	} else {
+		_, err = r.Transmit.TransmitApprovalPlan(ctx, req)
+	}
+	if err != nil {
+		return model.ReviewRoute{}, ErrForbidden
+	}
+	// The risk verdict is now purely local. The retired surface returned a risk
+	// level that this code cross-checked against its own assessment; with
+	// AgentNexus out of the risk business there is no second opinion, and the
+	// local assessment stands alone.
+	risk := assessment.RiskLevel
 	if risk != model.RiskLow {
 		risk = model.RiskHigh
 	}
-	if assessment.RiskLevel == model.RiskHigh && risk != model.RiskHigh {
-		return model.ReviewRoute{}, ErrForbidden
-	}
-	mode := model.ReviewMode(route.Mode)
-	return model.ReviewRoute{ChangeID: rec.Draft.ChangeID, ResourceType: rec.Draft.ResourceType, ResourceID: rec.Draft.ResourceID, RequesterUserID: rec.Draft.RequesterUserID, ReviewerUserID: route.ReviewerUserID, RiskLevel: risk, Mode: mode, State: model.RoutePending, OrgPath: route.OrgPath, Queue: route.Queue}, nil
+	// A transmitted change is queued with an external authority, and that is
+	// exactly what ReviewAdminQueue models: a queue, and deliberately NO named
+	// reviewer. ReviewUpward would be wrong here - it requires a reviewer, and
+	// at transmit time naming one would be a fiction. The self-review guard in
+	// ReviewRoute.Validate stays effective either way: it fires whenever a
+	// reviewer IS named, which is when the authority's decision lands.
+	return model.ReviewRoute{ChangeID: rec.Draft.ChangeID, ResourceType: rec.Draft.ResourceType, ResourceID: rec.Draft.ResourceID, RequesterUserID: rec.Draft.RequesterUserID, ReviewerUserID: "", RiskLevel: risk, Mode: model.ReviewAdminQueue, Queue: r.Authority, State: model.RoutePending, OrgPath: []string{}}, nil
 }
 
 type NexusAuditAppender struct{ Client nexus.GovernanceClient }

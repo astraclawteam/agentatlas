@@ -14,7 +14,9 @@ import (
 	"github.com/astraclawteam/agentatlas/sdk/go/governance"
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
+	governanceinternal "github.com/astraclawteam/agentatlas/services/agentatlas/internal/governance"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
+	nexusruntime "github.com/astraclawteam/agentnexus/sdk/go/runtime"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -303,42 +305,98 @@ func (h *dreamPolicyHandler) review(w http.ResponseWriter, r *http.Request) {
 	if !h.authorizeOrg(w, r, "edit", view.Policy.OrgUnitID) {
 		return
 	}
-	client, ok := h.deps.Nexus.(nexus.ApprovalClient)
-	if !ok {
-		writeError(w, 503, "governance_unavailable", "AgentNexus approval resolver unavailable")
+	if h.deps.ApprovalTransmitter == nil {
+		writeError(w, 503, "governance_unavailable", "AgentNexus approval transmission unavailable")
 		return
 	}
-	orgVersion, err := h.deps.Dreams.OrgVersion(r.Context(), actor.Ticket.EnterpriseID)
-	if err != nil {
-		writeError(w, 503, "governance_unavailable", err.Error())
-		return
-	}
-	resolved, err := client.ResolveApprovalRoute(r.Context(), nexus.ApprovalResolveRequest{TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, ActorUserID: view.RequesterUserID, IdempotencyKey: op.Row.OperationKey, OrgVersion: orgVersion, OrgUnitID: view.Policy.OrgUnitID, ResourceType: "dream_policy", ResourceID: id, Action: "dream_policy." + req.Action, ChangedFields: changed, ImpactedOrgUnitIDs: []string{view.Policy.OrgUnitID}, RequestedRisk: string(assessment.RiskLevel), FactsIssuedAt: op.Row.FactsIssuedAt.Time, FactsExpiresAt: op.Row.FactsExpiresAt.Time, FactsNonce: op.Row.FactsNonce})
-	if err != nil {
+	// Only a change that actually needs approval goes to the authority. A
+	// low-risk edit keeps its local single-confirmation fast path: sending
+	// every small change to the customer's OA queue would be both unnecessary
+	// and a good way to get the queue ignored.
+	needsAuthority := assessment.RiskLevel != governance.RiskLow
+	planHash := "sha256:" + operationHash(map[string]any{"change": id, "revision": req.Revision, "action": req.Action, "fields": changed})
+	planRef := governanceinternal.ApprovalPlanRefFor(actor.Ticket.EnterpriseID, id, uint64(req.Revision))
+	// reviewer stays empty until the authority has actually decided.
+	reviewer := ""
+	if !needsAuthority {
+		// Nothing to transmit and nothing to wait for.
+	} else if refresh {
+		// Refresh READS the authority's decision; it does not re-submit. The
+		// plan is already delivered, and asking again would duplicate it.
+		status, err := h.deps.ApprovalTransmitter.GetApprovalTransmission(r.Context(), planRef)
+		if err != nil {
+			writeError(w, 502, "governance_failed", err.Error())
+			return
+		}
+		if !status.Decided() {
+			// Still with the authority. A pending decision is a state, not a
+			// failure: the route stays queued and the caller retries later.
+			// Note "delivered" is NOT decided - it only means the plan arrived.
+			writeError(w, 409, "approval_pending", "the approval authority has not decided yet")
+			return
+		}
+		if status.Decision != nexusclient.ApprovalApproved {
+			// A denial is an answer, not an error, but it is not an approval:
+			// nothing may proceed on it.
+			writeError(w, 403, "approval_denied", "the approval authority did not approve this change")
+			return
+		}
+		// The approver identity is deliberately absent from this contract, so
+		// this records the AUTHORITY under which the decision was made - not a
+		// person. Who clicked approve inside the customer's OA/BPM is that
+		// system's record, not a field AgentAtlas may invent.
+		reviewer = status.Authority
+	} else if _, err := h.deps.ApprovalTransmitter.TransmitApprovalPlan(r.Context(), nexusruntime.ApprovalRequest{
+		RequestID:          "aprq-" + op.Row.OperationKey,
+		BusinessContextRef: id,
+		Capability:         "dream_policy." + req.Action,
+		ParameterHash:      planHash,
+		Purpose:            "governed_change_approval",
+		Plan: nexusruntime.ApprovalPlanRef{
+			PlanRef: planRef, PlanHash: planHash, Authority: h.deps.ApprovalAuthority,
+		},
+		ExpiresAt: time.Now().Add(24 * time.Hour).UTC(),
+	}); err != nil {
 		writeError(w, 502, "governance_failed", err.Error())
 		return
 	}
-	if resolved.RequesterUserID != view.RequesterUserID || (assessment.RiskLevel == governance.RiskHigh && resolved.RiskLevel != "high") {
-		writeError(w, http.StatusBadGateway, "governance_binding_mismatch", "AgentNexus approval route changed requester or downgraded deterministic risk")
-		return
-	}
-	level := governance.RiskLevel(resolved.RiskLevel)
+	// The risk verdict is local now; there is no returned route to cross-check
+	// it against, and none to take a reviewer from.
+	level := assessment.RiskLevel
 	if level != governance.RiskLow {
 		level = governance.RiskHigh
 	}
-	route := governance.ReviewRoute{ChangeID: id, ResourceType: governance.ResourceDreamPolicy, ResourceID: id, RequesterUserID: view.RequesterUserID, ReviewerUserID: resolved.ReviewerUserID, RiskLevel: level, Mode: governance.ReviewMode(resolved.Mode), State: governance.RoutePending, OrgPath: resolved.OrgPath, Queue: resolved.Queue}
-	if route.RiskLevel == governance.RiskHigh && route.ReviewerUserID == view.RequesterUserID {
-		writeError(w, 403, "self_review_denied", "requester cannot review their own high-risk change")
-		return
+	// Queued with the authority until it decides; Upward once it has. The
+	// self-review guard in ReviewRoute.Validate fires as soon as a reviewer is
+	// named, which is exactly when a decision has landed.
+	mode, queue, orgPath := governance.ReviewAdminQueue, h.deps.ApprovalAuthority, []string{}
+	switch {
+	case !needsAuthority:
+		mode, queue = governance.ReviewSingleConfirmation, ""
+	case reviewer != "":
+		mode, queue, orgPath = governance.ReviewUpward, "", []string{h.deps.ApprovalAuthority}
 	}
+	route := governance.ReviewRoute{ChangeID: id, ResourceType: governance.ResourceDreamPolicy, ResourceID: id, RequesterUserID: view.RequesterUserID, ReviewerUserID: reviewer, RiskLevel: level, Mode: mode, Queue: queue, State: governance.RoutePending, OrgPath: orgPath}
 	audit, ok := h.operationAudit(w, r, op, nexus.AuditDreamPolicyCreated, id, "review:"+req.Action, map[string]any{"revision": req.Revision, "risk_level": route.RiskLevel, "reviewer_user_id": route.ReviewerUserID})
 	if !ok {
 		return
 	}
-	result, err := h.deps.Dreams.SubmitReview(r.Context(), actor.Ticket.EnterpriseID, id, actor.Ticket.ActorUserID, audit, op.Row.OperationKey, req.Action, req.Revision, route, resolved.RiskReasons)
+	result, err := h.deps.Dreams.SubmitReview(r.Context(), actor.Ticket.EnterpriseID, id, actor.Ticket.ActorUserID, audit, op.Row.OperationKey, req.Action, req.Revision, route, assessment.RiskReasons)
 	if err != nil {
 		writeError(w, 409, "review_failed", err.Error())
 		return
+	}
+	if reviewer != "" {
+		// The authority already approved, in its own system. Applying that here
+		// rather than waiting for someone to click approve a second time keeps
+		// the decision in ONE place: a second click would be duplicate work, and
+		// a decision that exists in two systems can disagree with itself.
+		decided, err := h.deps.Dreams.Decide(r.Context(), actor.Ticket.EnterpriseID, id, reviewer, audit, op.Row.OperationKey, "approve", req.Revision)
+		if err != nil {
+			writeError(w, 409, "decision_failed", err.Error())
+			return
+		}
+		result = decided
 	}
 	h.finishOperation(w, r, op, result, 200)
 }

@@ -66,11 +66,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if cfg.AgentNexus.ApprovalFactsSecretFile != "" {
-		if err := rawNexusClient.ConfigureApprovalFactsSecret(cfg.AgentNexus.ApprovalFactsSecretFile); err != nil {
-			return err
-		}
-	}
+	// The approval-facts attestation belonged to the retired resolution
+	// surface: AgentAtlas used to sign the facts it asked AgentNexus to decide
+	// on. AgentNexus no longer decides, so there are no facts to attest here -
+	// the authority attests its own decision instead, and that signature comes
+	// back with the evidence.
 	logger, err := observability.NewLogger("atlas-agent")
 	if err != nil {
 		return err
@@ -133,7 +133,14 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	changes := governance.NewService(changeStore, governance.NexusRouteResolver{Client: rawNexusClient, Now: time.Now}, governance.NexusAuditAppender{Client: rawNexusClient}, nil, time.Now)
+	// An unset approval authority is a deployment gap, not a default: the
+	// resolver and the dream handlers all fail closed on it rather than
+	// approving locally, so refuse to start instead of serving a governance
+	// surface that can only ever answer 503.
+	if strings.TrimSpace(cfg.AgentNexus.ApprovalAuthority) == "" {
+		return errors.New("agentnexus.approval_authority is required: name the customer OA/BPM system that decides governed changes")
+	}
+	changes := governance.NewService(changeStore, governance.NexusRouteResolver{Client: rawNexusClient, Now: time.Now, Transmit: rawNexusClient, Authority: cfg.AgentNexus.ApprovalAuthority}, governance.NexusAuditAppender{Client: rawNexusClient}, nil, time.Now)
 	changes.SetAuthorizer(governance.NexusAuthorizer{Client: rawNexusClient})
 
 	defaultModel := cfg.LLMRouter.DefaultModel
@@ -189,6 +196,7 @@ func run() error {
 		Runtime: workflowRuntime, Dreams: dreamPolicies, Store: queries,
 		DreamRerun: dreamScheduler, Runner: taskRunner, Metrics: metrics,
 		BrowserSessions: browserSessions, BrowserHandleProtector: protector, Changes: changes, BrowserAuthorizer: rawNexusClient,
+		ApprovalTransmitter: rawNexusClient, ApprovalAuthority: cfg.AgentNexus.ApprovalAuthority,
 		TLS: tlsLinks.agentAtlas,
 	})
 

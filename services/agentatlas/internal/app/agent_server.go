@@ -28,6 +28,10 @@ type AgentRouterDeps struct {
 	// is separate from Nexus because that question belongs to the
 	// authorization surface, not to evidence lookup.
 	OrgAuthorization nexus.OrgAuthorizationClient
+	// ApprovalTransmitter delivers authored approval plans; ApprovalAuthority
+	// names the deployment's approval authority (the customer OA/BPM system).
+	ApprovalTransmitter governance.ApprovalTransmitter
+	ApprovalAuthority   string
 	// Evidence is the frozen-contract evidence surface.
 	Evidence               FrozenEvidenceClient
 	Agent                  *agent.Runner
@@ -189,7 +193,7 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 		if candidate, ok := deps.DreamRerun.(dreamBackfiller); ok {
 			browserBackfill = candidate
 		}
-		browserDream := &browserDreamHandler{store: dreamRuns, orgs: orgStore, authorizer: deps.BrowserAuthorizer, evidence: browserDreamEvidence, rerun: deps.DreamRerun, backfill: browserBackfill, operations: deps.Dreams, handles: newBrowserDreamHandleCodec(deps.BrowserHandleProtector, nil), bindings: workflowDreamBindingLister{workflows: deps.Workflows, orgs: orgStore}}
+		browserDream := &browserDreamHandler{store: dreamRuns, orgs: orgStore, authorizer: deps.BrowserAuthorizer, evidence: browserDreamEvidence, rerun: deps.DreamRerun, backfill: browserBackfill, operations: deps.Dreams, approvals: deps.ApprovalTransmitter, approvalAuthority: deps.ApprovalAuthority, handles: newBrowserDreamHandleCodec(deps.BrowserHandleProtector, nil), bindings: workflowDreamBindingLister{workflows: deps.Workflows, orgs: orgStore}}
 		if deps.Changes != nil {
 			knowledge.changes = deps.Changes
 		}

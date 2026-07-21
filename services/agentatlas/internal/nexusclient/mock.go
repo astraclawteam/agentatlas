@@ -20,11 +20,8 @@ type Mock struct {
 	// evidence is the frozen-contract fixture: need id -> detail.
 	evidence map[string]string
 
-	Tickets          map[string]nexus.VerifyTicketResponse // ticket_id -> response
-	OrgEvents        []nexus.OrgEvent
-	ApprovalRoute    nexus.ApprovalRoute
-	ApprovalErr      error
-	ApprovalRequests []nexus.ApprovalResolveRequest
+	Tickets   map[string]nexus.VerifyTicketResponse // ticket_id -> response
+	OrgEvents []nexus.OrgEvent
 
 	AuditLog      []nexus.AppendAuditEvidenceRequest
 	auditReceipts map[string]mockAuditReceipt
@@ -33,16 +30,6 @@ type Mock struct {
 type mockAuditReceipt struct {
 	hash string
 	ref  string
-}
-
-func (m *Mock) ResolveApprovalRoute(_ context.Context, req nexus.ApprovalResolveRequest) (nexus.ApprovalRoute, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.ApprovalRequests = append(m.ApprovalRequests, req)
-	if m.ApprovalErr != nil {
-		return nexus.ApprovalRoute{}, m.ApprovalErr
-	}
-	return m.ApprovalRoute, nil
 }
 
 var _ nexus.Client = (*Mock)(nil)

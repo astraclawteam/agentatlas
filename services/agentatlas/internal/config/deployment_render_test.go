@@ -15,7 +15,7 @@ func TestComposePreviousBrowserKeyIsOptionalAndRotationOverrideIsExplicit(t *tes
 	composeDir := filepath.Join("..", "..", "deploy", "compose")
 	requiredEnv := append(os.Environ(),
 		"ATLAS_NEXUS_SERVICE_SECRET_FILE_SOURCE=C:/secrets/nexus-service",
-		"ATLAS_NEXUS_APPROVAL_FACTS_SECRET_FILE_SOURCE=C:/secrets/nexus-approval",
+		"ATLAS_APPROVAL_AUTHORITY=oa.example.customer",
 		"ATLAS_NEXUS_BROWSER_CLIENT_SECRET_FILE_SOURCE=C:/secrets/browser-client",
 		"ATLAS_BROWSER_SESSION_ENCRYPTION_KEY_FILE_SOURCE=C:/secrets/browser-current",
 	)

@@ -44,10 +44,15 @@ type LLMRouter struct {
 }
 
 type AgentNexus struct {
-	BaseURL                                 string `yaml:"base_url"`
-	ClientID                                string `yaml:"client_id"`
-	SecretFile                              string `yaml:"secret_file"`
-	ApprovalFactsSecretFile                 string `yaml:"approval_facts_secret_file"`
+	BaseURL    string `yaml:"base_url"`
+	ClientID   string `yaml:"client_id"`
+	SecretFile string `yaml:"secret_file"`
+	// ApprovalAuthority names the deployment's approval authority - the
+	// customer's OA/BPM system. AgentAtlas authors approval plans and
+	// AgentNexus transmits them there; neither product decides. An empty
+	// value is a deployment gap, not a default, so the governance paths
+	// fail closed rather than approving locally.
+	ApprovalAuthority                       string `yaml:"approval_authority"`
 	BrowserClientID                         string `yaml:"browser_client_id"`
 	BrowserClientSecretFile                 string `yaml:"browser_client_secret_file"`
 	BrowserSessionEncryptionKeyID           string `yaml:"browser_session_encryption_key_id"`
@@ -235,7 +240,7 @@ func (c *Config) applyEnv() {
 	set(&c.AgentNexus.BaseURL, "ATLAS_NEXUS_BASE_URL")
 	set(&c.AgentNexus.ClientID, "ATLAS_NEXUS_CLIENT_ID")
 	set(&c.AgentNexus.SecretFile, "ATLAS_NEXUS_SERVICE_SECRET_FILE")
-	set(&c.AgentNexus.ApprovalFactsSecretFile, "ATLAS_NEXUS_APPROVAL_FACTS_SECRET_FILE")
+	set(&c.AgentNexus.ApprovalAuthority, "ATLAS_APPROVAL_AUTHORITY")
 	set(&c.AgentNexus.BrowserClientID, "ATLAS_NEXUS_BROWSER_CLIENT_ID")
 	set(&c.AgentNexus.BrowserClientSecretFile, "ATLAS_NEXUS_BROWSER_CLIENT_SECRET_FILE")
 	set(&c.AgentNexus.BrowserSessionEncryptionKeyID, "ATLAS_BROWSER_SESSION_ENCRYPTION_KEY_ID")

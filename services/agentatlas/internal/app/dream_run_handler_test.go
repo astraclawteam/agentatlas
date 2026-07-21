@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -186,7 +187,7 @@ func TestDreamRunReadAndAppendOnlyAnnotation(t *testing.T) {
 	nx := &evidenceNexus{scopes: []string{"dream:read", "dream:annotate"}}
 	allowDreamOrg(nx, "dream:read", "ent-1", "department:rd")
 	allowDreamOrg(nx, "dream:annotate", "ent-1", "department:rd")
-	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, Nexus: nx, DreamRuns: store})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", Nexus: nx, DreamRuns: store})
 
 	resp := requestDream(t, router, http.MethodGet, "/v1/dream/runs/run-1", nil)
 	if resp.Code != http.StatusOK || !bytes.Contains(resp.Body.Bytes(), []byte(`"parent_run_ids":["child-1","child-2"]`)) || !bytes.Contains(resp.Body.Bytes(), []byte(`"trend-1"`)) {
@@ -271,7 +272,7 @@ func TestDreamRerunReceiptReconcilesAfterRunBeforeCompletionFailure(t *testing.T
 	rerunner := &fakeDreamRerunner{}
 	policyStore := newFakePolicyStore()
 	policyStore.failCompleteOnce = true
-	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, Nexus: nx, DreamRuns: store, DreamRerun: rerunner, Dreams: dream.NewPolicyService(policyStore)})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", Nexus: nx, DreamRuns: store, DreamRerun: rerunner, Dreams: dream.NewPolicyService(policyStore)})
 	request := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/v1/dream/runs/run-1/reruns", nil)
 		req.Header.Set("X-Nexus-Ticket", "ticket-1")
@@ -299,7 +300,7 @@ func TestDreamBackfillReceiptReconcilesAfterRunBeforeCompletionFailure(t *testin
 	raw, _ := json.Marshal(canonicalDreamPolicyBody())
 	policyStore.policies["policy-1"] = db.DreamPolicy{ID: "policy-1", EnterpriseID: "ent-1", OrgScope: "department:rd", Status: "published", Draft: raw, RequesterUserID: "manager-1", PermissionMode: "direct_edit", RiskReasons: []byte(`[]`), ReviewOrgPath: []byte(`[]`)}
 	policyStore.failCompleteOnce = true
-	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, Nexus: nx, DreamRerun: runner, Dreams: dream.NewPolicyService(policyStore)})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", Nexus: nx, DreamRerun: runner, Dreams: dream.NewPolicyService(policyStore)})
 	body := map[string]any{"window_start": "2026-07-01T00:00:00Z", "window_end": "2026-07-02T00:00:00Z"}
 	request := func() *httptest.ResponseRecorder {
 		raw, _ := json.Marshal(body)
@@ -353,7 +354,7 @@ func TestDreamEvidenceAccessRequiresScopeBoundGrantAndAudit(t *testing.T) {
 			nx := &evidenceNexus{scopes: tc.scopes, failAudit: tc.failAudit, emptyAudit: tc.emptyAudit}
 			allowDreamOrg(nx, "dream:evidence:read", "ent-1", "department:rd")
 			evd := &fakeFrozenEvidence{}
-			resp := requestDream(t, NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, Evidence: evd, Nexus: nx, DreamRuns: store}), http.MethodPost, "/v1/dream/runs/run-1/evidence-access", nil)
+			resp := requestDream(t, NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", Evidence: evd, Nexus: nx, DreamRuns: store}), http.MethodPost, "/v1/dream/runs/run-1/evidence-access", nil)
 			if resp.Code != tc.want {
 				t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 			}

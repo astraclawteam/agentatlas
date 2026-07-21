@@ -18,6 +18,7 @@ import (
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/browsersession"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
+	governanceinternal "github.com/astraclawteam/agentatlas/services/agentatlas/internal/governance"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
 	nexusruntime "github.com/astraclawteam/agentnexus/sdk/go/runtime"
 	"github.com/go-chi/chi/v5"
@@ -30,15 +31,17 @@ type browserDreamEvidenceClient interface {
 }
 
 type browserDreamHandler struct {
-	store      dreamRunStore
-	orgs       browserSessionOrgStore
-	authorizer nexus.BrowserBFFClient
-	evidence   browserDreamEvidenceClient
-	rerun      dreamRerunner
-	backfill   dreamBackfiller
-	operations *dream.PolicyService
-	handles    *browserDreamHandleCodec
-	bindings   publishedDreamWorkflowBindingLister
+	store             dreamRunStore
+	orgs              browserSessionOrgStore
+	authorizer        nexus.BrowserBFFClient
+	evidence          browserDreamEvidenceClient
+	approvals         governanceinternal.ApprovalTransmitter
+	approvalAuthority string
+	rerun             dreamRerunner
+	backfill          dreamBackfiller
+	operations        *dream.PolicyService
+	handles           *browserDreamHandleCodec
+	bindings          publishedDreamWorkflowBindingLister
 }
 
 type browserDreamWorkflowBinding struct {
@@ -893,32 +896,94 @@ func (h *browserDreamHandler) reviewPolicy(w http.ResponseWriter, r *http.Reques
 		h.writePolicy(w, session, *op.Replay, http.StatusOK)
 		return
 	}
-	resolved, err := h.authorizer.ResolveApprovalRouteWithBearer(r.Context(), session.UpstreamAccessToken, nexus.ApprovalResolveRequest{EnterpriseID: session.EnterpriseID, ActorUserID: current.RequesterUserID, IdempotencyKey: key, OrgVersion: session.OrgVersion, OrgUnitID: current.Policy.OrgUnitID, ResourceType: "dream_policy", ResourceID: current.ID, Action: "dream_policy." + input.Action, ChangedFields: changed, ImpactedOrgUnitIDs: []string{current.Policy.OrgUnitID}, RequestedRisk: string(assessment.RiskLevel), FactsIssuedAt: op.Row.FactsIssuedAt.Time, FactsExpiresAt: op.Row.FactsExpiresAt.Time, FactsNonce: op.Row.FactsNonce})
+	if h.approvals == nil {
+		writeError(w, http.StatusServiceUnavailable, "governance_unavailable", "AgentNexus approval transmission unavailable")
+		return
+	}
+	planHash := "sha256:" + operationHash(map[string]any{"change": current.ID, "revision": input.Revision, "action": input.Action, "fields": changed})
+	// Only a change that actually needs approval goes to the authority; a
+	// low-risk edit keeps its local single-confirmation fast path.
+	needsAuthority := assessment.RiskLevel != sdkgovernance.RiskLow
+	planRef := governanceinternal.ApprovalPlanRefFor(session.EnterpriseID, current.ID, uint64(input.Revision))
+	// reviewer stays empty until the authority has actually decided.
+	reviewer := ""
+	if !needsAuthority {
+		// Nothing to transmit and nothing to wait for.
+	} else if refresh {
+		// Refresh READS the authority's decision; it does not re-submit.
+		status, statusErr := h.approvals.GetApprovalTransmission(r.Context(), planRef)
+		if statusErr != nil {
+			writeError(w, http.StatusBadGateway, "governance_failed", "Approval transmission could not be read")
+			return
+		}
+		if !status.Decided() {
+			// "delivered" is not decided: it only means the plan arrived.
+			writeError(w, http.StatusConflict, "approval_pending", "The approval authority has not decided yet")
+			return
+		}
+		if status.Decision != nexusclient.ApprovalApproved {
+			writeError(w, http.StatusForbidden, "approval_denied", "The approval authority did not approve this change")
+			return
+		}
+		// The AUTHORITY, not a person: approver identity does not cross this
+		// contract by design.
+		reviewer = status.Authority
+		err = nil
+	} else {
+		_, err = h.approvals.TransmitApprovalPlanWithBearer(r.Context(), session.UpstreamAccessToken, nexusruntime.ApprovalRequest{
+			RequestID:          "aprq-" + key,
+			BusinessContextRef: current.ID,
+			Capability:         "dream_policy." + input.Action,
+			ParameterHash:      planHash,
+			Purpose:            "governed_change_approval",
+			Plan: nexusruntime.ApprovalPlanRef{
+				PlanRef: planRef, PlanHash: planHash, Authority: h.approvalAuthority,
+			},
+			ExpiresAt: time.Now().Add(24 * time.Hour).UTC(),
+		})
+	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "governance_failed", "Review route could not be resolved")
 		return
 	}
-	if resolved.RequesterUserID != current.RequesterUserID || (assessment.RiskLevel == sdkgovernance.RiskHigh && resolved.RiskLevel != "high") {
-		writeError(w, http.StatusBadGateway, "governance_binding_mismatch", "Review route binding mismatch")
-		return
-	}
-	level := sdkgovernance.RiskLevel(resolved.RiskLevel)
+	// The risk verdict is local now; there is no returned route to cross-check
+	// it against, and none to take a reviewer from.
+	level := assessment.RiskLevel
 	if level != sdkgovernance.RiskLow {
 		level = sdkgovernance.RiskHigh
 	}
-	route := sdkgovernance.ReviewRoute{ChangeID: current.ID, ResourceType: sdkgovernance.ResourceDreamPolicy, ResourceID: current.ID, RequesterUserID: current.RequesterUserID, ReviewerUserID: resolved.ReviewerUserID, RiskLevel: level, Mode: sdkgovernance.ReviewMode(resolved.Mode), State: sdkgovernance.RoutePending, OrgPath: resolved.OrgPath, Queue: resolved.Queue}
-	if route.RiskLevel == sdkgovernance.RiskHigh && route.ReviewerUserID == current.RequesterUserID {
-		writeError(w, http.StatusForbidden, "self_review_denied", "Requester cannot review their own high-risk change")
-		return
+	// GAP: the self-review guard cannot run here. At transmit time no reviewer
+	// is named, so "reviewer == requester" would be vacuously false rather than
+	// enforced. It must move to wherever the authority's evidence is accepted,
+	// and that path is not built yet.
+	// Queued with the authority until it decides; Upward once it has.
+	mode, queue, orgPath := sdkgovernance.ReviewAdminQueue, h.approvalAuthority, []string{}
+	switch {
+	case !needsAuthority:
+		mode, queue = sdkgovernance.ReviewSingleConfirmation, ""
+	case reviewer != "":
+		mode, queue, orgPath = sdkgovernance.ReviewUpward, "", []string{h.approvalAuthority}
 	}
+	route := sdkgovernance.ReviewRoute{ChangeID: current.ID, ResourceType: sdkgovernance.ResourceDreamPolicy, ResourceID: current.ID, RequesterUserID: current.RequesterUserID, ReviewerUserID: reviewer, RiskLevel: level, Mode: mode, Queue: queue, State: sdkgovernance.RoutePending, OrgPath: orgPath}
 	audit, ok := h.auditPolicy(w, r, session, op, current, "review:"+input.Action, map[string]any{"revision": input.Revision, "risk_level": route.RiskLevel, "reviewer_user_id": route.ReviewerUserID})
 	if !ok {
 		return
 	}
-	view, err := h.operations.SubmitReview(r.Context(), session.EnterpriseID, current.ID, session.UserID, audit, key, input.Action, input.Revision, route, resolved.RiskReasons)
+	view, err := h.operations.SubmitReview(r.Context(), session.EnterpriseID, current.ID, session.UserID, audit, key, input.Action, input.Revision, route, assessment.RiskReasons)
 	if err != nil {
 		writeError(w, http.StatusConflict, "review_failed", err.Error())
 		return
+	}
+	if reviewer != "" {
+		// The authority already approved in its own system; applying it here
+		// keeps the decision in one place instead of asking a human to click
+		// approve a second time.
+		decided, err := h.operations.Decide(r.Context(), session.EnterpriseID, current.ID, reviewer, audit, key, "approve", input.Revision)
+		if err != nil {
+			writeError(w, http.StatusConflict, "decision_failed", err.Error())
+			return
+		}
+		view = decided
 	}
 	h.finishPolicyOperation(w, r, session, key, view, http.StatusOK)
 }

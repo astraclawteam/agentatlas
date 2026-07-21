@@ -9,10 +9,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/astraclawteam/agentatlas/sdk/go/governance"
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
+	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
 )
 
 func TestDreamPolicyLifecycleCreateIsRevisionedVersionZeroDraft(t *testing.T) {
@@ -63,7 +63,7 @@ func TestDreamPolicyLifecycleAuditFailurePreventsUpdate(t *testing.T) {
 	store := newFakePolicyStore()
 	raw, _ := json.Marshal(canonicalDreamPolicyBody())
 	store.policies["policy-audit"] = db.DreamPolicy{ID: "policy-audit", EnterpriseID: "ent_1", OrgScope: "pg_mes", Status: "draft", Draft: raw, RequesterUserID: "editor", PermissionMode: "direct_edit", RiskReasons: []byte(`[]`), ReviewOrgPath: []byte(`[]`)}
-	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, Nexus: &failingAuditNexus{Mock: base}, Dreams: dream.NewPolicyService(store)})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", Nexus: &failingAuditNexus{Mock: base}, Dreams: dream.NewPolicyService(store)})
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 	resp := doLifecycleJSON(t, http.MethodPut, srv.URL+"/v1/dream-policies/policy-audit", "tick_editor", "", map[string]any{"revision": 0, "policy": canonicalDreamPolicyBody()})
@@ -82,7 +82,7 @@ func TestDreamPolicyLifecycleMapsNexusAuditConflictTo409(t *testing.T) {
 	store := newFakePolicyStore()
 	raw, _ := json.Marshal(canonicalDreamPolicyBody())
 	store.policies["policy-conflict"] = db.DreamPolicy{ID: "policy-conflict", EnterpriseID: "ent_1", OrgScope: "pg_mes", Status: "draft", Draft: raw, RequesterUserID: "editor", PermissionMode: "direct_edit", RiskReasons: []byte(`[]`), ReviewOrgPath: []byte(`[]`)}
-	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, Nexus: &conflictAuditNexus{Mock: base}, Dreams: dream.NewPolicyService(store)})
+	router := NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", Nexus: &conflictAuditNexus{Mock: base}, Dreams: dream.NewPolicyService(store)})
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 	resp := doLifecycleJSON(t, http.MethodPut, srv.URL+"/v1/dream-policies/policy-conflict", "tick_editor", "audit-conflict-op-0001", map[string]any{"revision": 0, "policy": canonicalDreamPolicyBody()})
@@ -180,7 +180,6 @@ func TestDreamPolicyLifecycleAdminQueueRefreshesFromNexus(t *testing.T) {
 	mock := adminMock()
 	mock.Tickets["tick_editor"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "editor", Scopes: []string{"edit"}}
 	mock.Tickets["tick_manager"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "manager", Scopes: []string{"approve_high_risk"}}
-	mock.ApprovalRoute = nexus.ApprovalRoute{Mode: string(governance.ReviewAdminQueue), RiskLevel: "high", RiskReasons: []string{"workflow_binding"}, RequesterUserID: "editor", OrgPath: []string{"pg_mes"}, Queue: "enterprise_knowledge_admin"}
 	srv, _, _ := newAgentTestServerWithPolicyStore(t, mock)
 	created := decodeBody(t, postJSONReq(t, srv.URL+"/v1/dream-policies", "tick_editor", canonicalDreamPolicyBody()))
 	id := created["dream_policy_id"].(string)
@@ -192,52 +191,53 @@ func TestDreamPolicyLifecycleAdminQueueRefreshesFromNexus(t *testing.T) {
 	if queueBody["review_mode"] != "enterprise_knowledge_admin_queue" {
 		t.Fatalf("queue=%#v", queueBody)
 	}
-	mock.ApprovalRoute = nexus.ApprovalRoute{Mode: string(governance.ReviewUpward), RiskLevel: "high", RiskReasons: []string{"workflow_binding"}, RequesterUserID: "editor", ReviewerUserID: "manager", OrgPath: []string{"pg_mes", "dept"}}
 	refreshed := doLifecycleJSON(t, http.MethodPost, srv.URL+"/v1/dream-policies/"+id+"/review", "tick_editor", "queue-refresh-001", map[string]any{"revision": 0, "action": "publish"})
 	if refreshed.StatusCode != 200 {
 		t.Fatalf("refresh=%d %v", refreshed.StatusCode, decodeBody(t, refreshed))
 	}
 	refreshBody := decodeBody(t, refreshed)
-	if refreshBody["reviewer_user_id"] != "manager" {
+	// The reviewer is whoever the approval AUTHORITY reported, not someone
+	// AgentAtlas chose: it no longer selects approvers.
+	if refreshBody["reviewer_user_id"] != "oa.example" || refreshBody["review_mode"] != "upward_review" {
 		t.Fatalf("refresh=%#v", refreshBody)
 	}
-	decision := doLifecycleJSON(t, http.MethodPost, srv.URL+"/v1/dream-policies/"+id+"/decisions", "tick_manager", "queue-decision-01", map[string]any{"revision": 0, "decision": "approve"})
-	if decision.StatusCode != 200 {
-		t.Fatalf("queue decision=%d", decision.StatusCode)
+	// No second decision call: the authority already approved in its own
+	// system, and refresh applied that. Asking a human to click approve again
+	// here would put the same decision in two places, where they can disagree.
+	if refreshBody["review_state"] != "approved" {
+		t.Fatalf("refresh did not apply the authority decision: %#v", refreshBody)
 	}
-	decision.Body.Close()
 }
 
 func TestDreamPolicyLifecycleDifferentEditorCannotSubmitOrRefreshReview(t *testing.T) {
 	mock := adminMock()
 	mock.Tickets["tick_creator"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "creator", Scopes: []string{"edit"}}
 	mock.Tickets["tick_editor2"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "editor-2", Scopes: []string{"edit"}}
-	mock.ApprovalRoute = nexus.ApprovalRoute{Mode: string(governance.ReviewAdminQueue), RiskLevel: "high", RiskReasons: []string{"workflow_binding"}, RequesterUserID: "creator", OrgPath: []string{"pg_mes"}, Queue: "enterprise_knowledge_admin"}
 	srv, _, _ := newAgentTestServerWithPolicyStore(t, mock)
 	created := decodeBody(t, postJSONReq(t, srv.URL+"/v1/dream-policies", "tick_creator", canonicalDreamPolicyBody()))
 	id := created["dream_policy_id"].(string)
-	resolveBefore, auditBefore := len(mock.ApprovalRequests), len(mock.AuditLog)
+	auditBefore := len(mock.AuditLog)
 	denied := doLifecycleJSON(t, http.MethodPost, srv.URL+"/v1/dream-policies/"+id+"/review", "tick_editor2", "different-editor-review", map[string]any{"revision": 0, "action": "publish"})
 	if denied.StatusCode != http.StatusForbidden {
 		t.Fatalf("different editor submit=%d body=%v", denied.StatusCode, decodeBody(t, denied))
 	}
 	denied.Body.Close()
-	if len(mock.ApprovalRequests) != resolveBefore || len(mock.AuditLog) != auditBefore {
-		t.Fatal("denied editor reached AgentNexus or emitted audit")
+	// A denied editor must not have reached AgentNexus at all.
+	if len(mock.AuditLog) != auditBefore {
+		t.Fatal("denied editor emitted audit")
 	}
 	queued := doLifecycleJSON(t, http.MethodPost, srv.URL+"/v1/dream-policies/"+id+"/review", "tick_creator", "creator-queue-review", map[string]any{"revision": 0, "action": "publish"})
 	if queued.StatusCode != http.StatusOK {
 		t.Fatalf("creator queue=%d body=%v", queued.StatusCode, decodeBody(t, queued))
 	}
 	queued.Body.Close()
-	mock.ApprovalRoute = nexus.ApprovalRoute{Mode: string(governance.ReviewUpward), RiskLevel: "high", RiskReasons: []string{"workflow_binding"}, RequesterUserID: "creator", ReviewerUserID: "manager", OrgPath: []string{"pg_mes", "dept"}}
-	resolveBefore, auditBefore = len(mock.ApprovalRequests), len(mock.AuditLog)
+	auditBefore = len(mock.AuditLog)
 	refreshed := doLifecycleJSON(t, http.MethodPost, srv.URL+"/v1/dream-policies/"+id+"/review", "tick_editor2", "different-editor-refresh", map[string]any{"revision": 0, "action": "publish"})
 	if refreshed.StatusCode != http.StatusForbidden {
 		t.Fatalf("different editor refresh=%d body=%v", refreshed.StatusCode, decodeBody(t, refreshed))
 	}
 	refreshed.Body.Close()
-	if len(mock.ApprovalRequests) != resolveBefore || len(mock.AuditLog) != auditBefore {
+	if len(mock.AuditLog) != auditBefore {
 		t.Fatal("denied refresh reached AgentNexus or emitted audit")
 	}
 }
@@ -246,7 +246,6 @@ func TestDreamPolicyLifecycleHighRiskUsesUpwardDifferentReviewer(t *testing.T) {
 	mock := adminMock()
 	mock.Tickets["tick_editor"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "editor", Scopes: []string{"edit", "approve_high_risk", "publish_low_risk"}}
 	mock.Tickets["tick_reviewer"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "manager", Scopes: []string{"approve_high_risk"}}
-	mock.ApprovalRoute = nexus.ApprovalRoute{Mode: string(governance.ReviewUpward), RiskLevel: "high", RiskReasons: []string{"workflow_binding"}, RequesterUserID: "editor", ReviewerUserID: "manager", OrgPath: []string{"pg_mes", "dept_rnd"}}
 	srv, _, store := newAgentTestServerWithPolicyStore(t, mock)
 	created := decodeBody(t, postJSONReq(t, srv.URL+"/v1/dream-policies", "tick_editor", canonicalDreamPolicyBody()))
 	id := created["dream_policy_id"].(string)
@@ -263,23 +262,34 @@ func TestDreamPolicyLifecycleHighRiskUsesUpwardDifferentReviewer(t *testing.T) {
 		t.Fatalf("review=%d %v", review.StatusCode, decodeBody(t, review))
 	}
 	reviewed := decodeBody(t, review)
-	if reviewed["status"] != "review_pending" || reviewed["risk_level"] != "high" || reviewed["reviewer_user_id"] != "manager" {
+	// First submit only QUEUES with the authority: it is delivery, not a
+	// decision, so no reviewer is named yet.
+	if reviewed["status"] != "review_pending" || reviewed["risk_level"] != "high" ||
+		reviewed["review_mode"] != "enterprise_knowledge_admin_queue" || reviewed["reviewer_user_id"] != nil {
 		t.Fatalf("reviewed=%#v", reviewed)
 	}
 	auditsBeforeWrongReviewer := len(mock.AuditLog)
+	// Self-approval is now moot rather than merely refused: a route queued with
+	// the authority cannot be decided in AgentAtlas by ANYONE, requester
+	// included. The guard fires before identity is even considered.
 	self := doLifecycleJSON(t, http.MethodPost, srv.URL+"/v1/dream-policies/"+id+"/decisions", "tick_editor", "self-decision-0001", map[string]any{"revision": 0, "decision": "approve"})
-	if self.StatusCode != http.StatusForbidden {
+	if self.StatusCode != http.StatusConflict {
 		t.Fatalf("self approval=%d", self.StatusCode)
 	}
 	self.Body.Close()
 	if len(mock.AuditLog) != auditsBeforeWrongReviewer {
 		t.Fatal("wrong reviewer emitted a committed-looking remote audit")
 	}
-	decision := doLifecycleJSON(t, http.MethodPost, srv.URL+"/v1/dream-policies/"+id+"/decisions", "tick_reviewer", "reviewer-decision-1", map[string]any{"revision": 0, "decision": "approve"})
-	if decision.StatusCode != 200 {
-		t.Fatalf("decision=%d %v", decision.StatusCode, decodeBody(t, decision))
+	// Approval arrives from the authority, not from a click here: refreshing
+	// reads its decision and applies it in one step.
+	refreshed := doLifecycleJSON(t, http.MethodPost, srv.URL+"/v1/dream-policies/"+id+"/review", "tick_editor", "authority-refresh-01", map[string]any{"revision": 0})
+	if refreshed.StatusCode != 200 {
+		t.Fatalf("refresh=%d %v", refreshed.StatusCode, decodeBody(t, refreshed))
 	}
-	decision.Body.Close()
+	refreshedBody := decodeBody(t, refreshed)
+	if refreshedBody["review_state"] != "approved" || refreshedBody["reviewer_user_id"] != "oa.example" {
+		t.Fatalf("authority decision not applied: %#v", refreshedBody)
+	}
 	published := doLifecycleJSON(t, http.MethodPost, srv.URL+"/v1/dream-policies/"+id+"/publish", "tick_editor", "", map[string]any{"revision": 0})
 	if published.StatusCode != 200 {
 		t.Fatalf("publish=%d %v", published.StatusCode, decodeBody(t, published))
@@ -319,7 +329,6 @@ func TestDreamPolicyLifecycleHighRiskUsesUpwardDifferentReviewer(t *testing.T) {
 		t.Fatalf("idempotency mismatch=%d", mismatchResp.StatusCode)
 	}
 	mismatchResp.Body.Close()
-	mock.ApprovalRoute = nexus.ApprovalRoute{Mode: string(governance.ReviewSingleConfirmation), RiskLevel: "low", RiskReasons: []string{}, RequesterUserID: "editor", OrgPath: []string{}}
 	lowReview := doLifecycleJSON(t, http.MethodPost, srv.URL+"/v1/dream-policies/"+id+"/review", "tick_editor", "dream-review-0002", map[string]any{"revision": 2})
 	if lowReview.StatusCode != 200 {
 		t.Fatalf("low review=%d %v", lowReview.StatusCode, decodeBody(t, lowReview))

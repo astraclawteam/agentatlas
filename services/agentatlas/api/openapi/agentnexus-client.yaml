@@ -22,20 +22,29 @@ paths:
         '200': {description: Authoritative decision, content: {application/json: {schema: {$ref: '#/components/schemas/GovernanceAuthorizationDecision'}}}}
         '401': {description: Invalid service, Bearer, or CaseTicket credential.}
         '403': {description: Ticket or actor is not bound to the requested operation.}
-  /v1/approvals/resolve:
+  # Approval RESOLUTION is retired: AgentNexus no longer chooses approvers.
+  # AgentAtlas authors the plan and AgentNexus transmits it to the deployment
+  # approval authority (the customer OA/BPM system), which decides and attests.
+  /v1/approvals/transmissions:
     post:
-      operationId: resolveApprovalRoute
-      summary: Resolve and audit the approval route for a governed change.
+      operationId: transmitApprovalPlan
+      summary: Transmit a caller-authored approval plan to the approval authority.
       security: [{agentAtlasServiceSecret: []}, {browserAccessToken: []}]
-      parameters:
-        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 16, maxLength: 128}}
-        - {name: X-Approval-Facts-Attestation, in: header, required: true, schema: {type: string}}
-        - {name: X-Case-Ticket, in: header, required: false, schema: {type: string}, description: Required with AgentAtlas service credentials and forbidden with browser Bearer authentication.}
       requestBody:
         required: true
-        content: {application/json: {schema: {$ref: '#/components/schemas/ApprovalResolveRequest'}}}
+        content: {application/json: {schema: {$ref: '#/components/schemas/ApprovalRequest'}}}
       responses:
-        '200': {description: Deterministic confirmation, reviewer, or administrator queue route, content: {application/json: {schema: {$ref: '#/components/schemas/ApprovalRoute'}}}}
+        '202': {description: Transport status of the transmitted plan; never a decision., content: {application/json: {schema: {$ref: '#/components/schemas/ApprovalTransmissionStatus'}}}}
+  /v1/approvals/transmissions/{plan_ref}:
+    get:
+      operationId: getApprovalTransmission
+      summary: Read the transmission status of one approval plan.
+      security: [{agentAtlasServiceSecret: []}, {browserAccessToken: []}]
+      parameters:
+        - {name: plan_ref, in: path, required: true, schema: {type: string}}
+      responses:
+        '200': {description: Transmission status. Carries the authority decision when one exists, and by boundary no approver identity., content: {application/json: {schema: {$ref: '#/components/schemas/ApprovalTransmissionStatus'}}}}
+        '404': {description: No transmission exists under this plan_ref for the verified tenant.}
   /v1/tickets/verify:
     post:
       operationId: verifyTicket
@@ -247,6 +256,47 @@ components:
       scheme: bearer
       description: Opaque AgentAtlas BFF token bound to client, audience, enterprise, user, and browser session.
   schemas:
+    ApprovalRequest:
+      type: object
+      required: [request_id, business_context_ref, capability, parameter_hash, purpose, plan, expires_at]
+      properties:
+        request_id: {type: string}
+        trace_id: {type: string}
+        business_context_ref: {type: string}
+        capability: {type: string}
+        parameter_hash: {type: string}
+        purpose: {type: string}
+        plan:
+          type: object
+          required: [plan_ref, plan_hash, authority]
+          properties:
+            plan_ref: {type: string}
+            plan_hash: {type: string}
+            authority: {type: string, description: The deployment approval authority. AgentNexus transmits to it and never substitutes for it.}
+        expires_at: {type: string, format: date-time}
+    ApprovalTransmissionStatus:
+      type: object
+      description: >-
+        Transport diagnostics of one transmitted plan. Status is monotonic and
+        carries no grant state. No approver identity appears here by boundary:
+        who inside the authority decided is that system record, not a field
+        that crosses this contract.
+      required: [plan_ref, plan_hash, authority, business_context_ref, capability, parameter_hash, status, expires_at, delivery_attempts, updated_at]
+      properties:
+        plan_ref: {type: string}
+        plan_hash: {type: string}
+        authority: {type: string}
+        business_context_ref: {type: string}
+        capability: {type: string}
+        parameter_hash: {type: string}
+        status: {type: string, enum: [pending, delivered, evidence_recorded, revoked]}
+        expires_at: {type: string, format: date-time}
+        delivery_attempts: {type: integer, minimum: 0}
+        last_delivery_state: {type: string, enum: [delivered, failed]}
+        decision: {type: string, enum: [approved, denied, narrowed]}
+        decided_at: {type: string, format: date-time}
+        revoked_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
     GovernanceAuthorizationRequest:
       type: object
       additionalProperties: false
@@ -269,38 +319,6 @@ components:
         org_version: {type: integer, minimum: 1}
         org_unit_ids: {type: array, items: {type: string}}
         risk_level: {type: string}
-    ApprovalRoute:
-      type: object
-      required: [mode, risk_level, risk_reasons, requester_user_id, org_path, auto_publish]
-      properties:
-        mode: {type: string, enum: [single_confirmation, upward_review, enterprise_knowledge_admin_queue]}
-        risk_level: {type: string, enum: [low, medium, high]}
-        risk_reasons: {type: array, items: {type: string}}
-        requester_user_id: {type: string}
-        reviewer_user_id: {type: string}
-        reviewer_display_name: {type: string}
-        org_path: {type: array, items: {type: string}}
-        queue: {type: string}
-        auto_publish: {type: boolean, enum: [false]}
-    ApprovalResolveRequest:
-      type: object
-      additionalProperties: false
-      required: [org_version, org_unit_id, resource_type, resource_id, action, changed_fields, impacted_org_unit_ids, impacted_user_count, published_behavior_change, external_side_effect, requested_risk, facts_issued_at, facts_expires_at, facts_nonce]
-      properties:
-        org_version: {type: integer, minimum: 1}
-        org_unit_id: {type: string}
-        resource_type: {type: string}
-        resource_id: {type: string}
-        action: {type: string}
-        changed_fields: {type: array, items: {type: string}}
-        impacted_org_unit_ids: {type: array, items: {type: string}}
-        impacted_user_count: {type: integer, minimum: 0}
-        published_behavior_change: {type: boolean}
-        external_side_effect: {type: boolean}
-        requested_risk: {type: string, enum: [low, medium, high]}
-        facts_issued_at: {type: string, format: date-time}
-        facts_expires_at: {type: string, format: date-time}
-        facts_nonce: {type: string, minLength: 16, maxLength: 128}
     AuditEvidenceAction:
       type: string
       enum:

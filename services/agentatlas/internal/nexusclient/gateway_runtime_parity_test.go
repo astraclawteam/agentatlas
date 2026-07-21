@@ -47,7 +47,6 @@ func TestAgentAtlasConsumerContractPathsExistInPublishedGatewayRuntime(t *testin
 	// declaration is migrated". The list is asserted to be exact in both
 	// directions, so neither a silent regression nor a stale entry can hide.
 	notYetMigrated := map[string]bool{
-		"/v1/approvals/resolve":   true, // -> /v1/approvals/transmissions (Task 0E retired resolution)
 		"/v1/actions/request":     true, // -> /v1/runtime/act
 		"/v1/actions/receipt":     true, // -> /v1/runtime/receipts/{receipt_ref}
 		"/v1/actions/observation": true, // -> folded into the receipt surface
