@@ -72,6 +72,10 @@ type AppendAuditEvidenceResponse struct {
 	AuditRefID string `json:"audit_ref_id"`
 }
 
+// OrgScopeKind names a kind of organization scope. It survives the org-event
+// retirement because it is not an event concept: spaces.ScopeString uses it as
+// the single definition of the org_scope encoding that the brief handler and
+// the dream scheduler hand-encode.
 type OrgScopeKind string
 
 const (
@@ -82,41 +86,29 @@ const (
 	ScopeCompany      OrgScopeKind = "company"
 )
 
-type OrgEventType string
-
-const (
-	OrgEmployeeUpserted     OrgEventType = "employee_upserted"
-	OrgEmployeeRemoved      OrgEventType = "employee_removed"
-	OrgProjectGroupUpserted OrgEventType = "project_group_upserted"
-	OrgProjectGroupRemoved  OrgEventType = "project_group_removed"
-	OrgDepartmentUpserted   OrgEventType = "department_upserted"
-	OrgDepartmentRemoved    OrgEventType = "department_removed"
-	OrgBusinessUnitUpserted OrgEventType = "business_unit_upserted"
-	OrgBusinessUnitRemoved  OrgEventType = "business_unit_removed"
-	OrgCompanyUpserted      OrgEventType = "company_upserted"
-)
-
-type OrgScope struct {
-	Kind       OrgScopeKind `json:"kind"`
-	ID         string       `json:"id"`
-	Name       string       `json:"name"`
-	ParentKind OrgScopeKind `json:"parent_kind,omitempty"`
-	ParentID   string       `json:"parent_id,omitempty"`
-}
-
-type OrgMember struct {
-	UserID      string `json:"user_id"`
-	DisplayName string `json:"display_name,omitempty"`
-}
-
+// OrgEvent is one organization-graph change notification from
+// GET /v1/org-events. It mirrors the frozen OrgEvent schema exactly and
+// nothing more: that schema is additionalProperties:false and carries only
+// these four fields.
+//
+// It deliberately carries NO org unit identity, scope, membership or
+// enterprise id. The feed publishes only sealed versions and the contract
+// states it "is a change notification only: organization payloads and source
+// digests are never published here" - the narrow projection exists so the feed
+// cannot become a second read path around the evidence surface.
+//
+// The consequence is load-bearing: a consumer can drive a VERSION CURSOR from
+// this and nothing else. It cannot tell which org unit changed, so it cannot
+// provision or rename anything per unit.
+//
+// EventType is a plain string, not an enum, because the contract requires that
+// "consumers must ignore unknown values rather than fail closed on them". A
+// typed enum here would turn every future event type into a hard error.
 type OrgEvent struct {
-	EventID      string       `json:"event_id"`
-	EnterpriseID string       `json:"enterprise_id"`
-	OrgVersion   int64        `json:"org_version"`
-	Type         OrgEventType `json:"type"`
-	Scope        OrgScope     `json:"scope"`
-	Members      []OrgMember  `json:"members,omitempty"`
-	OccurredAt   time.Time    `json:"occurred_at"`
+	EventID    string    `json:"event_id"`
+	EventType  string    `json:"event_type"`
+	OrgVersion int64     `json:"org_version"`
+	OccurredAt time.Time `json:"occurred_at"`
 }
 
 // OrgEventHandler processes one event; returning an error stops the

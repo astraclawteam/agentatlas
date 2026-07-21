@@ -100,6 +100,30 @@ func (q *Queries) GetKnowledgeSpaceByScope(ctx context.Context, arg GetKnowledge
 	return i, err
 }
 
+const getLatestOrgSnapshot = `-- name: GetLatestOrgSnapshot :one
+SELECT enterprise_id, org_version, snapshot
+FROM org_snapshots
+WHERE enterprise_id = $1
+ORDER BY org_version DESC
+LIMIT 1
+`
+
+type GetLatestOrgSnapshotRow struct {
+	EnterpriseID string `json:"enterprise_id"`
+	OrgVersion   int64  `json:"org_version"`
+	Snapshot     []byte `json:"snapshot"`
+}
+
+// Read the tenant's org-version cursor so a subscription resumes strictly
+// after the last version it durably recorded. Without this the worker always
+// resumed from 0 and replayed the whole retained feed on every reconnect.
+func (q *Queries) GetLatestOrgSnapshot(ctx context.Context, enterpriseID string) (GetLatestOrgSnapshotRow, error) {
+	row := q.db.QueryRow(ctx, getLatestOrgSnapshot, enterpriseID)
+	var i GetLatestOrgSnapshotRow
+	err := row.Scan(&i.EnterpriseID, &i.OrgVersion, &i.Snapshot)
+	return i, err
+}
+
 const insertKnowledgeSpace = `-- name: InsertKnowledgeSpace :one
 INSERT INTO knowledge_spaces (id, enterprise_id, kind, name, org_scope, org_version)
 VALUES ($1, $2, $3, $4, $5, $6)

@@ -3,482 +3,196 @@ package spaces
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 )
 
-// fakeStore is an in-memory Store honoring the same uniqueness and
-// version-guard semantics as the real schema.
-type fakeStore struct {
-	mu                 sync.Mutex
-	applyMu            sync.Mutex
-	enterprises        map[string]db.Enterprise
-	spaces             map[string]db.KnowledgeSpace // key enterprise|org_scope
-	byID               map[string]db.KnowledgeSpace
-	versions           []db.InsertKnowledgeSpaceVersionParams
-	bindings           map[string]db.UpsertOrgScopeBindingParams // key enterprise|kind|scope_id
-	snapshots          map[string]int64                          // enterprise -> max version seen
-	members            map[string]db.UpsertSpaceMemberParams     // key space|user
-	failBindingOnce    bool
-	bindingBlockParent string
-	bindingEntered     chan struct{}
-	bindingRelease     chan struct{}
+// These tests replace six that asserted Knowledge-Space provisioning from org
+// event payloads. That behaviour was removed, not broken: the frozen OrgEvent
+// carries only event_id, event_type, org_version and occurred_at, so an event
+// cannot say which org unit changed. The old tests passed because their fake
+// events carried a scope and a member list the real server never sends.
+
+type fakeCursorStore struct {
+	ensured   []db.EnsureEnterpriseParams
+	snapshots []db.UpsertOrgSnapshotParams
+	upsertErr error
 }
 
-func newFakeStore() *fakeStore {
-	return &fakeStore{
-		enterprises: map[string]db.Enterprise{},
-		spaces:      map[string]db.KnowledgeSpace{},
-		byID:        map[string]db.KnowledgeSpace{},
-		bindings:    map[string]db.UpsertOrgScopeBindingParams{},
-		snapshots:   map[string]int64{},
-		members:     map[string]db.UpsertSpaceMemberParams{},
-	}
-}
-
-func scopeKey(ent, scope string) string { return ent + "|" + scope }
-
-func (f *fakeStore) EnsureEnterprise(_ context.Context, arg db.EnsureEnterpriseParams) error {
-	if _, ok := f.enterprises[arg.ID]; !ok {
-		f.enterprises[arg.ID] = db.Enterprise{ID: arg.ID, Name: arg.Name}
-	}
+func (f *fakeCursorStore) EnsureEnterprise(_ context.Context, arg db.EnsureEnterpriseParams) error {
+	f.ensured = append(f.ensured, arg)
 	return nil
 }
 
-func (f *fakeStore) UpsertEnterprise(_ context.Context, arg db.UpsertEnterpriseParams) (db.Enterprise, error) {
-	e := db.Enterprise{ID: arg.ID, Name: arg.Name}
-	f.enterprises[arg.ID] = e
-	return e, nil
-}
-
-func (f *fakeStore) GetKnowledgeSpaceByScope(_ context.Context, arg db.GetKnowledgeSpaceByScopeParams) (db.KnowledgeSpace, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if s, ok := f.spaces[scopeKey(arg.EnterpriseID, arg.OrgScope)]; ok {
-		return s, nil
+func (f *fakeCursorStore) UpsertOrgSnapshot(_ context.Context, arg db.UpsertOrgSnapshotParams) error {
+	if f.upsertErr != nil {
+		return f.upsertErr
 	}
-	return db.KnowledgeSpace{}, pgx.ErrNoRows
-}
-
-func (f *fakeStore) ApplyOrgSpaceEvent(_ context.Context, arg db.ApplyOrgSpaceEventParams) (db.ApplyOrgSpaceEventRow, error) {
-	f.applyMu.Lock()
-	defer f.applyMu.Unlock()
-
-	f.mu.Lock()
-	existing, exists := f.spaces[scopeKey(arg.EventEnterpriseID, arg.EventOrgScope)]
-	if exists && existing.OrgVersion >= arg.EventOrgVersion {
-		f.mu.Unlock()
-		return db.ApplyOrgSpaceEventRow{SpaceID: existing.ID}, nil
-	}
-	if f.failBindingOnce {
-		f.failBindingOnce = false
-		f.mu.Unlock()
-		return db.ApplyOrgSpaceEventRow{}, fmt.Errorf("injected binding failure")
-	}
-	block := f.bindingBlockParent != "" && arg.EventParentScopeID.Valid && arg.EventParentScopeID.String == f.bindingBlockParent
-	entered, release := f.bindingEntered, f.bindingRelease
-	f.mu.Unlock()
-	if block {
-		select {
-		case entered <- struct{}{}:
-		default:
-		}
-		<-release
-	}
-
-	var members []nexus.OrgMember
-	if err := json.Unmarshal(arg.EventMemberSnapshot, &members); err != nil {
-		return db.ApplyOrgSpaceEventRow{}, err
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	space := existing
-	created := !exists
-	if created {
-		space = db.KnowledgeSpace{
-			ID: arg.NewSpaceID, EnterpriseID: arg.EventEnterpriseID, Kind: arg.EventScopeKind,
-			Name: arg.EventSpaceName, OrgScope: arg.EventOrgScope, OrgVersion: arg.EventOrgVersion,
-		}
-	} else {
-		space.Name, space.OrgVersion = arg.EventSpaceName, arg.EventOrgVersion
-	}
-	f.spaces[scopeKey(space.EnterpriseID, space.OrgScope)] = space
-	f.byID[space.ID] = space
-	f.bindings[arg.EventEnterpriseID+"|"+arg.EventScopeKind+"|"+arg.EventScopeID] = db.UpsertOrgScopeBindingParams{
-		EnterpriseID: arg.EventEnterpriseID, SpaceID: space.ID, ScopeKind: arg.EventScopeKind, ScopeID: arg.EventScopeID,
-		ParentScopeKind: arg.EventParentScopeKind, ParentScopeID: arg.EventParentScopeID,
-	}
-	f.versions = append(f.versions, db.InsertKnowledgeSpaceVersionParams{
-		SpaceID: space.ID, OrgVersion: arg.EventOrgVersion, Snapshot: arg.EventVersionSnapshot,
-	})
-	memberPrefix := space.ID + "|"
-	for key := range f.members {
-		if strings.HasPrefix(key, memberPrefix) {
-			delete(f.members, key)
-		}
-	}
-	for _, member := range members {
-		f.members[memberPrefix+member.UserID] = db.UpsertSpaceMemberParams{
-			SpaceID: space.ID, UserID: member.UserID, DisplayName: member.DisplayName, OrgVersion: arg.EventOrgVersion,
-		}
-	}
-	return db.ApplyOrgSpaceEventRow{SpaceID: space.ID, Accepted: true, Created: created}, nil
-}
-
-func (f *fakeStore) InsertKnowledgeSpace(_ context.Context, arg db.InsertKnowledgeSpaceParams) (db.KnowledgeSpace, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	s := db.KnowledgeSpace{
-		ID: arg.ID, EnterpriseID: arg.EnterpriseID, Kind: arg.Kind,
-		Name: arg.Name, OrgScope: arg.OrgScope, OrgVersion: arg.OrgVersion,
-	}
-	f.spaces[scopeKey(arg.EnterpriseID, arg.OrgScope)] = s
-	f.byID[arg.ID] = s
-	return s, nil
-}
-
-func (f *fakeStore) UpdateKnowledgeSpaceIfNewer(_ context.Context, arg db.UpdateKnowledgeSpaceIfNewerParams) (int64, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	s, ok := f.byID[arg.ID]
-	if !ok || s.OrgVersion >= arg.OrgVersion {
-		return 0, nil
-	}
-	s.Name = arg.Name
-	s.OrgVersion = arg.OrgVersion
-	f.byID[arg.ID] = s
-	f.spaces[scopeKey(s.EnterpriseID, s.OrgScope)] = s
-	return 1, nil
-}
-
-func (f *fakeStore) InsertKnowledgeSpaceVersion(_ context.Context, arg db.InsertKnowledgeSpaceVersionParams) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.versions = append(f.versions, arg)
+	f.snapshots = append(f.snapshots, arg)
 	return nil
 }
 
-func (f *fakeStore) UpsertOrgScopeBinding(_ context.Context, arg db.UpsertOrgScopeBindingParams) error {
-	f.mu.Lock()
-	if f.failBindingOnce {
-		f.failBindingOnce = false
-		f.mu.Unlock()
-		return fmt.Errorf("injected binding failure")
-	}
-	block := f.bindingBlockParent != "" && arg.ParentScopeID.Valid && arg.ParentScopeID.String == f.bindingBlockParent
-	entered, release := f.bindingEntered, f.bindingRelease
-	f.mu.Unlock()
-	if block {
-		select {
-		case entered <- struct{}{}:
-		default:
-		}
-		<-release
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.bindings[arg.EnterpriseID+"|"+arg.ScopeKind+"|"+arg.ScopeID] = arg
-	return nil
+func (f *fakeCursorStore) ListKnowledgeSpacesByEnterprise(context.Context, string) ([]db.KnowledgeSpace, error) {
+	return nil, nil
 }
 
-func (f *fakeStore) UpsertOrgSnapshot(_ context.Context, arg db.UpsertOrgSnapshotParams) error {
-	if arg.OrgVersion > f.snapshots[arg.EnterpriseID] {
-		f.snapshots[arg.EnterpriseID] = arg.OrgVersion
-	}
-	return nil
+// replayClient replays queued events. It filters on the cursor ONLY: the real
+// feed is scoped by the verified service credential and the event carries no
+// enterprise id, so filtering by tenant here would make the double drop events
+// the real server delivers.
+type replayClient struct {
+	events   []nexus.OrgEvent
+	gotSince int64
 }
-
-func (f *fakeStore) UpsertSpaceMember(_ context.Context, arg db.UpsertSpaceMemberParams) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	key := arg.SpaceID + "|" + arg.UserID
-	if existing, ok := f.members[key]; ok && existing.OrgVersion > arg.OrgVersion {
-		return nil
-	}
-	f.members[key] = arg
-	return nil
-}
-
-func (f *fakeStore) ListKnowledgeSpacesByEnterprise(_ context.Context, enterpriseID string) ([]db.KnowledgeSpace, error) {
-	var out []db.KnowledgeSpace
-	for _, s := range f.spaces {
-		if s.EnterpriseID == enterpriseID {
-			out = append(out, s)
-		}
-	}
-	return out, nil
-}
-
-func orgEvent(t nexus.OrgEventType, version int64, kind nexus.OrgScopeKind, id, name string, members ...nexus.OrgMember) nexus.OrgEvent {
-	return nexus.OrgEvent{
-		EventID: "evt_" + id, EnterpriseID: "ent_1", OrgVersion: version,
-		Type: t, Scope: nexus.OrgScope{Kind: kind, ID: id, Name: name},
-		Members: members, OccurredAt: time.Unix(1750000000+version, 0),
-	}
-}
-
-func newTestSyncer(events ...nexus.OrgEvent) (*Syncer, *fakeStore) {
-	store := newFakeStore()
-	// Mock client inline to avoid an import cycle with internal/nexusclient.
-	client := &replayClient{events: events}
-	svc := NewService(store)
-	return NewSyncer(svc, store, client, zap.NewNop()), store
-}
-
-type replayClient struct{ events []nexus.OrgEvent }
 
 func (r *replayClient) VerifyTicket(context.Context, nexus.VerifyTicketRequest) (nexus.VerifyTicketResponse, error) {
-	return nexus.VerifyTicketResponse{}, nil
+	return nexus.VerifyTicketResponse{}, errors.New("not used")
 }
+
 func (r *replayClient) AppendAuditEvidence(context.Context, nexus.AppendAuditEvidenceRequest) (nexus.AppendAuditEvidenceResponse, error) {
-	return nexus.AppendAuditEvidenceResponse{AuditRefID: "a"}, nil
+	return nexus.AppendAuditEvidenceResponse{}, errors.New("not used")
 }
-func (r *replayClient) SubscribeOrgEvents(ctx context.Context, ent string, since int64, h nexus.OrgEventHandler) error {
+
+func (r *replayClient) SubscribeOrgEvents(ctx context.Context, _ string, sinceVersion int64, handler nexus.OrgEventHandler) error {
+	r.gotSince = sinceVersion
 	for _, ev := range r.events {
-		if ev.EnterpriseID == ent && ev.OrgVersion > since {
-			if err := h(ctx, ev); err != nil {
-				return err
-			}
+		if ev.OrgVersion <= sinceVersion {
+			continue
+		}
+		if err := handler(ctx, ev); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func TestOrgSyncCreatesSpaces(t *testing.T) {
-	events := []nexus.OrgEvent{
-		orgEvent(nexus.OrgCompanyUpserted, 1, nexus.ScopeCompany, "c1", "顺视智能制造集团"),
-		orgEvent(nexus.OrgEmployeeUpserted, 2, nexus.ScopeEmployee, "u_zhang", "张予安",
-			nexus.OrgMember{UserID: "u_zhang", DisplayName: "张予安"}),
-		orgEvent(nexus.OrgProjectGroupUpserted, 3, nexus.ScopeProjectGroup, "pg_mes", "MES 异常工单专项组",
-			nexus.OrgMember{UserID: "u_zhang"}, nexus.OrgMember{UserID: "u_li"}),
-		orgEvent(nexus.OrgDepartmentUpserted, 4, nexus.ScopeDepartment, "dep_rd1", "研发一部"),
+func orgEvent(version int64) nexus.OrgEvent {
+	return nexus.OrgEvent{
+		EventID:    fmt.Sprintf("evt-%d", version),
+		EventType:  "org_import",
+		OrgVersion: version,
+		OccurredAt: time.Unix(1700000000+version, 0).UTC(),
 	}
-	syncer, store := newTestSyncer(events...)
+}
 
-	if err := syncer.Run(context.Background(), "ent_1", 0); err != nil {
+func TestSyncerRecordsEveryVersionItReceives(t *testing.T) {
+	store := &fakeCursorStore{}
+	client := &replayClient{events: []nexus.OrgEvent{orgEvent(1), orgEvent(2), orgEvent(3)}}
+	syncer := NewSyncer(store, client, zap.NewNop())
+
+	if err := syncer.Run(context.Background(), "ent-1", 0); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-
-	all, _ := store.ListKnowledgeSpacesByEnterprise(context.Background(), "ent_1")
-	if len(all) != 4 {
-		t.Fatalf("spaces = %d, want 4 (company/employee/project_group/department)", len(all))
+	if len(store.snapshots) != 3 {
+		t.Fatalf("recorded %d versions, want 3", len(store.snapshots))
 	}
-	kinds := map[string]bool{}
-	for _, s := range all {
-		kinds[s.Kind] = true
-	}
-	for _, k := range []string{"company", "employee", "project_group", "department"} {
-		if !kinds[k] {
-			t.Fatalf("missing space kind %q", k)
+	for i, want := range []int64{1, 2, 3} {
+		if store.snapshots[i].OrgVersion != want {
+			t.Errorf("snapshot %d org_version = %d, want %d", i, store.snapshots[i].OrgVersion, want)
 		}
-	}
-	if store.enterprises["ent_1"].Name != "顺视智能制造集团" {
-		t.Fatalf("enterprise name = %q", store.enterprises["ent_1"].Name)
-	}
-	pg := store.spaces[scopeKey("ent_1", "project_group:pg_mes")]
-	if _, ok := store.members[pg.ID+"|u_li"]; !ok {
-		t.Fatal("project group member u_li not cached")
-	}
-	if store.snapshots["ent_1"] != 4 {
-		t.Fatalf("org snapshot version = %d, want 4", store.snapshots["ent_1"])
+		// The tenant is bound from the subscription, never read off the event:
+		// the frozen event has no enterprise id, so deriving it from the event
+		// would write rows keyed on the empty string.
+		if store.snapshots[i].EnterpriseID != "ent-1" {
+			t.Errorf("snapshot %d enterprise = %q, want the subscription tenant", i, store.snapshots[i].EnterpriseID)
+		}
 	}
 }
 
-func TestOrgSyncStaleEventDoesNotOverwrite(t *testing.T) {
-	fresh := orgEvent(nexus.OrgEmployeeUpserted, 10, nexus.ScopeEmployee, "u_zhang", "张予安")
-	stale := orgEvent(nexus.OrgEmployeeUpserted, 3, nexus.ScopeEmployee, "u_zhang", "旧名字")
-	syncer, store := newTestSyncer()
+func TestSyncerResumesStrictlyAfterTheCursor(t *testing.T) {
+	store := &fakeCursorStore{}
+	client := &replayClient{events: []nexus.OrgEvent{orgEvent(1), orgEvent(2), orgEvent(3)}}
+	syncer := NewSyncer(store, client, zap.NewNop())
 
-	if err := syncer.Handle(context.Background(), fresh); err != nil {
-		t.Fatalf("fresh: %v", err)
+	if err := syncer.Run(context.Background(), "ent-1", 2); err != nil {
+		t.Fatalf("run: %v", err)
 	}
-	if err := syncer.Handle(context.Background(), stale); err != nil {
-		t.Fatalf("stale: %v", err)
+	if client.gotSince != 2 {
+		t.Errorf("subscribed with since_version=%d, want 2", client.gotSince)
 	}
-
-	s := store.spaces[scopeKey("ent_1", "employee:u_zhang")]
-	if s.Name != "张予安" || s.OrgVersion != 10 {
-		t.Fatalf("stale event overwrote newer state: %+v", s)
+	if len(store.snapshots) != 1 || store.snapshots[0].OrgVersion != 3 {
+		t.Fatalf("recorded %+v, want only version 3", store.snapshots)
 	}
 }
 
-func TestOrgSyncIdempotentReplay(t *testing.T) {
-	ev := orgEvent(nexus.OrgProjectGroupUpserted, 5, nexus.ScopeProjectGroup, "pg_mes", "MES 专项组",
-		nexus.OrgMember{UserID: "u_zhang"})
-	syncer, store := newTestSyncer()
+// The tenant row is created once per subscription. It used to be created per
+// event from the event's own enterprise id, which under the frozen contract is
+// always empty -- that inserted an enterprises row with id ''.
+func TestSyncerEnsuresTheTenantOncePerSubscriptionNotPerEvent(t *testing.T) {
+	store := &fakeCursorStore{}
+	client := &replayClient{events: []nexus.OrgEvent{orgEvent(1), orgEvent(2), orgEvent(3)}}
+	syncer := NewSyncer(store, client, zap.NewNop())
 
-	for i := 0; i < 3; i++ {
-		if err := syncer.Handle(context.Background(), ev); err != nil {
-			t.Fatalf("replay %d: %v", i, err)
-		}
+	if err := syncer.Run(context.Background(), "ent-1", 0); err != nil {
+		t.Fatalf("run: %v", err)
 	}
-	all, _ := store.ListKnowledgeSpacesByEnterprise(context.Background(), "ent_1")
-	if len(all) != 1 {
-		t.Fatalf("replay created duplicate spaces: %d", len(all))
+	if len(store.ensured) != 1 {
+		t.Fatalf("EnsureEnterprise called %d times, want exactly 1", len(store.ensured))
+	}
+	if store.ensured[0].ID != "ent-1" {
+		t.Errorf("ensured enterprise %q, want the subscription tenant", store.ensured[0].ID)
 	}
 }
 
-func TestOrgSyncRequiresAndPersistsTypedParentIdentity(t *testing.T) {
-	store := newFakeStore()
-	service := NewService(store)
-	child := orgEvent(nexus.OrgDepartmentUpserted, 2, nexus.ScopeDepartment, "child", "Child")
-	child.Scope.ParentID = "parent"
-	if _, _, err := service.EnsureSpaceFromEvent(context.Background(), child); err == nil {
-		t.Fatal("untyped parent identity accepted")
-	}
+// An unknown event type must advance the cursor, not stop the stream. The
+// contract requires consumers to "ignore unknown values rather than fail closed
+// on them", and the only type the server emits today is "org_import" -- a
+// consumer that switched on a closed set would reject every future one.
+func TestSyncerRecordsUnknownEventTypesInsteadOfFailing(t *testing.T) {
+	store := &fakeCursorStore{}
+	odd := orgEvent(1)
+	odd.EventType = "something_this_build_has_never_heard_of"
+	client := &replayClient{events: []nexus.OrgEvent{odd}}
+	syncer := NewSyncer(store, client, zap.NewNop())
 
-	child.Scope.ParentKind = nexus.ScopeCompany
-	if _, _, err := service.EnsureSpaceFromEvent(context.Background(), child); err != nil {
-		t.Fatal(err)
+	if err := syncer.Run(context.Background(), "ent-1", 0); err != nil {
+		t.Fatalf("an unknown event type must not stop the stream: %v", err)
 	}
-	binding := store.bindings["ent_1|department|child"]
-	if !binding.ParentScopeKind.Valid || binding.ParentScopeKind.String != "company" || !binding.ParentScopeID.Valid || binding.ParentScopeID.String != "parent" {
-		t.Fatalf("typed parent identity not persisted: %+v", binding)
+	if len(store.snapshots) != 1 {
+		t.Fatalf("recorded %d versions, want the unknown type still to advance the cursor", len(store.snapshots))
 	}
 }
 
-func TestOrgSyncNewerEventReparentsExistingScope(t *testing.T) {
-	store := newFakeStore()
-	service := NewService(store)
-	child := orgEvent(nexus.OrgDepartmentUpserted, 1, nexus.ScopeDepartment, "child", "Child")
-	child.Scope.ParentKind, child.Scope.ParentID = nexus.ScopeCompany, "company-a"
-	if _, _, err := service.EnsureSpaceFromEvent(context.Background(), child); err != nil {
-		t.Fatal(err)
-	}
+func TestSyncerPersistsTheFrozenEventShapeOnly(t *testing.T) {
+	store := &fakeCursorStore{}
+	client := &replayClient{events: []nexus.OrgEvent{orgEvent(7)}}
+	syncer := NewSyncer(store, client, zap.NewNop())
 
-	child.OrgVersion = 2
-	child.Scope.ParentKind, child.Scope.ParentID = nexus.ScopeBusinessUnit, "business-b"
-	if _, created, err := service.EnsureSpaceFromEvent(context.Background(), child); err != nil || created {
-		t.Fatalf("reparent existing scope: created=%v err=%v", created, err)
+	if err := syncer.Run(context.Background(), "ent-1", 0); err != nil {
+		t.Fatalf("run: %v", err)
 	}
-	binding := store.bindings["ent_1|department|child"]
-	if !binding.ParentScopeKind.Valid || binding.ParentScopeKind.String != "business_unit" || !binding.ParentScopeID.Valid || binding.ParentScopeID.String != "business-b" {
-		t.Fatalf("newer reparenting was not persisted: %+v", binding)
+	var decoded map[string]any
+	if err := json.Unmarshal(store.snapshots[0].Snapshot, &decoded); err != nil {
+		t.Fatalf("snapshot is not valid json: %v", err)
 	}
-
-	child.Scope.ParentKind, child.Scope.ParentID = nexus.ScopeCompany, "equal-version-replay"
-	if _, _, err := service.EnsureSpaceFromEvent(context.Background(), child); err != nil {
-		t.Fatal(err)
+	for _, forbidden := range []string{"scope", "members", "enterprise_id", "payload", "source_hash"} {
+		if _, present := decoded[forbidden]; present {
+			t.Errorf("persisted snapshot carries %q, which the frozen OrgEvent does not publish", forbidden)
+		}
 	}
-	binding = store.bindings["ent_1|department|child"]
-	if binding.ParentScopeKind.String != "business_unit" || binding.ParentScopeID.String != "business-b" {
-		t.Fatalf("equal-version replay changed parent identity: %+v", binding)
+	for _, required := range []string{"event_id", "event_type", "org_version", "occurred_at"} {
+		if _, present := decoded[required]; !present {
+			t.Errorf("persisted snapshot is missing %q", required)
+		}
 	}
 }
 
-func TestOrgSyncFailureRetryAndOrderingAreAtomic(t *testing.T) {
-	t.Run("post-space failure same-version retry", func(t *testing.T) {
-		store := newFakeStore()
-		service := NewService(store)
-		event := orgEvent(nexus.OrgDepartmentUpserted, 1, nexus.ScopeDepartment, "atomic-child", "Atomic child",
-			nexus.OrgMember{UserID: "v1-member", DisplayName: "v1"})
-		event.Scope.ParentKind, event.Scope.ParentID = nexus.ScopeCompany, "parent-v1"
-		if _, _, err := service.EnsureSpaceFromEvent(context.Background(), event); err != nil {
-			t.Fatal(err)
-		}
+func TestSyncerStopsWhenTheCursorCannotBePersisted(t *testing.T) {
+	store := &fakeCursorStore{upsertErr: errors.New("db down")}
+	client := &replayClient{events: []nexus.OrgEvent{orgEvent(1), orgEvent(2)}}
+	syncer := NewSyncer(store, client, zap.NewNop())
 
-		event.OrgVersion = 2
-		event.Scope.ParentKind, event.Scope.ParentID = nexus.ScopeBusinessUnit, "parent-v2"
-		event.Members = []nexus.OrgMember{{UserID: "v2-member", DisplayName: "v2"}}
-		store.failBindingOnce = true
-		if _, _, err := service.EnsureSpaceFromEvent(context.Background(), event); err == nil {
-			t.Fatal("injected post-space failure was not returned")
-		}
-		if _, _, err := service.EnsureSpaceFromEvent(context.Background(), event); err != nil {
-			t.Fatalf("same-version retry: %v", err)
-		}
-		assertAtomicOrgState(t, store, "department:atomic-child", 2, "business_unit", "parent-v2", "v2-member")
-	})
-
-	t.Run("initial failure retry", func(t *testing.T) {
-		store := newFakeStore()
-		store.failBindingOnce = true
-		service := NewService(store)
-		event := orgEvent(nexus.OrgEmployeeUpserted, 1, nexus.ScopeEmployee, "initial-retry", "Initial retry",
-			nexus.OrgMember{UserID: "initial-member", DisplayName: "initial"})
-		event.Scope.ParentKind, event.Scope.ParentID = nexus.ScopeDepartment, "parent"
-		if _, _, err := service.EnsureSpaceFromEvent(context.Background(), event); err == nil {
-			t.Fatal("injected initial binding failure was not returned")
-		}
-		if _, _, err := service.EnsureSpaceFromEvent(context.Background(), event); err != nil {
-			t.Fatalf("initial same-version retry: %v", err)
-		}
-		assertAtomicOrgState(t, store, "employee:initial-retry", 1, "department", "parent", "initial-member")
-	})
-
-	t.Run("concurrent v2 v3", func(t *testing.T) {
-		store := newFakeStore()
-		service := NewService(store)
-		base := orgEvent(nexus.OrgDepartmentUpserted, 1, nexus.ScopeDepartment, "concurrent-child", "Concurrent child")
-		base.Scope.ParentKind, base.Scope.ParentID = nexus.ScopeCompany, "parent-v1"
-		if _, _, err := service.EnsureSpaceFromEvent(context.Background(), base); err != nil {
-			t.Fatal(err)
-		}
-
-		store.bindingBlockParent = "parent-v2"
-		store.bindingEntered = make(chan struct{}, 1)
-		store.bindingRelease = make(chan struct{})
-		v2 := base
-		v2.OrgVersion, v2.Scope.ParentKind, v2.Scope.ParentID = 2, nexus.ScopeBusinessUnit, "parent-v2"
-		v2.Members = []nexus.OrgMember{{UserID: "v2-member", DisplayName: "v2"}}
-		v3 := base
-		v3.OrgVersion, v3.Scope.ParentKind, v3.Scope.ParentID = 3, nexus.ScopeCompany, "parent-v3"
-		v3.Members = []nexus.OrgMember{{UserID: "v3-member", DisplayName: "v3"}}
-
-		v2Done := make(chan error, 1)
-		go func() { _, _, err := service.EnsureSpaceFromEvent(context.Background(), v2); v2Done <- err }()
-		<-store.bindingEntered
-		v3Done := make(chan error, 1)
-		go func() { _, _, err := service.EnsureSpaceFromEvent(context.Background(), v3); v3Done <- err }()
-		close(store.bindingRelease)
-		if err := <-v2Done; err != nil {
-			t.Fatal(err)
-		}
-		if err := <-v3Done; err != nil {
-			t.Fatal(err)
-		}
-		assertAtomicOrgState(t, store, "department:concurrent-child", 3, "company", "parent-v3", "v3-member")
-	})
-}
-
-func assertAtomicOrgState(t *testing.T, store *fakeStore, scope string, version int64, parentKind, parentID, memberID string) {
-	t.Helper()
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	space := store.spaces[scopeKey("ent_1", scope)]
-	binding := store.bindings["ent_1|"+space.Kind+"|"+strings.TrimPrefix(scope, space.Kind+":")]
-	if space.OrgVersion != version || !binding.ParentScopeKind.Valid || binding.ParentScopeKind.String != parentKind || !binding.ParentScopeID.Valid || binding.ParentScopeID.String != parentID {
-		t.Fatalf("inconsistent space/binding: space=%+v binding=%+v", space, binding)
+	if err := syncer.Run(context.Background(), "ent-1", 0); err == nil {
+		t.Fatal("a failed cursor write must stop the stream, not be skipped")
 	}
-	member, ok := store.members[space.ID+"|"+memberID]
-	if !ok || member.OrgVersion != version {
-		t.Fatalf("inconsistent member state: member=%+v found=%v", member, ok)
-	}
-	memberCount := 0
-	for key := range store.members {
-		if strings.HasPrefix(key, space.ID+"|") {
-			memberCount++
-		}
-	}
-	if memberCount != 1 {
-		t.Fatalf("stale or partial members remain: %+v", store.members)
-	}
-	versionCount := 0
-	for _, item := range store.versions {
-		if item.SpaceID == space.ID {
-			versionCount++
-		}
-	}
-	if versionCount != int(version) {
-		t.Fatalf("version snapshots=%d want=%d: %+v", versionCount, version, store.versions)
+	if len(store.snapshots) != 0 {
+		t.Errorf("recorded %d versions despite the write failing", len(store.snapshots))
 	}
 }

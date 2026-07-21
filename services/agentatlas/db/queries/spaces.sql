@@ -66,6 +66,16 @@ INSERT INTO org_snapshots (enterprise_id, org_version, snapshot)
 VALUES ($1, $2, $3)
 ON CONFLICT (enterprise_id, org_version) DO NOTHING;
 
+-- Read the tenant's org-version cursor so a subscription resumes strictly
+-- after the last version it durably recorded. Without this the worker always
+-- resumed from 0 and replayed the whole retained feed on every reconnect.
+-- name: GetLatestOrgSnapshot :one
+SELECT enterprise_id, org_version, snapshot
+FROM org_snapshots
+WHERE enterprise_id = $1
+ORDER BY org_version DESC
+LIMIT 1;
+
 -- name: UpsertSpaceMember :exec
 INSERT INTO space_membership_cache (space_id, user_id, display_name, org_version, updated_at)
 VALUES ($1, $2, $3, $4, now())

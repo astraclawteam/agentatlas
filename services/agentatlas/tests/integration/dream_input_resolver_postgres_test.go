@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -9,10 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	sdkdream "github.com/astraclawteam/agentatlas/sdk/go/dream"
-	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	dreamresolver "github.com/astraclawteam/agentatlas/services/agentatlas/internal/dream"
-	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/spaces"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/storage"
 )
 
@@ -95,20 +94,26 @@ func TestDreamInputResolverPostgresContracts(t *testing.T) {
 	if len(collisionChildren) != 0 {
 		t.Fatalf("cross-kind parent collision leaked child: %+v", collisionChildren)
 	}
-	spaceService := spaces.NewService(q)
-	reparentEvent := nexus.OrgEvent{
-		EventID: "reparent-1", EnterpriseID: ent, OrgVersion: 1, Type: nexus.OrgEmployeeUpserted,
-		Scope:      nexus.OrgScope{Kind: nexus.ScopeEmployee, ID: "reparent-user", Name: "Reparent user", ParentKind: nexus.ScopeDepartment, ParentID: "collision"},
-		OccurredAt: time.Now(),
+	// Drives ApplyOrgSpaceEvent directly. It used to go through
+	// spaces.EnsureSpaceFromEvent, which was removed because the frozen
+	// OrgEvent carries no org unit identity. The SQL and the reparenting
+	// guarantee it asserts are unchanged; only the Go caller is.
+	applyScope := func(version int64, parentKind string) {
+		t.Helper()
+		if _, err := q.ApplyOrgSpaceEvent(ctx, db.ApplyOrgSpaceEventParams{
+			EventEnterpriseID: ent, EventOrgScope: "employee:reparent-user",
+			NewSpaceID:     fmt.Sprintf("space-reparent-%d", version),
+			EventScopeKind: "employee", EventSpaceName: "Reparent user",
+			EventOrgVersion: version, EventScopeID: "reparent-user",
+			EventParentScopeKind: pgtype.Text{String: parentKind, Valid: true},
+			EventParentScopeID:   pgtype.Text{String: "collision", Valid: true},
+			EventVersionSnapshot: []byte("{}"), EventMemberSnapshot: []byte("[]"),
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, _, err := spaceService.EnsureSpaceFromEvent(ctx, reparentEvent); err != nil {
-		t.Fatal(err)
-	}
-	reparentEvent.EventID, reparentEvent.OrgVersion = "reparent-2", 2
-	reparentEvent.Scope.ParentKind = nexus.ScopeCompany
-	if _, _, err := spaceService.EnsureSpaceFromEvent(ctx, reparentEvent); err != nil {
-		t.Fatal(err)
-	}
+	applyScope(1, "department")
+	applyScope(2, "company")
 	var reparentKind, reparentID string
 	if err := pool.QueryRow(ctx, `select parent_scope_kind,parent_scope_id from org_scope_bindings
 		where enterprise_id=$1 and scope_kind='employee' and scope_id='reparent-user'`, ent).Scan(&reparentKind, &reparentID); err != nil {

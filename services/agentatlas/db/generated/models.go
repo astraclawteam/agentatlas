@@ -89,6 +89,44 @@ type ArtifactProcessingStep struct {
 	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
 }
 
+type AssessmentCorrection struct {
+	Tenant             string             `json:"tenant"`
+	ID                 string             `json:"id"`
+	Subject            string             `json:"subject"`
+	TargetAssessmentID string             `json:"target_assessment_id"`
+	TargetDigest       string             `json:"target_digest"`
+	Kind               string             `json:"kind"`
+	Dimension          string             `json:"dimension"`
+	ResolutionState    string             `json:"resolution_state"`
+	NewAssessmentID    pgtype.Text        `json:"new_assessment_id"`
+	Content            []byte             `json:"content"`
+	SubmittedAt        pgtype.Timestamptz `json:"submitted_at"`
+	DecidedAt          pgtype.Timestamptz `json:"decided_at"`
+	RecordedAt         pgtype.Timestamptz `json:"recorded_at"`
+}
+
+type AssessmentPolicy struct {
+	Tenant             string             `json:"tenant"`
+	ID                 string             `json:"id"`
+	PolicyKey          string             `json:"policy_key"`
+	Revision           int32              `json:"revision"`
+	Org                pgtype.Text        `json:"org"`
+	Status             string             `json:"status"`
+	Sources            []byte             `json:"sources"`
+	Watermark          int64              `json:"watermark"`
+	Dimensions         []byte             `json:"dimensions"`
+	EvidenceRules      []byte             `json:"evidence_rules"`
+	AttributionRules   []byte             `json:"attribution_rules"`
+	ConfidenceRules    []byte             `json:"confidence_rules"`
+	ShadowCycles       []byte             `json:"shadow_cycles"`
+	RuleDigest         string             `json:"rule_digest"`
+	GovernanceChangeID string             `json:"governance_change_id"`
+	SupersedesID       string             `json:"supersedes_id"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	RecordedAt         pgtype.Timestamptz `json:"recorded_at"`
+}
+
 type AtlasBrowserLoginAttempt struct {
 	StateHash              string             `json:"state_hash"`
 	Nonce                  string             `json:"nonce"`
@@ -482,6 +520,21 @@ type MethodSpaceBinding struct {
 	SpaceID   string `json:"space_id"`
 }
 
+type OperatingMapEntry struct {
+	ID                   string             `json:"id"`
+	EnterpriseID         string             `json:"enterprise_id"`
+	OrgScope             string             `json:"org_scope"`
+	OrgVersion           int64              `json:"org_version"`
+	IntentKey            string             `json:"intent_key"`
+	Version              int32              `json:"version"`
+	EffectiveFrom        pgtype.Timestamptz `json:"effective_from"`
+	EffectiveTo          pgtype.Timestamptz `json:"effective_to"`
+	SourcePolicyRevision string             `json:"source_policy_revision"`
+	GovernanceReviewRef  string             `json:"governance_review_ref"`
+	Content              []byte             `json:"content"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+}
+
 type OrgScopeBinding struct {
 	ID              int64       `json:"id"`
 	EnterpriseID    string      `json:"enterprise_id"`
@@ -498,6 +551,111 @@ type OrgSnapshot struct {
 	OrgVersion   int64              `json:"org_version"`
 	Snapshot     []byte             `json:"snapshot"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type Outcome struct {
+	ID                  string             `json:"id"`
+	Tenant              string             `json:"tenant"`
+	OutcomeKey          string             `json:"outcome_key"`
+	Revision            int64              `json:"revision"`
+	Status              string             `json:"status"`
+	GoalTenant          string             `json:"goal_tenant"`
+	GoalKey             string             `json:"goal_key"`
+	GoalVersion         int64              `json:"goal_version"`
+	RuleVersion         string             `json:"rule_version"`
+	WorkCaseID          string             `json:"work_case_id"`
+	WorkCaseRevision    int64              `json:"work_case_revision"`
+	WorkPlanRevision    int64              `json:"work_plan_revision"`
+	OperatingMapVersion int64              `json:"operating_map_version"`
+	OrgVersion          int64              `json:"org_version"`
+	DecidedAt           pgtype.Timestamptz `json:"decided_at"`
+	SupersedesID        pgtype.Text        `json:"supersedes_id"`
+	SupersedesRevision  pgtype.Int8        `json:"supersedes_revision"`
+	Content             []byte             `json:"content"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+}
+
+type OutcomeGraphOutbox struct {
+	Tenant             string             `json:"tenant"`
+	Sequence           int64              `json:"sequence"`
+	Org                pgtype.Text        `json:"org"`
+	Source             string             `json:"source"`
+	Kind               string             `json:"kind"`
+	SubjectLabel       string             `json:"subject_label"`
+	SubjectID          string             `json:"subject_id"`
+	SubjectRevision    int64              `json:"subject_revision"`
+	Payload            []byte             `json:"payload"`
+	PayloadHash        string             `json:"payload_hash"`
+	SupersedesSequence pgtype.Int8        `json:"supersedes_sequence"`
+	RecordedAt         pgtype.Timestamptz `json:"recorded_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+}
+
+type OutcomeLearningCandidate struct {
+	Tenant             string             `json:"tenant"`
+	ID                 string             `json:"id"`
+	Org                pgtype.Text        `json:"org"`
+	Kind               string             `json:"kind"`
+	Summary            string             `json:"summary"`
+	Watermark          int64              `json:"watermark"`
+	Anchor             []byte             `json:"anchor"`
+	Sources            []byte             `json:"sources"`
+	GenerationPolicy   string             `json:"generation_policy"`
+	ModelVersion       string             `json:"model_version"`
+	Coverage           []byte             `json:"coverage"`
+	Replay             []byte             `json:"replay"`
+	Shadow             []byte             `json:"shadow"`
+	Proposal           []byte             `json:"proposal"`
+	Disposition        string             `json:"disposition"`
+	QuarantineReason   string             `json:"quarantine_reason"`
+	GovernanceChangeID string             `json:"governance_change_id"`
+	SupersedesID       string             `json:"supersedes_id"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	RecordedAt         pgtype.Timestamptz `json:"recorded_at"`
+}
+
+type OutcomeLineageEdge struct {
+	ID             string             `json:"id"`
+	Tenant         string             `json:"tenant"`
+	EdgeType       string             `json:"edge_type"`
+	FromTenant     string             `json:"from_tenant"`
+	FromType       string             `json:"from_type"`
+	FromBusinessID string             `json:"from_business_id"`
+	FromRevision   int64              `json:"from_revision"`
+	ToTenant       string             `json:"to_tenant"`
+	ToType         string             `json:"to_type"`
+	ToBusinessID   string             `json:"to_business_id"`
+	ToRevision     int64              `json:"to_revision"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type OutcomeLineageNode struct {
+	ID         string             `json:"id"`
+	Tenant     string             `json:"tenant"`
+	NodeType   string             `json:"node_type"`
+	BusinessID string             `json:"business_id"`
+	Revision   int64              `json:"revision"`
+	Summary    pgtype.Text        `json:"summary"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type OutcomeProjectionEvent struct {
+	Tenant             string             `json:"tenant"`
+	Sequence           int64              `json:"sequence"`
+	Kind               string             `json:"kind"`
+	SubjectType        string             `json:"subject_type"`
+	SubjectID          string             `json:"subject_id"`
+	SubjectRevision    int64              `json:"subject_revision"`
+	PayloadHash        string             `json:"payload_hash"`
+	SupersedesSequence pgtype.Int8        `json:"supersedes_sequence"`
+	RecordedAt         pgtype.Timestamptz `json:"recorded_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+}
+
+type OutcomeProjectionWatermark struct {
+	Tenant       string             `json:"tenant"`
+	LastSequence int64              `json:"last_sequence"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
 type ParserProviderRun struct {
@@ -608,6 +766,26 @@ type TimelineNode struct {
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 }
 
+type WorkAssessment struct {
+	Tenant         string             `json:"tenant"`
+	ID             string             `json:"id"`
+	Subject        string             `json:"subject"`
+	Level          string             `json:"level"`
+	PolicyKey      string             `json:"policy_key"`
+	PolicyRevision int32              `json:"policy_revision"`
+	Version        int32              `json:"version"`
+	Org            pgtype.Text        `json:"org"`
+	Formal         bool               `json:"formal"`
+	OrgVersion     int64              `json:"org_version"`
+	PeriodStart    pgtype.Timestamptz `json:"period_start"`
+	PeriodEnd      pgtype.Timestamptz `json:"period_end"`
+	GraphWatermark int64              `json:"graph_watermark"`
+	Digest         string             `json:"digest"`
+	Content        []byte             `json:"content"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	RecordedAt     pgtype.Timestamptz `json:"recorded_at"`
+}
+
 type WorkBrief struct {
 	ID                string             `json:"id"`
 	EnterpriseID      string             `json:"enterprise_id"`
@@ -619,6 +797,28 @@ type WorkBrief struct {
 	SourceHash        string             `json:"source_hash"`
 	EvidencePointerID string             `json:"evidence_pointer_id"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
+type Workcase struct {
+	ID           string             `json:"id"`
+	EnterpriseID string             `json:"enterprise_id"`
+	OrgScope     string             `json:"org_scope"`
+	ActorRef     string             `json:"actor_ref"`
+	Status       string             `json:"status"`
+	Revision     int64              `json:"revision"`
+	Plans        []byte             `json:"plans"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+type WorkcaseEvent struct {
+	CaseID         string             `json:"case_id"`
+	Seq            int64              `json:"seq"`
+	EnterpriseID   string             `json:"enterprise_id"`
+	EventType      string             `json:"event_type"`
+	Payload        []byte             `json:"payload"`
+	IdempotencyKey string             `json:"idempotency_key"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
 type Workflow struct {

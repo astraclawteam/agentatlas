@@ -79,8 +79,12 @@ func (m *Mock) AppendAuditEvidence(_ context.Context, req nexus.AppendAuditEvide
 func (m *Mock) SubscribeOrgEvents(ctx context.Context, enterpriseID string, sinceVersion int64, handler nexus.OrgEventHandler) error {
 	m.mu.Lock()
 	events := make([]nexus.OrgEvent, 0, len(m.OrgEvents))
+	// Filter on the cursor only. The frozen event carries no enterprise id, and
+	// the real feed is already scoped to the tenant of the verified service
+	// credential, so filtering by enterpriseID here would be a fidelity bug:
+	// the double would drop events the real server would deliver.
 	for _, ev := range m.OrgEvents {
-		if ev.EnterpriseID == enterpriseID && ev.OrgVersion > sinceVersion {
+		if ev.OrgVersion > sinceVersion {
 			events = append(events, ev)
 		}
 	}

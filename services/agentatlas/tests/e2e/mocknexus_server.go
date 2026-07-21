@@ -102,17 +102,30 @@ func startMockNexusServer(t *testing.T, addr string, backing *nexusclient.Mock, 
 	})
 
 	mux.HandleFunc("GET /v1/org-events", func(w http.ResponseWriter, r *http.Request) {
-		enterprise := r.URL.Query().Get("enterprise_id")
+		// The frozen operation is security:[{trustedServiceSecret}]; the real
+		// handler 401s anything that is not a verified service credential. A
+		// mock that skips this is more permissive than production.
+		if _, _, ok := r.BasicAuth(); !ok {
+			writeJSONMock(w, http.StatusUnauthorized, map[string]string{"error": "invalid_service"})
+			return
+		}
+		// since_version is the ONLY declared parameter. Tenant scope comes from
+		// the credential, so a caller-supplied enterprise_id is a forbidden org
+		// fact and the mock must refuse it rather than quietly filter on it.
+		if r.URL.Query().Has("enterprise_id") {
+			writeJSONMock(w, http.StatusBadRequest, map[string]string{"error": "enterprise_id is not a declared parameter"})
+			return
+		}
 		since, _ := strconv.ParseInt(r.URL.Query().Get("since_version"), 10, 64)
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		flusher, _ := w.(http.Flusher)
 		for _, ev := range events {
-			if ev.EnterpriseID != enterprise || ev.OrgVersion <= since {
+			if ev.OrgVersion <= since {
 				continue
 			}
 			raw, _ := json.Marshal(ev)
-			fmt.Fprintf(w, "data: %s\n\n", raw)
+			fmt.Fprintf(w, "id: %d\nevent: org\ndata: %s\n\n", ev.OrgVersion, raw)
 		}
 		if flusher != nil {
 			flusher.Flush()

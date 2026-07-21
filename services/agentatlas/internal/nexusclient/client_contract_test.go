@@ -112,14 +112,17 @@ func contractServer(t *testing.T, serviceSecret string) *httptest.Server {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
 		for i := 1; i <= 2; i++ {
+			// The frozen four-field shape, written the way the real handler
+			// writes it (id:/event:/data:). Emitting a rich event here would
+			// make the contract server more generous than production.
 			ev := nexus.OrgEvent{
-				EventID: fmt.Sprintf("evt_%d", i), EnterpriseID: "ent_1",
-				OrgVersion: int64(i), Type: nexus.OrgEmployeeUpserted,
-				Scope:      nexus.OrgScope{Kind: nexus.ScopeEmployee, ID: fmt.Sprintf("u_%d", i), Name: "员工"},
+				EventID:    fmt.Sprintf("evt_%d", i),
+				EventType:  "org_import",
+				OrgVersion: int64(i),
 				OccurredAt: time.Unix(1750000000, 0),
 			}
 			raw, _ := json.Marshal(ev)
-			fmt.Fprintf(w, "data: %s\n\n", raw)
+			fmt.Fprintf(w, "id: %d\nevent: org\ndata: %s\n\n", i, raw)
 			flusher.Flush()
 		}
 	})
@@ -291,8 +294,7 @@ func TestMockImplementsContract(t *testing.T) {
 	m := NewMock()
 	m.Tickets["tick_ok"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1"}
 	m.OrgEvents = []nexus.OrgEvent{
-		{EventID: "e1", EnterpriseID: "ent_1", OrgVersion: 1, Type: nexus.OrgEmployeeUpserted,
-			Scope: nexus.OrgScope{Kind: nexus.ScopeEmployee, ID: "u1", Name: "员工"}},
+		{EventID: "e1", EventType: "org_import", OrgVersion: 1},
 	}
 	ctx := context.Background()
 

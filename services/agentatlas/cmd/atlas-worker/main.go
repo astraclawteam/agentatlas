@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -315,12 +316,18 @@ func run() error {
 		logger.Info("dream scheduler ticking", zap.Int("interval_seconds", tickSeconds))
 	}
 
-	// Org-graph sync: the worker owns the AgentNexus org-event subscription
-	// (SSE) — spaces are created/updated from org events. v1 subscribes the
-	// enterprises listed in ATLAS_ORG_SYNC_ENTERPRISES (comma-separated);
-	// idempotent Handle makes since_version=0 resume safe.
+	// Org-version cursor: the worker owns the AgentNexus org-event subscription
+	// (SSE) and records the tenant's sealed org version. It does NOT create
+	// spaces from events -- the frozen OrgEvent carries no org unit identity,
+	// so that is impossible by contract rather than merely unwired.
+	//
+	// ATLAS_ORG_SYNC_ENTERPRISES still names the tenant for local bookkeeping,
+	// but it is never sent upstream: the feed is scoped by the verified service
+	// credential. A deployment whose credential does not match a listed tenant
+	// records versions under the wrong key, so the list must agree with the
+	// credential.
 	if ents := strings.TrimSpace(os.Getenv("ATLAS_ORG_SYNC_ENTERPRISES")); ents != "" {
-		syncer := spaces.NewSyncer(spaces.NewService(queries), queries, nexusClient, logger)
+		syncer := spaces.NewSyncer(queries, nexusClient, logger)
 		for _, ent := range strings.Split(ents, ",") {
 			ent = strings.TrimSpace(ent)
 			if ent == "" {
@@ -328,8 +335,17 @@ func run() error {
 			}
 			go func(enterpriseID string) {
 				for ctx.Err() == nil {
-					if err := syncer.Run(ctx, enterpriseID, 0); err != nil && ctx.Err() == nil {
-						logger.Warn("org sync stream ended; retrying",
+					err := syncer.Run(ctx, enterpriseID, 0)
+					if errors.Is(err, nexusclient.ErrOrgCursorAhead) {
+						// A cursor ahead of the sealed version can never
+						// succeed on retry; looping would hammer the feed
+						// forever. Stop this tenant and say so.
+						logger.Error("org cursor is ahead of the sealed org version; not retrying",
+							zap.String("enterprise_id", enterpriseID), zap.Error(err))
+						return
+					}
+					if err != nil && ctx.Err() == nil {
+						logger.Warn("org version stream ended; retrying",
 							zap.String("enterprise_id", enterpriseID), zap.Error(err))
 					}
 					select {
@@ -340,7 +356,7 @@ func run() error {
 				}
 			}(ent)
 		}
-		logger.Info("org sync subscribed", zap.String("enterprises", ents))
+		logger.Info("org version cursor subscribed", zap.String("enterprises", ents))
 	}
 	logger.Info("atlas-worker consuming",
 		zap.String("nats", cfg.NATS.URL),

@@ -227,23 +227,29 @@ func TestAgentAtlasMVP(t *testing.T) {
 		mock.SetEvidence(needID, grant.SanitizedExcerpt)
 	}
 
-	// ---- step 1-2: org events -> five knowledge spaces ----
-	// Fixture events carry a fixed enterprise id; rebind them to this run's
-	// unique enterprise so the e2e stays re-runnable against a persistent DB.
+	// ---- step 1-2: org events advance the tenant's version cursor ----
+	// This step used to assert that six knowledge spaces appeared. It cannot:
+	// the frozen OrgEvent carries no org unit identity, so the feed cannot
+	// provision or name a space. What it does carry, and what is asserted here,
+	// is the sealed org version.
 	events := loadOrgEvents(t)
-	for i := range events {
-		events[i].EnterpriseID = enterpriseID
+	mock.OrgEvents = events
+	syncer := spaces.NewSyncer(q, mock, zap.NewNop())
+	if err := syncer.Run(ctx, enterpriseID, 0); err != nil {
+		t.Fatalf("org version cursor: %v", err)
 	}
-	spaceSvc := spaces.NewService(q)
-	syncer := spaces.NewSyncer(spaceSvc, q, mock, zap.NewNop())
+	var highest int64
 	for _, ev := range events {
-		if err := syncer.Handle(ctx, ev); err != nil {
-			t.Fatalf("org event %s: %v", ev.EventID, err)
+		if ev.OrgVersion > highest {
+			highest = ev.OrgVersion
 		}
 	}
-	allSpaces, err := spaceSvc.ListByEnterprise(ctx, enterpriseID)
-	if err != nil || len(allSpaces) != 6 {
-		t.Fatalf("spaces = %d (want 6: company, BU, dept, 2 employees, project group), err=%v", len(allSpaces), err)
+	recorded, err := q.GetLatestOrgSnapshot(ctx, enterpriseID)
+	if err != nil {
+		t.Fatalf("read org version cursor: %v", err)
+	}
+	if recorded.OrgVersion != highest {
+		t.Fatalf("org version cursor = %d, want %d (the highest sealed version replayed)", recorded.OrgVersion, highest)
 	}
 	if err := runner.Start(ctx); err != nil {
 		t.Fatal(err)
@@ -361,14 +367,16 @@ func TestAgentAtlasMVP(t *testing.T) {
 	_ = docRow // AtlasDocument existence asserted above; not otherwise used in this scenario
 
 	// ---- step 8-10: dream policy -> scheduled run -> layered summaries ----
-	var pgSpace db.KnowledgeSpace
-	for _, s := range allSpaces {
-		if s.OrgScope == "project_group:pg_mes" {
-			pgSpace = s
-		}
-	}
-	if pgSpace.ID == "" {
-		t.Fatal("project group space missing")
+	// The project-group space used to arrive via the org-event feed. It cannot:
+	// the frozen event names no org unit. Create it directly, which is what a
+	// real deployment must do until an authoritative org read surface exists.
+	pgSpace, err := q.InsertKnowledgeSpace(ctx, db.InsertKnowledgeSpaceParams{
+		ID: "space_pg_mes_" + enterpriseID, EnterpriseID: enterpriseID,
+		Kind: "project_group", Name: "MES 项目组",
+		OrgScope: "project_group:pg_mes", OrgVersion: 1,
+	})
+	if err != nil {
+		t.Fatalf("create project group space: %v", err)
 	}
 	dreamWorkflowID := "legacy-direct-dream"
 	if _, err := wfSvc.CreateDraft(ctx, enterpriseID, "Published Dream", "admin", workflow.Definition{

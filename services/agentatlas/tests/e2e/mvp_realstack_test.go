@@ -63,9 +63,6 @@ func TestAgentAtlasMVPRealStack(t *testing.T) {
 		Scopes: []string{"admin"}, ExpiresAt: time.Now().Add(2 * time.Hour),
 	}
 	events := loadOrgEvents(t)
-	for i := range events {
-		events[i].EnterpriseID = realstackEnterprise
-	}
 	startMockNexusServer(t, nexusAddr, backing, events)
 
 	call := func(base, method, path, ticket string, body io.Reader, contentType string) (*http.Response, map[string]any) {
@@ -90,23 +87,32 @@ func TestAgentAtlasMVPRealStack(t *testing.T) {
 		return call(base, http.MethodPost, path, ticket, bytes.NewReader(raw), "application/json")
 	}
 
-	// ---- 1: worker's org-sync subscription creates the six spaces ----
-	deadline := time.Now().Add(90 * time.Second)
-	var spaceCount int
-	for time.Now().Before(deadline) {
-		rows, err := q.ListKnowledgeSpacesByEnterprise(ctx, realstackEnterprise)
-		if err == nil {
-			spaceCount = len(rows)
+	// ---- 1: the deployed worker advances the tenant org-version cursor ----
+	// This asserted six knowledge spaces appeared. It cannot: the frozen
+	// OrgEvent names no org unit, so the feed provisions nothing. What the
+	// deployed worker does do, and what is asserted here, is record the sealed
+	// org version it consumed.
+	var highest int64
+	for _, ev := range events {
+		if ev.OrgVersion > highest {
+			highest = ev.OrgVersion
 		}
-		if spaceCount >= 6 {
+	}
+	deadline := time.Now().Add(90 * time.Second)
+	var recorded int64
+	for time.Now().Before(deadline) {
+		if row, err := q.GetLatestOrgSnapshot(ctx, realstackEnterprise); err == nil {
+			recorded = row.OrgVersion
+		}
+		if recorded >= highest {
 			break
 		}
 		time.Sleep(2 * time.Second)
 	}
-	if spaceCount < 6 {
-		t.Fatalf("org sync did not create spaces (got %d) — is atlas-worker up with ATLAS_ORG_SYNC_ENTERPRISES=%s?", spaceCount, realstackEnterprise)
+	if recorded < highest {
+		t.Fatalf("org cursor reached v%d, want v%d — is atlas-worker up with ATLAS_ORG_SYNC_ENTERPRISES=%s?", recorded, highest, realstackEnterprise)
 	}
-	t.Logf("UPGRADE(org sync via deployed worker): %d spaces", spaceCount)
+	t.Logf("UPGRADE(org cursor via deployed worker): v%d", recorded)
 
 	// ---- 2: work-brief ingestion through the deployed atlas-api ----
 	briefs := loadBriefs(t)
