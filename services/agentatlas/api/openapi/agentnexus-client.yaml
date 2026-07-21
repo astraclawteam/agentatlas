@@ -73,9 +73,9 @@ paths:
                   review_mode: {type: string}
                   queue: {type: string}
                   expires_at: { type: string, format: date-time }
-  /v1/evidence/locate:
+  /v1/runtime/locate:
     post:
-      operationId: locateEvidence
+      operationId: locateRuntimeEvidence
       summary: Resolve an evidence pointer or query intent to a readable location
       requestBody:
         required: true
@@ -104,9 +104,9 @@ paths:
                   location_hints: { type: object }
         '403':
           description: Ticket lacks scope for this resource
-  /v1/evidence/read:
+  /v1/runtime/read:
     post:
-      operationId: readEvidence
+      operationId: readRuntimeEvidence
       summary: Read an authorized, sanitized evidence excerpt
       requestBody:
         required: true

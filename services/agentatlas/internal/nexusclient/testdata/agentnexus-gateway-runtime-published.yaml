@@ -1,0 +1,1399 @@
+openapi: 3.0.3
+info:
+  title: AgentNexus Gateway Runtime API
+  version: 1.8.0
+  description: >-
+    Vendor-neutral Agent runtime contract v1 (ELC-NEXUS-1 candidate).
+    Trusted identity — tenant, actor, organization snapshot, trust class,
+    risk authority and approval authority — is derived from verified
+    credentials only and never travels in request JSON. Requests address
+    business-semantic capabilities and data classes through opaque handles;
+    connector topology never appears in this contract.
+paths:
+  /.well-known/openid-configuration:
+    get:
+      operationId: discoverBrowserOIDC
+      summary: Discover the AgentNexus browser OIDC endpoints.
+      responses:
+        '200':
+          description: OIDC discovery metadata.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+  /oauth2/jwks:
+    get:
+      operationId: getBrowserJWKS
+      summary: Get public browser-session ID token signing keys.
+      responses:
+        '200':
+          description: JSON Web Key Set.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+  /oauth2/authorize:
+    get:
+      operationId: authorizeBrowserSession
+      summary: Use an existing browser session or redirect the full page to the enterprise IdP.
+      parameters:
+        - {name: response_type, in: query, required: true, schema: {type: string, enum: [code]}}
+        - {name: client_id, in: query, required: true, schema: {type: string}}
+        - {name: redirect_uri, in: query, required: true, schema: {type: string, format: uri}}
+        - {name: scope, in: query, required: true, schema: {type: string}}
+        - {name: state, in: query, required: true, schema: {type: string, maxLength: 1024}}
+        - {name: nonce, in: query, required: true, schema: {type: string, maxLength: 512}}
+        - {name: code_challenge, in: query, required: true, schema: {type: string}}
+        - {name: code_challenge_method, in: query, required: true, schema: {type: string, enum: [S256]}}
+      responses:
+        '302': {description: Same-page cookie bootstrap, enterprise IdP redirect, or silent authorization-code redirect.}
+  /oauth2/idp/callback:
+    get:
+      operationId: completeEnterpriseOIDC
+      summary: Complete the enterprise IdP code flow in the bound browser.
+      parameters:
+        - {name: code, in: query, required: true, schema: {type: string}}
+        - {name: state, in: query, required: true, schema: {type: string}}
+      responses:
+        '302': {description: Full-page redirect to the allow-listed console callback.}
+  /oauth2/token:
+    post:
+      operationId: exchangeBrowserAuthorizationCode
+      summary: Confidential BFF exchange of a one-use authorization code using S256 PKCE.
+      security: [{consoleClientSecret: []}]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/BrowserTokenRequest'
+      responses:
+        '200':
+          description: ID token plus an opaque revocable BFF access token bound to the browser session; no refresh token is issued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserTokenResponse'
+  /v1/browser-sessions/me:
+    get:
+      operationId: getBrowserSession
+      summary: Resolve the current HttpOnly browser session and sealed organization snapshot.
+      security: [{browserSession: []}, {browserAccessToken: []}]
+      responses:
+        '200':
+          description: Current browser identity as opaque verified references.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserSession'
+        '401': {description: No active browser session.}
+  /v1/browser-sessions/logout:
+    post:
+      operationId: logoutBrowserSession
+      summary: Revoke the current browser session and clear its cookie.
+      security: [{browserSession: []}, {browserAccessToken: []}]
+      responses:
+        '204': {description: Session revoked.}
+  /v1/authorization/decisions:
+    post:
+      operationId: decideAuthorization
+      summary: Evaluate one exact capability on one business resource against the sealed organization policy snapshot of the verified session.
+      security: [{browserSession: []}, {browserAccessToken: []}, {caseTicket: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthorizationDecisionRequest'
+      responses:
+        '200':
+          description: Scoped permission decision.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PermissionDecision'
+  /v1/org-events:
+    get:
+      operationId: subscribeOrgEvents
+      summary: Subscribe to the organization change feed of the verified tenant.
+      description: >-
+        Server-Sent Events stream of organization-graph changes. Tenant scope is
+        derived from the verified service credential and never travels as a
+        request parameter. Each event carries the sealed organization version the
+        change produced, so a consumer that reconnects resumes strictly after the
+        last version it durably applied. The feed is a change notification only:
+        organization payloads and source digests are never published here.
+      security: [{trustedServiceSecret: []}]
+      parameters:
+        - name: since_version
+          in: query
+          required: false
+          description: Replay strictly after this sealed organization version. Omitted starts from the first retained event.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+      responses:
+        '200':
+          description: Server-Sent Events stream; every data payload is one OrgEvent.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '409': {description: since_version is ahead of this tenant's current sealed organization version.}
+  /v1/runtime/locate:
+    post:
+      operationId: locateRuntimeEvidence
+      summary: Locate evidence for declared business-semantic data needs; results are opaque evidence handles.
+      description: Semantic resolution is private — data classes resolve to internal source bindings server-side and connector topology never appears in responses or errors. The verified trusted context supplies identity and the sealed organization version.
+      security: [{browserSession: []}, {browserAccessToken: []}, {caseTicket: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvidenceRequest'
+      responses:
+        '200':
+          description: Work-case handle and located evidence handles.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvidenceLocateResponse'
+  /v1/runtime/read:
+    post:
+      operationId: readRuntimeEvidence
+      summary: Read one located evidence handle through ticketed policy enforcement.
+      description: Reads are served from staged, encrypted evidence bound at locate time. An allowed response always states source_version, as_of and served_from_cache — a cached read never masquerades as real-time data — and invalidated, revoked, expired or source-deleted handles fail closed as a deny decision. A verification-purpose read (purpose "postcondition_verification" with the all-or-nothing verification_binding block) additionally emits a signed observation_receipt whose source authority, sealed source version, observed-at and freshness bounds are derived server-side from the private registry binding and clock — never from the caller — with observed_at stating the staging instant (as_of), so a receipt never claims fresher than the staged reality.
+      security: [{browserSession: []}, {browserAccessToken: []}, {caseTicket: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvidenceReadRequest'
+      responses:
+        '200':
+          description: Normalized, policy-masked read result or waiting state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvidenceReadResponse'
+  /v1/runtime/act:
+    post:
+      operationId: requestRuntimeAction
+      summary: Request one typed, hash-bound, risk-decided action inside a work case.
+      security: [{browserSession: []}, {browserAccessToken: []}, {caseTicket: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActionRequest'
+      responses:
+        '200':
+          description: The Action with its frozen lifecycle status and, once issued, its opaque receipt reference (fetch via /v1/runtime/receipts/{receipt_ref}).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Action'
+  /v1/runtime/tickets/{id}:
+    get:
+      operationId: getRuntimeWorkCase
+      summary: Get work-case status and trace context.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Work-case status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkCaseStatusResponse'
+  /v1/runtime/receipts/{receipt_ref}:
+    get:
+      operationId: getRuntimeActionReceipt
+      summary: Fetch the receipt of one Action by its opaque receipt handle.
+      security: [{browserSession: []}, {browserAccessToken: []}, {caseTicket: []}]
+      parameters:
+        - name: receipt_ref
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ReceiptRef'
+      responses:
+        '200':
+          description: The Action receipt.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionReceipt'
+        '404': {description: No receipt exists under this handle for the verified principal.}
+  /v1/runtime/actions/{action_ref}/receipts:
+    post:
+      operationId: ingestRuntimeActionReceipt
+      summary: Ingest one connector-reported execution result for an action (idempotent by result_id).
+      description: >-
+        GA Task 0F durable controlled execution: the connector host reports the
+        execution result of a dispatched action. Only a receipt that binds the
+        exact action (action_ref + parameter_hash + capability) and matches the
+        declared expected_receipt_schema completes the action to its declared
+        TECHNICAL succeeded/failed status — never a business Outcome. A
+        redelivered or duplicate result carrying the same result_id is
+        deduplicated by the inbox and applied exactly once.
+      security: [{trustedServiceSecret: []}, {browserSession: []}, {browserAccessToken: []}, {caseTicket: []}]
+      parameters:
+        - name: action_ref
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ActionRefHandle'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActionReceiptIngestRequest'
+      responses:
+        '200':
+          description: The action after the result was applied (idempotent for a redelivered result_id).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Action'
+        '400': {description: Malformed request, unknown member or trusted-identity field.}
+        '403': {description: The receipt does not bind the exact action or fails verification.}
+        '404': {description: No action exists under this action_ref for the verified tenant.}
+        '409': {description: The action is not in an executable state for this result.}
+        '503': {description: Persistence or audit unavailable.}
+  /v1/runtime/actions/{action_ref}/compensations:
+    post:
+      operationId: triggerRuntimeActionCompensation
+      summary: Trigger the separately authorized compensation of an action.
+      description: >-
+        GA Task 0F: compensation is another governed Action — it mints a NEW
+        action for the declared compensation capability, which flows through its
+        own grant, dispatch and execution/observation receipts (it is not a magic
+        rollback). Idempotent per original action_ref; an action that declared no
+        compensation reference is rejected.
+      security: [{browserSession: []}, {browserAccessToken: []}, {caseTicket: []}]
+      parameters:
+        - name: action_ref
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ActionRefHandle'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RequestEnvelope'
+      responses:
+        '200':
+          description: The new compensation Action (returned again for a repeated trigger).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Action'
+        '404': {description: No action exists under this action_ref for the verified tenant.}
+        '409': {description: The action is not in a compensable state.}
+        '422': {description: The action declared no compensation reference.}
+        '503': {description: Persistence or audit unavailable.}
+  /v1/approvals/transmissions:
+    post:
+      operationId: transmitApprovalPlan
+      summary: Transmit the caller's signed approval plan UNCHANGED to the configured approval authority channel.
+      description: >-
+        GA Task 0E boundary: the approval authority (the calling first-party
+        Agent platform or the customer's OA/BPM system) decides business
+        intent, risk and the approval plan — who approves, in what order,
+        under which policy.
+        AgentNexus persists the correlation, forwards the plan unchanged and
+        records delivery attempts. Duplicate transmits of the same plan are
+        idempotent; a still-pending plan is re-delivered (provider retry). A
+        transport failure keeps the transmission pending and can never create
+        approval progress or a grant. There is no approver, queue or risk
+        field anywhere on this surface.
+      security: [{browserSession: []}, {browserAccessToken: []}, {caseTicket: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalTransmissionRequest'
+      responses:
+        '200':
+          description: Transmission status (idempotent; also returned for a re-transmit of the same plan).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalTransmissionStatus'
+        '400': {description: Malformed request, unknown member or trusted-identity field.}
+        '401': {description: No verified credential.}
+        '403': {description: Caller trust context cannot reach the approval plane.}
+        '409': {description: The plan_ref is already bound to a different operation or plan digest.}
+        '503': {description: Persistence or audit unavailable.}
+  /v1/approvals/transmissions/{plan_ref}:
+    get:
+      operationId: getApprovalTransmission
+      summary: Get the transmission status of one approval plan for diagnostics.
+      security: [{browserSession: []}, {browserAccessToken: []}, {caseTicket: []}]
+      parameters:
+        - name: plan_ref
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ApprovalPlanRefHandle'
+      responses:
+        '200':
+          description: Transmission status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalTransmissionStatus'
+        '404': {description: No transmission exists under this plan_ref for the verified tenant.}
+  /v1/approvals/transmissions/{plan_ref}/revocations:
+    post:
+      operationId: revokeApprovalTransmission
+      summary: Revoke a transmitted approval plan (terminal, idempotent, append-only).
+      description: Recorded evidence of a revoked transmission is unusable for grant issuance and later evidence is rejected.
+      security: [{browserSession: []}, {browserAccessToken: []}, {caseTicket: []}]
+      parameters:
+        - name: plan_ref
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ApprovalPlanRefHandle'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalTransmissionRevocationRequest'
+      responses:
+        '200':
+          description: The transmission is revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalTransmissionStatus'
+        '404': {description: No transmission exists under this plan_ref for the verified tenant.}
+  /v1/approvals/evidence:
+    post:
+      operationId: recordApprovalEvidence
+      summary: Record the approval authority's attested decision for one transmitted plan.
+      description: >-
+        AgentNexus VALIDATES the returned evidence — exact operation binding
+        (capability + parameter_hash + plan digest), authority provenance,
+        expiry, revocation and replay — and stores it for the Action
+        lifecycle (Task 0F) to consume. Recording evidence never issues a
+        grant. Identical resubmission is idempotent; a replayed approval_ref
+        with different content, a second decision for the same plan or reuse
+        against another plan is rejected.
+      security: [{trustedServiceSecret: []}, {browserSession: []}, {browserAccessToken: []}, {caseTicket: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalEvidenceRecordRequest'
+      responses:
+        '200':
+          description: Evidence validated and recorded; the updated transmission status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalTransmissionStatus'
+        '400': {description: Malformed envelope, unknown member or trusted-identity field.}
+        '403': {description: Evidence rejected (binding, provenance, attestation or expiry).}
+        '404': {description: Evidence names a plan that was never transmitted.}
+        '409': {description: Replayed approval_ref, conflicting decision or revoked transmission.}
+        '503': {description: Persistence or audit unavailable.}
+  /v1/step-grants:
+    post:
+      operationId: createStepGrant
+      summary: Issue an audited short-lived one-use grant bound to one exact operation (capability + parameter hash).
+      security: [{browserSession: []}, {browserAccessToken: []}, {caseTicket: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StepGrantRequest'
+      responses:
+        '201':
+          description: Opaque Step Grant returned once after durable audit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StepGrantResponse'
+  /v1/tickets/verify:
+    post:
+      operationId: verifyStepGrant
+      summary: Verify an opaque Step Grant against one exact operation.
+      security: [{browserSession: []}, {browserAccessToken: []}, {caseTicket: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StepGrantVerifyRequest'
+      responses:
+        '200':
+          description: The grant is active and exactly bound.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StepGrantVerifyResponse'
+  /v1/audit/evidence:
+    post:
+      operationId: appendAuditEvidence
+      summary: Record a trusted first-party service request in the audit chain.
+      security: [{trustedServiceSecret: []}, {browserAccessToken: []}]
+      parameters:
+        - {name: Idempotency-Key, in: header, required: false, schema: {type: string, minLength: 16, maxLength: 128}, description: Stable operation-derived key; retries with the same canonical payload return the same audit_ref_id.}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AuditEvidenceRequest'}
+      responses:
+        '201':
+          description: Audit reference created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AuditEvidenceResponse'}
+        '400': {description: Invalid action, resource binding, or bounded details.}
+        '401': {description: Invalid service credentials or Case Ticket.}
+        '409': {description: Idempotency-Key was already used with a different canonical audit payload.}
+        '503': {description: Ticket or audit persistence unavailable.}
+  /v1/agent-clients:
+    post:
+      operationId: registerAgentClient
+      summary: Register (enterprise-register) an Agent client under the verified tenant.
+      description: >-
+        Records an Agent client so it can be certified. The tenant is derived
+        from the verified first-party service credentials, never from the body.
+        Registration is the enterprise-registration act that first-party status
+        additionally requires; it does not by itself grant any trust class.
+      security: [{trustedServiceSecret: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AgentClientRegistrationRequest'}
+      responses:
+        '201':
+          description: Agent client registered; opaque agent_client_ref returned.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AgentClientRegistrationResponse'}
+        '400': {description: Invalid registration body.}
+        '401': {description: Invalid service credentials.}
+        '503': {description: Trust registry unavailable.}
+  /v1/agent-clients/{agent_client_ref}/certifications:
+    post:
+      operationId: certifyAgentClient
+      summary: Issue an immutable certification revision for a registered Agent client.
+      description: >-
+        The certifying authority binds a publisher, product, semantic version
+        range, signing key, signed release-manifest digest, trust class and
+        capability ceiling into one immutable revision. first_party_trusted
+        additionally requires enterprise registration and a signed build
+        manifest; the capability ceiling is the maximum a customer policy may
+        ever grant. The trust class here is the authority's certification
+        decision about the client, not a self-asserted caller identity.
+      security: [{trustedServiceSecret: []}]
+      parameters:
+        - name: agent_client_ref
+          in: path
+          required: true
+          schema: {$ref: '#/components/schemas/AgentClientRef'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AgentCertificationRequest'}
+      responses:
+        '201':
+          description: Immutable certification revision created and marked active.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AgentCertificationResponse'}
+        '400': {description: Invalid binding, or first-party status without enterprise registration or a signed manifest.}
+        '401': {description: Invalid service credentials.}
+        '404': {description: Unknown agent_client_ref.}
+        '503': {description: Trust registry unavailable.}
+  /v1/agent-clients/{agent_client_ref}/certifications/{certification_ref}/revocations:
+    post:
+      operationId: revokeAgentCertification
+      summary: Revoke a certification revision (append-only status change).
+      description: >-
+        Appends a revocation to the certification's append-only, hash-chained
+        status log. The immutable revision and every prior status row are left
+        untouched; a revoked release fails before any grant is issued.
+      security: [{trustedServiceSecret: []}]
+      parameters:
+        - name: agent_client_ref
+          in: path
+          required: true
+          schema: {$ref: '#/components/schemas/AgentClientRef'}
+        - name: certification_ref
+          in: path
+          required: true
+          schema: {$ref: '#/components/schemas/CertificationRef'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AgentCertificationRevocationRequest'}
+      responses:
+        '200':
+          description: Revocation recorded.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AgentCertificationRevocationResponse'}
+        '400': {description: Invalid revocation body.}
+        '401': {description: Invalid service credentials.}
+        '404': {description: Unknown certification_ref.}
+        '503': {description: Trust registry unavailable.}
+components:
+  securitySchemes:
+    trustedServiceSecret:
+      type: http
+      scheme: basic
+      description: Confidential client credentials of a trusted first-party service; the tenant and service identity are derived from the verified credentials, never from the request body.
+    consoleClientSecret:
+      type: http
+      scheme: basic
+      description: Confidential console BFF client_id and secret; browser JavaScript must never call this endpoint directly.
+    browserSession:
+      type: apiKey
+      in: cookie
+      name: nexus_browser_session
+    browserAccessToken:
+      type: http
+      scheme: bearer
+      description: Opaque browser BFF token bound to client, audience, enterprise, user, and browser session.
+    caseTicket:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: 'Use the exact header format: Authorization: CaseTicket <opaque>'
+  schemas:
+    RequestEnvelope:
+      type: object
+      required: [request_id]
+      properties:
+        request_id: {type: string, minLength: 1, maxLength: 128}
+        trace_id: {type: string, maxLength: 128}
+      description: >-
+        Correlation only. Trusted identity is derived from verified
+        credentials and never accepted from request JSON. Unknown request
+        fields are rejected server-side (OpenAPI 3.0 cannot express
+        additionalProperties false across allOf composition; the Go SDK rules
+        are normative).
+    Sha256Ref:
+      type: string
+      pattern: '^sha256:[0-9a-f]{64}$'
+      description: Canonical digest of exact payload bytes.
+    Capability:
+      type: string
+      pattern: '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$'
+      maxLength: 256
+      description: Namespaced business-semantic capability (for example erp.purchase_order.approve). Never a connector operation or endpoint.
+    WorkCaseRef:
+      type: string
+      pattern: '^wc_[A-Za-z0-9_-]{16,128}$'
+      description: Opaque work-case (business context) handle.
+    EvidenceRef:
+      type: string
+      pattern: '^evd_[A-Za-z0-9_-]{16,128}$'
+      description: Opaque evidence handle; never a connector location.
+    GrantRef:
+      type: string
+      pattern: '^grant_[A-Za-z0-9_-]{16,128}$'
+      description: Opaque Step Grant handle.
+    ActionRef:
+      type: string
+      pattern: '^act_[A-Za-z0-9_-]{16,128}$'
+      description: Opaque Action handle.
+    ReceiptRef:
+      type: string
+      pattern: '^rcp_[A-Za-z0-9_-]{16,128}$'
+      description: Opaque Action receipt handle.
+    ActionRefHandle:
+      type: string
+      pattern: '^act_[A-Za-z0-9_-]{16,128}$'
+      description: Opaque Action handle.
+    ActionReceiptIngestRequest:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - type: object
+          required: [result_id, receipt]
+          properties:
+            result_id:
+              type: string
+              minLength: 1
+              maxLength: 256
+              description: The connector result id; a redelivered result with the same id is applied exactly once (inbox dedup).
+            receipt: {$ref: '#/components/schemas/ActionReceipt'}
+    ObservationRef:
+      type: string
+      pattern: '^obs_[A-Za-z0-9_-]{16,128}$'
+      description: Opaque Observation receipt handle.
+    ApprovalPlanRefHandle:
+      type: string
+      pattern: '^apl_[A-Za-z0-9_-]{16,128}$'
+      description: Opaque approval plan handle.
+    ApprovalEvidenceRef:
+      type: string
+      pattern: '^apv_[A-Za-z0-9_-]{16,128}$'
+      description: Opaque approval evidence handle.
+    Constraints:
+      type: object
+      additionalProperties: false
+      properties:
+        max_results: {type: integer, minimum: 1}
+        allowed_fields: {type: array, items: {type: string}}
+        prohibited_uses: {type: array, items: {type: string}}
+    DataNeed:
+      type: object
+      additionalProperties: false
+      required: [need_id, data_class, purpose]
+      properties:
+        need_id: {type: string, minLength: 1, maxLength: 128}
+        data_class: {type: string, minLength: 1, maxLength: 256, description: Business-semantic data class; never a connector table, API path or instance.}
+        purpose: {type: string, minLength: 1, maxLength: 1024}
+        fields: {type: array, items: {type: string, maxLength: 256}}
+        constraints: {$ref: '#/components/schemas/Constraints'}
+    EvidenceRequest:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - type: object
+          required: [data_needs, purpose, expires_at]
+          properties:
+            business_context_ref: {$ref: '#/components/schemas/WorkCaseRef'}
+            data_needs:
+              type: array
+              minItems: 1
+              items: {$ref: '#/components/schemas/DataNeed'}
+            purpose: {type: string, minLength: 1, maxLength: 1024}
+            constraints: {$ref: '#/components/schemas/Constraints'}
+            expires_at: {type: string, format: date-time}
+    EvidenceHandle:
+      type: object
+      additionalProperties: false
+      required: [evidence_ref, data_class]
+      properties:
+        evidence_ref: {$ref: '#/components/schemas/EvidenceRef'}
+        data_class: {type: string, minLength: 1, maxLength: 256}
+        summary: {type: string, maxLength: 2048}
+        expires_at: {type: string, format: date-time}
+    EvidenceLocateResponse:
+      type: object
+      required: [business_context_ref, evidence]
+      properties:
+        business_context_ref: {$ref: '#/components/schemas/WorkCaseRef'}
+        evidence:
+          type: array
+          items: {$ref: '#/components/schemas/EvidenceHandle'}
+    VerificationBinding:
+      type: object
+      additionalProperties: false
+      required: [action_ref, parameter_hash, postcondition_id, verification_need_id, data_class]
+      description: >-
+        Verification block of a verification-purpose read (contract v1.4.0,
+        GA Task 0D amendment): binds the original executed Action (action_ref
+        + parameter_hash) and the declared PostconditionSpec/VerificationNeed
+        pair this read verifies, carrying the need's declared
+        business-semantic data-class expectation. The block is all-or-nothing
+        (every member required) and coupled bidirectionally to the frozen
+        verification purpose "postcondition_verification"; a detached
+        verification binding or a detached verification purpose is rejected.
+        Source authority, sealed source version, observed-at and freshness
+        are DERIVED SERVER-SIDE from the private registry binding and clock;
+        they are never accepted from the caller (unknown fields are rejected
+        server-side per the SDK rules).
+      properties:
+        action_ref: {$ref: '#/components/schemas/ActionRef'}
+        parameter_hash: {$ref: '#/components/schemas/Sha256Ref'}
+        postcondition_id: {type: string, minLength: 1, maxLength: 128, description: The declared PostconditionSpec this read verifies.}
+        verification_need_id: {type: string, minLength: 1, maxLength: 128, description: The declared VerificationNeed this read satisfies.}
+        data_class: {type: string, minLength: 1, maxLength: 256, description: The need's declared business-semantic data class; must match the data class of the evidence handle actually read (mismatched verification needs are rejected). Never a connector table, API path or instance.}
+    EvidenceReadRequest:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - type: object
+          required: [business_context_ref, evidence_ref, purpose, expires_at]
+          properties:
+            business_context_ref: {$ref: '#/components/schemas/WorkCaseRef'}
+            evidence_ref: {$ref: '#/components/schemas/EvidenceRef'}
+            fields: {type: array, items: {type: string, maxLength: 256}}
+            purpose: {type: string, minLength: 1, maxLength: 1024}
+            constraints: {$ref: '#/components/schemas/Constraints'}
+            verification_binding: {$ref: '#/components/schemas/VerificationBinding'}
+            expires_at: {type: string, format: date-time}
+    EvidenceReadResponse:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          $ref: '#/components/schemas/PolicyDecision'
+        grant_ref: {$ref: '#/components/schemas/GrantRef'}
+        data:
+          type: object
+          additionalProperties: true
+          description: Normalized, policy-masked business fields of the read evidence.
+        receipt_ref: {$ref: '#/components/schemas/ReceiptRef'}
+        source_version:
+          type: integer
+          format: int64
+          description: Server-authored source content version this read reflects. Always present on an allowed read.
+        as_of:
+          type: string
+          format: date-time
+          description: When the served content was captured from its source. Always present on an allowed read; a cached response never masquerades as real-time data.
+        served_from_cache:
+          type: boolean
+          description: Explicit disclosure that the content was served from staged (cached) evidence rather than a live source read. Always present on an allowed read.
+        continuation_ref:
+          allOf:
+            - $ref: '#/components/schemas/EvidenceRef'
+          description: Opaque handle of the next page when constraints.max_results bounded this read; absence means the result is complete (results are never silently truncated).
+        observation_receipt:
+          allOf:
+            - $ref: '#/components/schemas/ObservationReceipt'
+          description: >-
+            Signed ObservationReceipt emitted ONLY on an allowed
+            verification-purpose read (contract v1.4.0, GA Task 0D
+            amendment); absent on every ordinary read and on every deny.
+            Authority, sealed source version, observed_at and fresh_until are
+            server-derived; observed_at states the staging instant (as_of) so
+            the receipt never claims fresher than the staged reality. The
+            receipt proves what an authorized source reported at a bounded
+            time - AgentNexus never interprets domain success and never
+            asserts a business Outcome.
+    RiskLevel:
+      type: string
+      enum:
+        - low
+        - medium
+        - high
+    Signature:
+      type: object
+      additionalProperties: false
+      required: [algorithm, key_id, value]
+      properties:
+        algorithm: {type: string, enum: [ed25519]}
+        key_id: {type: string, minLength: 1, maxLength: 256}
+        value: {type: string, minLength: 1, description: Base64-encoded signature bytes.}
+    RiskDecision:
+      type: object
+      additionalProperties: false
+      required: [decision_id, authority, risk_level, capability, parameter_hash, business_context_ref, issued_at, expires_at, signature]
+      description: Signed risk verdict of the calling risk authority, bound to one exact operation. AgentNexus verifies and transmits it; it never authors one.
+      properties:
+        decision_id: {type: string, minLength: 1, maxLength: 128}
+        authority: {type: string, minLength: 1, maxLength: 256}
+        risk_level: {$ref: '#/components/schemas/RiskLevel'}
+        reasons: {type: array, items: {type: string, maxLength: 256}}
+        capability: {$ref: '#/components/schemas/Capability'}
+        parameter_hash: {$ref: '#/components/schemas/Sha256Ref'}
+        business_context_ref: {$ref: '#/components/schemas/WorkCaseRef'}
+        issued_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        signature: {$ref: '#/components/schemas/Signature'}
+    ApprovalPlanRef:
+      type: object
+      additionalProperties: false
+      required: [plan_ref, plan_hash, authority]
+      description: Digest-bound reference to an approval plan authored by the approval authority; AgentNexus transmits plans and never authors them.
+      properties:
+        plan_ref: {$ref: '#/components/schemas/ApprovalPlanRefHandle'}
+        plan_hash: {$ref: '#/components/schemas/Sha256Ref'}
+        authority: {type: string, minLength: 1, maxLength: 256}
+    Precondition:
+      type: object
+      additionalProperties: false
+      required: [kind, reference]
+      properties:
+        kind: {type: string, minLength: 1, maxLength: 128}
+        reference: {type: string, minLength: 1, maxLength: 512}
+        expected: {type: string, maxLength: 512}
+    PostconditionSpec:
+      type: object
+      additionalProperties: false
+      required: [postcondition_id, kind, reference]
+      description: >-
+        A declared business-state condition expected to hold after the action
+        executed. Declared by the calling Agent and later checked by a
+        verification observation; AgentNexus records and transmits it but
+        never evaluates whether the business goal behind it was achieved.
+      properties:
+        postcondition_id: {type: string, minLength: 1, maxLength: 128, description: Request-scoped identifier VerificationNeed and ObservationReceipt bind to.}
+        kind: {type: string, minLength: 1, maxLength: 128}
+        reference: {type: string, minLength: 1, maxLength: 512}
+        expected: {type: string, maxLength: 512}
+    VerificationNeed:
+      type: object
+      additionalProperties: false
+      required: [need_id, postcondition_id, data_class]
+      description: >-
+        A declared post-action verification data need binding exactly one
+        declared postcondition to a business-semantic data class whose
+        authorized source will be observed after execution. Only declared
+        verification needs may ever be verified; a satisfied need produces a
+        signed ObservationReceipt.
+      properties:
+        need_id: {type: string, minLength: 1, maxLength: 128, description: Request-scoped identifier ObservationReceipt binds to.}
+        postcondition_id: {type: string, minLength: 1, maxLength: 128, description: The declared postcondition this need verifies; an unbound need is rejected.}
+        data_class: {type: string, minLength: 1, maxLength: 256, description: Business-semantic data class to observe; never a connector table, API path or instance.}
+    ActionStatus:
+      type: string
+      description: Frozen Action lifecycle states (implemented by the runtime state machine).
+      enum:
+        - requested
+        - awaiting_approval
+        - granted
+        - dispatched
+        - executing
+        - succeeded
+        - failed
+        - result_unknown
+        - reconciling
+        - compensating
+        - human_takeover
+    ActionRequest:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - type: object
+          required: [business_context_ref, capability, parameters, parameter_hash, purpose, risk_decision, idempotency_key, expires_at, expected_receipt_schema]
+          properties:
+            business_context_ref: {$ref: '#/components/schemas/WorkCaseRef'}
+            capability: {$ref: '#/components/schemas/Capability'}
+            parameters:
+              type: object
+              description: Capability-typed parameters. The exact request bytes of this object are bound by parameter_hash.
+            parameter_hash: {$ref: '#/components/schemas/Sha256Ref'}
+            purpose: {type: string, minLength: 1, maxLength: 1024}
+            constraints: {$ref: '#/components/schemas/Constraints'}
+            risk_decision: {$ref: '#/components/schemas/RiskDecision'}
+            approval_plan_ref: {$ref: '#/components/schemas/ApprovalPlanRef'}
+            idempotency_key: {type: string, minLength: 16, maxLength: 128}
+            preconditions:
+              type: array
+              items: {$ref: '#/components/schemas/Precondition'}
+            postconditions:
+              type: array
+              items: {$ref: '#/components/schemas/PostconditionSpec'}
+              description: Declared post-state conditions verification observations bind to; postcondition_id values must be unique.
+            verification_needs:
+              type: array
+              items: {$ref: '#/components/schemas/VerificationNeed'}
+              description: Declared post-action verification needs; each must reference a declared postcondition and need_id values must be unique.
+            expires_at: {type: string, format: date-time}
+            expected_receipt_schema: {type: string, minLength: 1, maxLength: 256}
+            compensation_ref: {type: string, maxLength: 256, description: Optional compensating capability reference.}
+    ActionReceipt:
+      type: object
+      additionalProperties: false
+      description: A receipt binds the exact operation it accounts for; capability and parameter_hash are therefore required.
+      required: [receipt_ref, action_ref, status, capability, parameter_hash, receipt_schema, issued_at]
+      properties:
+        receipt_ref: {$ref: '#/components/schemas/ReceiptRef'}
+        action_ref: {$ref: '#/components/schemas/ActionRef'}
+        status: {$ref: '#/components/schemas/ActionStatus'}
+        capability: {$ref: '#/components/schemas/Capability'}
+        parameter_hash: {$ref: '#/components/schemas/Sha256Ref'}
+        receipt_schema: {type: string, minLength: 1, maxLength: 256}
+        result:
+          type: object
+          additionalProperties: true
+          description: Receipt payload typed by receipt_schema; the exact bytes are bound by result_hash.
+        result_hash: {$ref: '#/components/schemas/Sha256Ref'}
+        issued_at: {type: string, format: date-time}
+        signature: {$ref: '#/components/schemas/Signature'}
+    ObservationReceipt:
+      type: object
+      additionalProperties: false
+      description: >-
+        Signed proof of what an authorized source reported at a bounded time
+        about one declared postcondition of one executed Action. Authority
+        boundary: ActionReceipt attests technical execution only;
+        ObservationReceipt proves a bounded authoritative observation;
+        neither type contains a business Outcome assertion. AgentNexus never
+        decides whether a business goal or Outcome was achieved and never
+        owns or queries the calling Agent platform's result graph; only the
+        calling Agent's deterministic domain runtime turns observed facts
+        into an Outcome. The observation content itself stays behind the
+        opaque evidence handle (handle-addressed like receipt_ref, never
+        embedded) and the signature is required — an unsigned observation is
+        not an ObservationReceipt.
+      required: [observation_ref, action_ref, parameter_hash, postcondition_id, verification_need_id, source, source_version, authority, observed_at, fresh_until, observation_hash, evidence_ref, audit_ref_id, signature]
+      properties:
+        observation_ref: {$ref: '#/components/schemas/ObservationRef'}
+        action_ref: {$ref: '#/components/schemas/ActionRef'}
+        parameter_hash: {$ref: '#/components/schemas/Sha256Ref'}
+        postcondition_id: {type: string, minLength: 1, maxLength: 128, description: The declared PostconditionSpec this observation checked.}
+        verification_need_id: {type: string, minLength: 1, maxLength: 128, description: The declared VerificationNeed this observation satisfied.}
+        source: {type: string, minLength: 1, maxLength: 256, description: Business-semantic identity of the authorized reporting source; never a connector instance, endpoint or path.}
+        source_version: {type: integer, format: int64, minimum: 1, description: Sealed source content version the observation reflects.}
+        authority: {type: string, minLength: 1, maxLength: 256, description: Authority under which the source reported.}
+        observed_at: {type: string, format: date-time}
+        fresh_until: {type: string, format: date-time, description: Bound until which the observation may be treated as fresh; must be after observed_at.}
+        observation_hash: {$ref: '#/components/schemas/Sha256Ref'}
+        evidence_ref: {$ref: '#/components/schemas/EvidenceRef'}
+        audit_ref_id: {type: string, minLength: 1, maxLength: 256, description: Audit chain reference recording this observation.}
+        signature: {$ref: '#/components/schemas/Signature'}
+    Action:
+      type: object
+      required: [action_ref, status, business_context_ref, capability, parameter_hash]
+      properties:
+        action_ref: {$ref: '#/components/schemas/ActionRef'}
+        status: {$ref: '#/components/schemas/ActionStatus'}
+        business_context_ref: {$ref: '#/components/schemas/WorkCaseRef'}
+        capability: {$ref: '#/components/schemas/Capability'}
+        parameter_hash: {$ref: '#/components/schemas/Sha256Ref'}
+        grant_ref: {$ref: '#/components/schemas/GrantRef'}
+        approval_evidence_ref: {$ref: '#/components/schemas/ApprovalEvidenceRef'}
+        receipt_ref: {$ref: '#/components/schemas/ReceiptRef'}
+        updated_at: {type: string, format: date-time}
+    WorkCaseStatusResponse:
+      type: object
+      required: [business_context_ref, status]
+      properties:
+        business_context_ref: {$ref: '#/components/schemas/WorkCaseRef'}
+        status: {type: string}
+        trace_id: {type: string, maxLength: 128}
+        org_snapshot_ref: {type: string, maxLength: 256, description: Opaque sealed organization snapshot reference.}
+    PolicyDecision:
+      type: string
+      enum:
+        - allow
+        - deny
+        - need_external_receipt
+        - allow_with_masking
+    BrowserSession:
+      type: object
+      required:
+        - authenticated
+        - tenant_ref
+        - principal_ref
+        - display_name
+        - org_version
+        - org_unit_ids
+        - permissions
+        - advanced_mode_allowed
+        - idle_expires_at
+        - absolute_expires_at
+      properties:
+        authenticated:
+          type: boolean
+        tenant_ref:
+          type: string
+          description: Opaque verified tenant reference.
+        principal_ref:
+          type: string
+          description: Opaque verified actor reference.
+        display_name:
+          type: string
+        org_version:
+          type: integer
+          minimum: 1
+        org_unit_ids:
+          type: array
+          items:
+            type: string
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PrincipalPermission'
+        advanced_mode_allowed:
+          type: boolean
+        idle_expires_at:
+          type: string
+          format: date-time
+        absolute_expires_at:
+          type: string
+          format: date-time
+    OrgEvent:
+      type: object
+      additionalProperties: false
+      required: [event_id, event_type, org_version, occurred_at]
+      description: >-
+        One organization-graph change notification. It states THAT the
+        organization changed and which sealed version the change produced -
+        never the organization payload itself. Raw membership, unit and source
+        material stay inside AgentNexus and are reachable only through the
+        evidence surface under an Access Ticket.
+      properties:
+        event_id:
+          type: string
+          description: Opaque identifier of this change event.
+        event_type:
+          type: string
+          description: Vendor-neutral change kind. Consumers must ignore unknown values rather than fail closed on them.
+        org_version:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Sealed organization version this change produced; also the resumable cursor.
+        occurred_at:
+          type: string
+          format: date-time
+    AuthorizationDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [request_id, resource_type, resource_id, capability]
+      description: Evaluates one exact capability for the verified session; organization scope and snapshot version come from the sealed server-side snapshot, never from the caller.
+      properties:
+        request_id: {type: string, minLength: 1, maxLength: 128}
+        trace_id: {type: string, maxLength: 128}
+        resource_type: {type: string, enum: [knowledge, workflow, service, dream_evidence]}
+        resource_id: {type: string, minLength: 1, maxLength: 256}
+        capability: {type: string, minLength: 1, maxLength: 256, description: Business-semantic capability requested on the resource.}
+        purpose: {type: string, maxLength: 1024}
+    PermissionDecision:
+      type: object
+      required:
+        - decision
+        - permissions
+        - org_unit_ids
+        - mask_fields
+        - risk_level
+        - org_version
+      properties:
+        decision:
+          type: string
+          enum:
+            - allow
+            - deny
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PrincipalPermission'
+        org_unit_ids:
+          type: array
+          items:
+            type: string
+        mask_fields:
+          type: array
+          items:
+            type: string
+        risk_level:
+          $ref: '#/components/schemas/RiskLevel'
+        fallback_action:
+          type: string
+        org_version:
+          type: integer
+          minimum: 1
+    PrincipalPermission:
+      type: string
+      enum:
+        - suggest
+        - edit
+        - publish_low_risk
+        - approve_high_risk
+        - workflow_edit
+        - workflow_advanced
+        - service_mode
+    ApprovalTransmissionRequest:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - type: object
+          required: [business_context_ref, capability, parameter_hash, purpose, plan, expires_at]
+          description: >-
+            One signed approval plan to transmit UNCHANGED, bound to one exact
+            operation. Mirrors the frozen v1.0.0 runtime.ApprovalRequest type
+            (trust/v1 ApprovalRequest message). AgentNexus never authors,
+            rewrites, narrows or augments the plan and this request carries no
+            approver, queue, organization or risk selector.
+          properties:
+            business_context_ref: {$ref: '#/components/schemas/WorkCaseRef'}
+            capability: {$ref: '#/components/schemas/Capability'}
+            parameter_hash: {$ref: '#/components/schemas/Sha256Ref'}
+            purpose: {type: string, minLength: 1, maxLength: 1024}
+            plan: {$ref: '#/components/schemas/ApprovalPlanRef'}
+            expires_at: {type: string, format: date-time}
+    ApprovalDecision:
+      type: string
+      description: Frozen approval outcome vocabulary of the external approval authority (v1.0.0 trust/v1 ApprovalDecision).
+      enum:
+        - approved
+        - denied
+        - narrowed
+    ApprovalEvidence:
+      type: object
+      additionalProperties: false
+      description: >-
+        Attested proof that the approval authority decided one exact
+        operation (frozen v1.0.0 runtime.ApprovalEvidence type). Produced by
+        the authority, never by AgentNexus; every member is required and the
+        attestation signature is mandatory.
+      required: [approval_ref, plan_ref, plan_hash, capability, parameter_hash, decision, approver_authority, decided_at, attestation]
+      properties:
+        approval_ref: {$ref: '#/components/schemas/ApprovalEvidenceRef'}
+        plan_ref: {$ref: '#/components/schemas/ApprovalPlanRefHandle'}
+        plan_hash: {$ref: '#/components/schemas/Sha256Ref'}
+        capability: {$ref: '#/components/schemas/Capability'}
+        parameter_hash: {$ref: '#/components/schemas/Sha256Ref'}
+        decision: {$ref: '#/components/schemas/ApprovalDecision'}
+        approver_authority: {type: string, minLength: 1, maxLength: 256, description: Authority under which the decision was made; must match the transmitted plan authority. Never an approver identity.}
+        decided_at: {type: string, format: date-time}
+        attestation: {$ref: '#/components/schemas/Signature'}
+    ApprovalEvidenceRecordRequest:
+      allOf:
+        - $ref: '#/components/schemas/RequestEnvelope'
+        - type: object
+          required: [evidence]
+          properties:
+            evidence: {$ref: '#/components/schemas/ApprovalEvidence'}
+    ApprovalTransmissionStatus:
+      type: object
+      required: [plan_ref, plan_hash, authority, business_context_ref, capability, parameter_hash, status, expires_at, delivery_attempts, updated_at]
+      description: >-
+        Transport diagnostics of one transmitted plan. Status is monotonic
+        (pending, delivered, evidence_recorded; revoked is terminal) and
+        deliberately carries NO grant state: grants are the Action lifecycle
+        (Task 0F), which consumes recorded evidence separately. No approver
+        identity appears here by boundary.
+      properties:
+        plan_ref: {$ref: '#/components/schemas/ApprovalPlanRefHandle'}
+        plan_hash: {$ref: '#/components/schemas/Sha256Ref'}
+        authority: {type: string}
+        business_context_ref: {$ref: '#/components/schemas/WorkCaseRef'}
+        capability: {$ref: '#/components/schemas/Capability'}
+        parameter_hash: {$ref: '#/components/schemas/Sha256Ref'}
+        status:
+          type: string
+          enum:
+            - pending
+            - delivered
+            - evidence_recorded
+            - revoked
+        expires_at: {type: string, format: date-time}
+        delivery_attempts: {type: integer, minimum: 0}
+        last_delivery_state: {type: string, enum: [delivered, failed], description: Transport state of the newest channel attempt. Purely a transport fact — never a business result.}
+        decision: {$ref: '#/components/schemas/ApprovalDecision'}
+        decided_at: {type: string, format: date-time}
+        revoked_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    ApprovalTransmissionRevocationRequest:
+      type: object
+      additionalProperties: false
+      required: [request_id, reason]
+      properties:
+        request_id: {type: string, minLength: 1, maxLength: 128}
+        trace_id: {type: string, maxLength: 128}
+        reason: {type: string, minLength: 1, maxLength: 1024}
+    StepGrantRequest:
+      type: object
+      additionalProperties: false
+      required: [request_id, business_context_ref, capability, parameter_hash, purpose, ttl_seconds]
+      properties:
+        request_id: {type: string, minLength: 1, maxLength: 128}
+        trace_id: {type: string, maxLength: 128}
+        business_context_ref: {$ref: '#/components/schemas/WorkCaseRef'}
+        capability: {$ref: '#/components/schemas/Capability'}
+        parameter_hash: {$ref: '#/components/schemas/Sha256Ref'}
+        purpose: {type: string, minLength: 1, maxLength: 1024}
+        ttl_seconds: {type: integer, minimum: 1, maximum: 86400}
+    StepGrantResponse:
+      type: object
+      additionalProperties: false
+      required: [grant_ref, business_context_ref, capability, parameter_hash, one_use, expires_at]
+      properties:
+        grant_ref: {$ref: '#/components/schemas/GrantRef'}
+        business_context_ref: {$ref: '#/components/schemas/WorkCaseRef'}
+        capability: {$ref: '#/components/schemas/Capability'}
+        parameter_hash: {$ref: '#/components/schemas/Sha256Ref'}
+        one_use: {type: boolean, enum: [true], description: One-use semantics are part of the type contract.}
+        expires_at: {type: string, format: date-time}
+    StepGrantVerifyRequest:
+      type: object
+      additionalProperties: false
+      required: [grant_ref, capability, parameter_hash]
+      properties:
+        grant_ref: {$ref: '#/components/schemas/GrantRef'}
+        capability: {$ref: '#/components/schemas/Capability'}
+        parameter_hash: {$ref: '#/components/schemas/Sha256Ref'}
+    StepGrantVerifyResponse:
+      type: object
+      additionalProperties: false
+      required: [valid, grant_ref, capability, parameter_hash, one_use, expires_at]
+      properties:
+        valid: {type: boolean, enum: [true]}
+        grant_ref: {$ref: '#/components/schemas/GrantRef'}
+        capability: {$ref: '#/components/schemas/Capability'}
+        parameter_hash: {$ref: '#/components/schemas/Sha256Ref'}
+        one_use: {type: boolean, enum: [true]}
+        expires_at: {type: string, format: date-time}
+    AuditEvidenceAction:
+      type: string
+      enum:
+        - workflow_draft_created
+        - workflow_version_published
+        - dream_policy_created
+        - dream_policy_create_requested
+        - dream_job_run
+        - retrieval_plan_created
+        - evidence_located
+        - evidence_read
+        - answer_trace_created
+        - sensitive_artifact_parsed
+        - visibility_rule_changed
+    AuditEvidenceRequest:
+      type: object
+      additionalProperties: false
+      description: Trusted first-party service audit append; the tenant and service identity come from the verified service credentials, never from this body.
+      required: [business_context_ref, action, resource_type, resource_id]
+      properties:
+        request_id: {type: string, maxLength: 128}
+        business_context_ref: {type: string, minLength: 1, maxLength: 4096, description: Opaque work-case / Case Ticket reference binding the audit lineage; accepts both legacy Case Ticket strings and wc_ work-case handles until the runtime cutover retires the legacy bridge.}
+        action: {$ref: '#/components/schemas/AuditEvidenceAction'}
+        resource_type: {type: string, minLength: 1, maxLength: 64}
+        resource_id: {type: string, minLength: 1, maxLength: 128, description: Preallocated resource identifier bound into the audit lineage.}
+        trace_id: {type: string, maxLength: 128}
+        details: {type: object, maxProperties: 100, additionalProperties: true, description: Keys are at most 128 Unicode code points; string values at most 1024; arrays/maps at most 100 entries; nesting depth at most 4.}
+      oneOf:
+        - properties:
+            action: {type: string, enum: [dream_policy_create_requested]}
+            resource_type: {type: string, enum: [dream_policy]}
+        - properties:
+            action:
+              type: string
+              enum: [workflow_draft_created, workflow_version_published, dream_policy_created, dream_job_run, retrieval_plan_created, evidence_located, evidence_read, answer_trace_created, sensitive_artifact_parsed, visibility_rule_changed]
+    AuditEvidenceResponse:
+      type: object
+      additionalProperties: false
+      required: [audit_ref_id]
+      properties:
+        audit_ref_id: {type: string, minLength: 1}
+    BrowserTokenRequest:
+      type: object
+      additionalProperties: false
+      required: [grant_type, code, code_verifier, redirect_uri]
+      properties:
+        grant_type: {type: string, enum: [authorization_code]}
+        code: {type: string}
+        code_verifier: {type: string}
+        redirect_uri: {type: string, format: uri}
+    BrowserTokenResponse:
+      type: object
+      additionalProperties: false
+      required: [id_token, access_token, token_type, expires_in]
+      properties:
+        id_token: {type: string}
+        access_token: {type: string, description: Opaque revocable token; the server stores only its hash.}
+        token_type: {type: string, enum: [Bearer]}
+        expires_in: {type: integer, minimum: 1}
+    AgentClientRef:
+      type: string
+      pattern: '^agc_[A-Za-z0-9_-]{16,128}$'
+      description: Opaque Agent-client handle.
+    CertificationRef:
+      type: string
+      pattern: '^cert_[A-Za-z0-9_-]{16,128}$'
+      description: Opaque certification revision handle.
+    TrustClass:
+      type: string
+      description: Frozen Agent-client trust classes. Derived and server-authored; untrusted is the absence of a certification.
+      enum:
+        - first_party_trusted
+        - certified_third_party
+        - untrusted
+    VersionRange:
+      type: object
+      additionalProperties: false
+      description: Semantic-version window a certification binds. Min is inclusive, max is exclusive; an empty bound is open on that side.
+      properties:
+        min_inclusive: {type: string, maxLength: 64}
+        max_exclusive: {type: string, maxLength: 64}
+    SigningKey:
+      type: object
+      additionalProperties: false
+      required: [key_id, algorithm, public_key]
+      description: Public signing key the certified release's build manifest must be signed by. Rotating the key is a new signing identity that requires recertification.
+      properties:
+        key_id: {type: string, minLength: 1, maxLength: 256}
+        algorithm: {type: string, enum: [ed25519]}
+        public_key: {type: string, minLength: 1, description: Base64-encoded public key bytes.}
+    AgentClientRegistrationRequest:
+      type: object
+      additionalProperties: false
+      required: [request_id, publisher, product]
+      description: >-
+        Registers an Agent client. The tenant is derived from the verified
+        first-party service credentials and never travels in this body.
+      properties:
+        request_id: {type: string, minLength: 1, maxLength: 128}
+        trace_id: {type: string, maxLength: 128}
+        publisher: {type: string, minLength: 1, maxLength: 256}
+        product: {type: string, minLength: 1, maxLength: 256}
+        origin: {type: string, maxLength: 128, description: Declared client origin (trace metadata); origins that can only lower capability, such as the AstraClaw/Xiaozhi runtime, never receive enterprise connector capability.}
+    AgentClientRegistrationResponse:
+      type: object
+      additionalProperties: false
+      required: [agent_client_ref, publisher, product, registered]
+      properties:
+        agent_client_ref: {$ref: '#/components/schemas/AgentClientRef'}
+        publisher: {type: string}
+        product: {type: string}
+        registered: {type: boolean, enum: [true]}
+    AgentCertificationRequest:
+      type: object
+      additionalProperties: false
+      required: [request_id, trust_class, version_range, signing_key, release_manifest_digest, manifest_signature, capability_ceiling, ttl_seconds]
+      description: >-
+        A certification decision by the certifying authority. Publisher and
+        product are resolved from agent_client_ref, never duplicated here. A
+        valid manifest_signature over release_manifest_digest is the signed
+        build manifest first-party status requires; the capability ceiling is
+        the maximum a customer policy may narrow but never raise.
+      properties:
+        request_id: {type: string, minLength: 1, maxLength: 128}
+        trace_id: {type: string, maxLength: 128}
+        trust_class: {type: string, enum: [first_party_trusted, certified_third_party], description: The authority's certification decision; untrusted is never certifiable.}
+        version_range: {$ref: '#/components/schemas/VersionRange'}
+        signing_key: {$ref: '#/components/schemas/SigningKey'}
+        release_manifest_digest: {$ref: '#/components/schemas/Sha256Ref'}
+        manifest_signature: {$ref: '#/components/schemas/Signature'}
+        capability_ceiling:
+          type: array
+          items: {$ref: '#/components/schemas/Capability'}
+          description: Maximum business-semantic capabilities; connector capabilities are stripped for AstraClaw/Xiaozhi origins.
+        certified_decision_provider: {type: boolean, description: Whether a certified Policy Decision Provider backs this certification; a certified third party reaches a side effect only when true.}
+        ttl_seconds: {type: integer, minimum: 1, maximum: 31536000}
+    AgentCertificationResponse:
+      type: object
+      additionalProperties: false
+      required: [certification_ref, trust_class, revision, status, capability_ceiling, expires_at]
+      properties:
+        certification_ref: {$ref: '#/components/schemas/CertificationRef'}
+        trust_class: {$ref: '#/components/schemas/TrustClass'}
+        revision: {type: integer, minimum: 1}
+        status: {type: string, enum: [active]}
+        capability_ceiling:
+          type: array
+          items: {$ref: '#/components/schemas/Capability'}
+        expires_at: {type: string, format: date-time}
+    AgentCertificationRevocationRequest:
+      type: object
+      additionalProperties: false
+      required: [request_id, reason]
+      properties:
+        request_id: {type: string, minLength: 1, maxLength: 128}
+        trace_id: {type: string, maxLength: 128}
+        reason: {type: string, minLength: 1, maxLength: 1024}
+    AgentCertificationRevocationResponse:
+      type: object
+      additionalProperties: false
+      required: [certification_ref, status, revoked_at]
+      properties:
+        certification_ref: {$ref: '#/components/schemas/CertificationRef'}
+        status: {type: string, enum: [revoked]}
+        revoked_at: {type: string, format: date-time}
