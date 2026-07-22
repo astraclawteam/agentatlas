@@ -23,3 +23,6 @@ Thumbs.db
 # Session/tooling scratch areas — never product code.
 .superpowers/
 .claude/
+
+# docker pull transcripts from stack bring-up; not source.
+pull_*.log
