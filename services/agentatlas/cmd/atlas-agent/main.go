@@ -191,7 +191,7 @@ func run() error {
 	// audit appends are counted; write paths fail closed on append failure
 	nexusClient := auditrefs.New(rawNexusClient, metrics)
 
-	router := app.NewAgentRouter(app.AgentRouterDeps{
+	deps := app.AgentRouterDeps{
 		Nexus: nexusClient, Agent: agentRunner, Workflows: workflowSvc,
 		Runtime: workflowRuntime, Dreams: dreamPolicies, Store: queries,
 		DreamRerun: dreamScheduler, Runner: taskRunner, Metrics: metrics,
@@ -204,7 +204,16 @@ func run() error {
 		// because each test sets them itself.
 		OrgAuthorization: rawNexusClient, Evidence: rawNexusClient,
 		TLS: tlsLinks.agentAtlas,
-	})
+	}
+	// Refuse to start with a required dependency unwired. These deps fail
+	// closed, so an unset one does not crash - it silently removes a feature,
+	// which is how this binary once served every dream-policy org check as a
+	// 502 while its tests were green. Naming them at boot turns that into a
+	// startup failure an operator can act on.
+	if missing := deps.MissingRequired(); len(missing) > 0 {
+		return fmt.Errorf("atlas-agent composition is incomplete; unwired dependencies: %s", strings.Join(missing, ", "))
+	}
+	router := app.NewAgentRouter(deps)
 
 	addr := os.Getenv("ATLAS_AGENT_ADDR")
 	if addr == "" {
