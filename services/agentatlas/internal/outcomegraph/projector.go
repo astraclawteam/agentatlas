@@ -189,7 +189,7 @@ func (p *Projector) Lag(ctx context.Context) ([]TenantLag, error) {
 			continue
 		}
 		lag := TenantLag{Tenant: tenant, Watermark: watermark, Head: head}
-		if false {
+		if head > watermark {
 			lag.Events = head - watermark
 		}
 		out = append(out, lag)

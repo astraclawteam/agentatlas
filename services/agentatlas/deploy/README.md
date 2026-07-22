@@ -43,7 +43,26 @@ curl -s http://localhost:9000/minio/health/live        # MinIO
 curl -s http://localhost:5003/healthz                   # ASR sidecar
 curl -s http://localhost:5004/healthz                   # video sidecar
 curl -s http://localhost:5001/health                    # docling-serve
+curl -s http://localhost:9091/readyz                    # atlas-worker
+curl -s http://localhost:9092/readyz                    # atlas-outcome-projector
+curl -s http://localhost:9092/metrics | grep projection_lag  # graph freshness
 ```
+
+Readiness versus liveness on the two services with no API port: `/healthz`
+stays 200 while the process is alive, so the container does not flap, and
+`/readyz` answers 503 with a stated reason when the service is not doing its
+job. Both are worth asking directly, because both failures are invisible
+otherwise — a `healthy` atlas-worker whose AgentNexus org-version
+subscription is failing on every attempt still serves `/metrics` perfectly,
+and a projector whose graph has gone stale still runs. The projector's
+`agentatlas_outcome_projection_lag_events` is the number that says how far
+behind the Outcome Graph has fallen; a value that stops falling is a stalled
+projection.
+
+`outcome-graph` is a second PostgreSQL instance with the Apache AGE extension
+compiled in, separate from the authoritative store and holding only the
+projected, rebuildable read model. Its first build compiles AGE from the
+pinned source archive, which is slow once and cached after.
 
 Notes:
 

@@ -126,6 +126,28 @@ services:
       timeout: 3s
       retries: 12
 
+  outcome-graph:
+    # The Apache AGE Outcome Graph. A SEPARATE PostgreSQL instance from the
+    # authoritative store above, with its own DSN — it holds a projected,
+    # rebuildable read model and never receives a write that did not come
+    # through the projection outbox. Building it compiles the AGE extension,
+    # which is slow the first time and cached after.
+    build:
+      context: ../images/age
+    environment:
+      POSTGRES_USER: atlas
+      POSTGRES_PASSWORD: ${OUTCOME_GRAPH_PASSWORD:-atlas}
+      POSTGRES_DB: outcome_graph
+    ports:
+      - "5433:5432"
+    volumes:
+      - agedata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atlas -d outcome_graph"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
   opensearch:
     build:
       context: ./opensearch
@@ -300,6 +322,44 @@ services:
       minio:
         condition: service_healthy
 
+  atlas-outcome-projector:
+    build:
+      context: ../../../..
+      dockerfile: services/agentatlas/deploy/docker/Dockerfile
+      args:
+        SERVICE: atlas-outcome-projector
+        GOPROXY: ${GOPROXY_BUILD:-https://proxy.golang.org,direct}
+    environment:
+      <<: *atlas-env
+      # The graph is a separately configured endpoint with its own DSN; the
+      # projector dials TWO distinct PostgreSQL instances and never conflates
+      # them.
+      ATLAS_OUTCOME_GRAPH_DSN: postgres://atlas:${OUTCOME_GRAPH_PASSWORD:-atlas}@outcome-graph:5432/outcome_graph?sslmode=disable
+      ATLAS_OUTCOME_PROJECTOR_TICK_SECONDS: ${ATLAS_OUTCOME_PROJECTOR_TICK_SECONDS:-15}
+    secrets:
+      - agentatlas_agentnexus_service_secret
+    volumes: *atlas-tls-volume
+    ports:
+      - "9092:9091" # metrics/health listener (plaintext; not a named TLS link)
+    healthcheck:
+      # /readyz, and the listener it hits is new. This service used to serve no
+      # HTTP at all — no /healthz, no /readyz, no metrics — while degrading
+      # silently: a failed projection pass is a WARN log and a watermark that
+      # stops advancing, so the graph goes stale with nothing to ask. /readyz
+      # answers 503 for that, and /metrics carries the per-tenant lag, which is
+      # the number that says how far behind the graph has fallen.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9091/readyz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    depends_on:
+      postgres:
+        condition: service_healthy
+      outcome-graph:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+
   parser-gateway:
     build:
       context: ../../../..
@@ -391,6 +451,7 @@ secrets:
     file: ${ATLAS_BROWSER_SESSION_ENCRYPTION_KEY_FILE_SOURCE:?set an absolute host path to the 32-byte Atlas browser session key}
 volumes:
   pgdata:
+  agedata:
   osdata:
   natsdata:
   miniodata:
