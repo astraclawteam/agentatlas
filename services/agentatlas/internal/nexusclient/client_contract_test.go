@@ -44,6 +44,7 @@ func contractServer(t *testing.T, serviceSecret string) *httptest.Server {
 	// there is no ticket in the body to key it by.
 	mux.HandleFunc("POST /v1/runtime/locate", func(w http.ResponseWriter, r *http.Request) {
 		assertNoServiceAuthorization(t, r)
+		assertAcceptedActorCredential(t, r)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"business_context_ref": "wc_0123456789abcdef0123",
 			"evidence": []map[string]any{{
@@ -54,6 +55,7 @@ func contractServer(t *testing.T, serviceSecret string) *httptest.Server {
 
 	mux.HandleFunc("POST /v1/runtime/read", func(w http.ResponseWriter, r *http.Request) {
 		assertNoServiceAuthorization(t, r)
+		assertAcceptedActorCredential(t, r)
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		if ref, _ := body["evidence_ref"].(string); ref == "evd_denied0000000000" {
@@ -134,11 +136,51 @@ func contractServer(t *testing.T, serviceSecret string) *httptest.Server {
 	return srv
 }
 
+// browserSessionCookie is the cookie name the pinned snapshot gives the
+// browserSession scheme.
+const browserSessionCookie = "nexus_browser_session"
+
+// contractCaseTicket is the Access Ticket the contract test presents on the
+// per-actor evidence surface.
+const contractCaseTicket = "tick_ok"
+
+// assertNoServiceAuthorization is the original half of the evidence-surface
+// guard, and it stays: locateRuntimeEvidence and readRuntimeEvidence declare
+// security [{browserSession}, {browserAccessToken}, {caseTicket}] and
+// deliberately omit trustedServiceSecret, so a Basic credential here is a
+// service credential on a per-actor surface.
+//
+// It now tests for Basic specifically rather than for a non-empty
+// Authorization header. The old form was wrong in both directions: caseTicket
+// and browserAccessToken are themselves Authorization headers, so "any
+// Authorization is a leak" would have rejected the very credentials the
+// contract accepts.
 func assertNoServiceAuthorization(t *testing.T, r *http.Request) {
 	t.Helper()
-	if authorization := r.Header.Get("Authorization"); authorization != "" {
-		t.Errorf("service credential leaked to %s: authorization header present", r.URL.Path)
+	if _, _, isBasic := r.BasicAuth(); isBasic {
+		t.Errorf("service credential leaked to %s: Basic auth is not an accepted scheme on this per-actor surface", r.URL.Path)
 	}
+}
+
+// assertAcceptedActorCredential is the half that was missing, and its absence
+// is why the defect survived: asserting only that no service credential is
+// present is equally satisfied by a request carrying NO credential at all,
+// which is exactly what the client was sending. A real AgentNexus answers that
+// 401. Both halves have to hold — reject the wrong credential, and reject none.
+func assertAcceptedActorCredential(t *testing.T, r *http.Request) {
+	t.Helper()
+	scheme, credential, _ := strings.Cut(r.Header.Get("Authorization"), " ")
+	// The snapshot pins the ticket format exactly: "Authorization: CaseTicket <opaque>".
+	if strings.EqualFold(scheme, "CaseTicket") || strings.EqualFold(scheme, "Bearer") {
+		if strings.TrimSpace(credential) != "" {
+			return
+		}
+	}
+	if cookie, err := r.Cookie(browserSessionCookie); err == nil && cookie.Value != "" {
+		return
+	}
+	t.Errorf("%s carried none of the three accepted credentials (Authorization=%q): the request is unauthenticated",
+		r.URL.Path, r.Header.Get("Authorization"))
 }
 
 func writeServiceSecret(t *testing.T, value string) string {
@@ -178,7 +220,7 @@ func TestHTTPClientContract(t *testing.T) {
 			ExpiresAt: time.Now().Add(time.Minute).UTC(),
 		}
 	}
-	located, err := c.Locate(ctx, nexusruntime.EvidenceRequest{
+	located, err := c.Locate(ctx, contractCaseTicket, nexusruntime.EvidenceRequest{
 		RequestID: "contract-locate-0001", Purpose: "contract_test",
 		DataNeeds: []nexusruntime.DataNeed{{NeedID: "need-1", DataClass: "test.evidence", Purpose: "contract_test"}},
 		ExpiresAt: time.Now().Add(time.Minute).UTC(),
@@ -187,7 +229,7 @@ func TestHTTPClientContract(t *testing.T) {
 		t.Fatalf("locate: %+v err=%v", located, err)
 	}
 
-	read, err := c.Read(ctx, sample(located.Evidence[0].EvidenceRef))
+	read, err := c.Read(ctx, contractCaseTicket, sample(located.Evidence[0].EvidenceRef))
 	if err != nil || !read.Allowed() {
 		t.Fatalf("read: %+v err=%v", read, err)
 	}
@@ -203,7 +245,7 @@ func TestHTTPClientContract(t *testing.T) {
 		t.Fatalf("freshness disclosure lost: %+v", read)
 	}
 
-	if _, err := c.Read(ctx, sample("evd_denied0000000000")); !errors.Is(err, ErrDenied) {
+	if _, err := c.Read(ctx, contractCaseTicket, sample("evd_denied0000000000")); !errors.Is(err, ErrDenied) {
 		t.Fatalf("denied read must map to ErrDenied, got %v", err)
 	}
 

@@ -78,23 +78,33 @@ func (r ReadEvidenceResult) Allowed() bool {
 
 // Locate resolves declared business-semantic data needs to opaque evidence
 // handles. It is the frozen-contract replacement for LocateEvidence.
-func (c *HTTPClient) Locate(ctx context.Context, req nexusruntime.EvidenceRequest) (LocateEvidenceResult, error) {
+//
+// ticketID is required and is NOT optional politeness. locateRuntimeEvidence
+// declares security [{browserSession}, {browserAccessToken}, {caseTicket}] and
+// deliberately omits trustedServiceSecret: this is a per-actor authorization
+// surface, so WHO is asking must come from a verified actor credential. The
+// ticket is a parameter rather than a body member because the body declares
+// only WHAT is needed; and it is a required parameter rather than an optional
+// one so that "send nothing at all" — the state this call was actually in —
+// cannot be expressed. Callers holding a browser token use LocateWithBearer.
+func (c *HTTPClient) Locate(ctx context.Context, ticketID string, req nexusruntime.EvidenceRequest) (LocateEvidenceResult, error) {
 	var out LocateEvidenceResult
 	if err := req.Validate(); err != nil {
 		return out, fmt.Errorf("nexus evidence request: %w", err)
 	}
-	err := c.post(ctx, "/v1/runtime/locate", req, &out)
+	err := c.ticketPost(ctx, "/v1/runtime/locate", ticketID, "", req, &out, nil)
 	return out, err
 }
 
 // Read reads one located evidence handle under policy. It is the
-// frozen-contract replacement for ReadEvidence.
-func (c *HTTPClient) Read(ctx context.Context, req nexusruntime.EvidenceReadRequest) (ReadEvidenceResult, error) {
+// frozen-contract replacement for ReadEvidence. ticketID is required for the
+// same reason it is on Locate.
+func (c *HTTPClient) Read(ctx context.Context, ticketID string, req nexusruntime.EvidenceReadRequest) (ReadEvidenceResult, error) {
 	var out ReadEvidenceResult
 	if err := req.Validate(); err != nil {
 		return out, fmt.Errorf("nexus evidence read request: %w", err)
 	}
-	err := c.post(ctx, "/v1/runtime/read", req, &out)
+	err := c.ticketPost(ctx, "/v1/runtime/read", ticketID, "", req, &out, nil)
 	return out, err
 }
 

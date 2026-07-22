@@ -63,6 +63,12 @@ func newMockNexusHandler(backing *nexusclient.Mock, events []nexus.OrgEvent) htt
 	// evidence_handler.go calls the identically named functions), so the mock
 	// cannot drift from production by construction.
 	mux.HandleFunc("POST /v1/runtime/locate", func(w http.ResponseWriter, r *http.Request) {
+		// Authorize before decoding: an unauthenticated caller must not be
+		// able to tell a well-formed body from a malformed one.
+		if !mockActorCredentialPresent(r) {
+			writeMockError(w, http.StatusUnauthorized, "invalid_credential")
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		req, err := nexusruntime.DecodeEvidenceRequest(body)
 		if err != nil {
@@ -85,6 +91,10 @@ func newMockNexusHandler(backing *nexusclient.Mock, events []nexus.OrgEvent) htt
 	})
 
 	mux.HandleFunc("POST /v1/runtime/read", func(w http.ResponseWriter, r *http.Request) {
+		if !mockActorCredentialPresent(r) {
+			writeMockError(w, http.StatusUnauthorized, "invalid_credential")
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		req, err := nexusruntime.DecodeEvidenceReadRequest(body)
 		if err != nil {
@@ -312,6 +322,33 @@ func mockCredentialPresent(r *http.Request) bool {
 	authorization := r.Header.Get("Authorization")
 	return strings.HasPrefix(authorization, "Bearer ") || strings.HasPrefix(authorization, "CaseTicket ")
 }
+
+// mockActorCredentialPresent is mockCredentialPresent's stricter twin for the
+// PER-ACTOR operations. locateRuntimeEvidence and readRuntimeEvidence declare
+// security [{browserSession}, {browserAccessToken}, {caseTicket}] and
+// deliberately omit trustedServiceSecret, so unlike the service surfaces a
+// Basic credential is not merely unnecessary here — it is not an accepted
+// scheme, and the real gateway does not resolve an actor from one.
+//
+// Reusing mockCredentialPresent here would have been wrong in a way that
+// mattered: it accepts Basic, so it would have waved through exactly the
+// service credential this surface exists to keep off.
+func mockActorCredentialPresent(r *http.Request) bool {
+	if _, _, isBasic := r.BasicAuth(); isBasic {
+		return false
+	}
+	authorization := r.Header.Get("Authorization")
+	// The snapshot pins the ticket format exactly: "Authorization: CaseTicket <opaque>".
+	if strings.HasPrefix(authorization, "CaseTicket ") || strings.HasPrefix(authorization, "Bearer ") {
+		return strings.TrimSpace(strings.SplitN(authorization, " ", 2)[1]) != ""
+	}
+	cookie, err := r.Cookie(mockBrowserSessionCookie)
+	return err == nil && cookie.Value != ""
+}
+
+// mockBrowserSessionCookie is the cookie name the frozen contract gives the
+// browserSession scheme.
+const mockBrowserSessionCookie = "nexus_browser_session"
 
 func writeJSONMock(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")

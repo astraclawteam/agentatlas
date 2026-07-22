@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
 	nexusruntime "github.com/astraclawteam/agentnexus/sdk/go/runtime"
@@ -16,6 +18,12 @@ import (
 type fakeFrozenEvidence struct {
 	locates []nexusruntime.EvidenceRequest
 	reads   []nexusruntime.EvidenceReadRequest
+	// tickets records the Access Ticket presented with each call, in call
+	// order across both methods. The frozen locate/read operations accept
+	// only per-actor credentials, so a handler that forwards no ticket makes
+	// a request a real AgentNexus answers 401 — recording it here is what
+	// lets a test assert the forwarding actually happens.
+	tickets []string
 	locErr  error
 	readErr error
 	// empty makes Locate return no handles.
@@ -26,8 +34,27 @@ type fakeFrozenEvidence struct {
 	deny bool
 }
 
-func (f *fakeFrozenEvidence) Locate(_ context.Context, req nexusruntime.EvidenceRequest) (nexusclient.LocateEvidenceResult, error) {
+// refuseWithoutTicket mirrors the real client's ticketPost: locate and read
+// accept only per-actor credentials, so an empty Access Ticket is refused
+// locally and never reaches the wire.
+//
+// A double that accepted one would be more permissive than the client it
+// stands in for, which is the same trap the e2e mock had — and it is not
+// hypothetical here: with this double silently accepting "", every handler
+// test passed against a handler that forwarded no ticket at all.
+func refuseWithoutTicket(ticketID string) error {
+	if strings.TrimSpace(ticketID) == "" {
+		return fmt.Errorf("nexus evidence: %w", nexusclient.ErrMissingCaseTicket)
+	}
+	return nil
+}
+
+func (f *fakeFrozenEvidence) Locate(_ context.Context, ticketID string, req nexusruntime.EvidenceRequest) (nexusclient.LocateEvidenceResult, error) {
 	f.locates = append(f.locates, req)
+	f.tickets = append(f.tickets, ticketID)
+	if err := refuseWithoutTicket(ticketID); err != nil {
+		return nexusclient.LocateEvidenceResult{}, err
+	}
 	if f.locErr != nil {
 		return nexusclient.LocateEvidenceResult{}, f.locErr
 	}
@@ -43,8 +70,12 @@ func (f *fakeFrozenEvidence) Locate(_ context.Context, req nexusruntime.Evidence
 	}, nil
 }
 
-func (f *fakeFrozenEvidence) Read(_ context.Context, req nexusruntime.EvidenceReadRequest) (nexusclient.ReadEvidenceResult, error) {
+func (f *fakeFrozenEvidence) Read(_ context.Context, ticketID string, req nexusruntime.EvidenceReadRequest) (nexusclient.ReadEvidenceResult, error) {
 	f.reads = append(f.reads, req)
+	f.tickets = append(f.tickets, ticketID)
+	if err := refuseWithoutTicket(ticketID); err != nil {
+		return nexusclient.ReadEvidenceResult{}, err
+	}
 	if f.readErr != nil {
 		return nexusclient.ReadEvidenceResult{}, f.readErr
 	}

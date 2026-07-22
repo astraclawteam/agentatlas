@@ -106,6 +106,25 @@ func doMock(t *testing.T, req *http.Request) (int, map[string]any) {
 // deployed AgentAtlas presents over basic auth.
 func withServiceCredential(req *http.Request) { req.SetBasicAuth("agentatlas", "mock-secret") }
 
+// conformanceCaseTicket is the opaque Access Ticket the per-actor evidence
+// surface accepts.
+const conformanceCaseTicket = "tick_conformance0001"
+
+// withCaseTicket presents an Access Ticket in the exact format the frozen
+// caseTicket scheme declares: an apiKey in the Authorization header written
+// "CaseTicket <opaque>". It is NOT an X-Case-Ticket header — that name appears
+// nowhere in the pinned contract.
+func withCaseTicket(req *http.Request) {
+	req.Header.Set("Authorization", "CaseTicket "+conformanceCaseTicket)
+}
+
+// withBrowserSession presents the third accepted credential, the session
+// cookie, so the mock is pinned to accept every scheme the contract declares
+// rather than only the one AgentAtlas happens to send.
+func withBrowserSession(req *http.Request) {
+	req.AddCookie(&http.Cookie{Name: "nexus_browser_session", Value: "sess_conformance0001"})
+}
+
 func locateBody(overrides map[string]any) map[string]any {
 	body := map[string]any{
 		"request_id": "conf-locate",
@@ -176,12 +195,12 @@ func TestMockNexusEvidenceHandlersRejectWhatAgentNexusRejects(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run("locate/"+tc.name, func(t *testing.T) {
-			if status, _ := postMock(t, server, "/v1/runtime/locate", locateBody(tc.overrides), nil); status != http.StatusBadRequest {
+			if status, _ := postMock(t, server, "/v1/runtime/locate", locateBody(tc.overrides), withCaseTicket); status != http.StatusBadRequest {
 				t.Fatalf("locate accepted %s: status %d, want 400", tc.name, status)
 			}
 		})
 		t.Run("read/"+tc.name, func(t *testing.T) {
-			if status, _ := postMock(t, server, "/v1/runtime/read", readBody(tc.overrides), nil); status != http.StatusBadRequest {
+			if status, _ := postMock(t, server, "/v1/runtime/read", readBody(tc.overrides), withCaseTicket); status != http.StatusBadRequest {
 				t.Fatalf("read accepted %s: status %d, want 400", tc.name, status)
 			}
 		})
@@ -193,7 +212,7 @@ func TestMockNexusEvidenceHandlersRejectWhatAgentNexusRejects(t *testing.T) {
 		"need_id": conformanceNeedID, "data_class": conformanceDataClass, "purpose": conformancePurpose,
 		"enterprise_id": "ent_forged",
 	}}})
-	if status, _ := postMock(t, server, "/v1/runtime/locate", nested, nil); status != http.StatusBadRequest {
+	if status, _ := postMock(t, server, "/v1/runtime/locate", nested, withCaseTicket); status != http.StatusBadRequest {
 		t.Fatalf("locate accepted identity nested in data_needs: status %d, want 400", status)
 	}
 
@@ -201,17 +220,85 @@ func TestMockNexusEvidenceHandlersRejectWhatAgentNexusRejects(t *testing.T) {
 	// the purpose without its all-or-nothing verification_binding is rejected —
 	// a rule no field-name blocklist could ever express.
 	detached := readBody(map[string]any{"purpose": "postcondition_verification"})
-	if status, _ := postMock(t, server, "/v1/runtime/read", detached, nil); status != http.StatusBadRequest {
+	if status, _ := postMock(t, server, "/v1/runtime/read", detached, withCaseTicket); status != http.StatusBadRequest {
 		t.Fatalf("read accepted a detached verification purpose: status %d, want 400", status)
 	}
 
 	// Positive control: the rejections above mean nothing unless a
 	// contract-clean request still succeeds.
-	if status, _ := postMock(t, server, "/v1/runtime/locate", locateBody(nil), nil); status != http.StatusOK {
+	if status, _ := postMock(t, server, "/v1/runtime/locate", locateBody(nil), withCaseTicket); status != http.StatusOK {
 		t.Fatalf("locate rejected a contract-clean request: status %d, want 200", status)
 	}
-	if status, _ := postMock(t, server, "/v1/runtime/read", readBody(nil), nil); status != http.StatusOK {
+	if status, _ := postMock(t, server, "/v1/runtime/read", readBody(nil), withCaseTicket); status != http.StatusOK {
 		t.Fatalf("read rejected a contract-clean request: status %d, want 200", status)
+	}
+}
+
+// TestMockNexusEvidenceSurfaceIsPerActorAuthorized pins WHO may call the
+// frozen evidence surface, which the mock did not check at all.
+//
+// locateRuntimeEvidence and readRuntimeEvidence declare
+// security [{browserSession}, {browserAccessToken}, {caseTicket}] and
+// deliberately omit trustedServiceSecret: these are per-actor authorization
+// surfaces, not service-to-service ones. Two distinct rules follow, and a mock
+// that enforced only one would still be more permissive than production:
+//
+//  1. A request carrying NONE of the three is unauthenticated and gets 401.
+//     This is the one that mattered — AgentAtlas was sending exactly that, and
+//     because the mock answered 200 the whole e2e path looked healthy.
+//  2. A request carrying the service credential is not thereby authorized,
+//     because Basic is not an accepted scheme here. Accepting it would invite
+//     the "fix" of putting a service credential on an actor-scoped surface.
+func TestMockNexusEvidenceSurfaceIsPerActorAuthorized(t *testing.T) {
+	server, _, _ := newConformanceServer(t)
+
+	surfaces := []struct {
+		path string
+		body map[string]any
+	}{
+		{"/v1/runtime/locate", locateBody(nil)},
+		{"/v1/runtime/read", readBody(nil)},
+	}
+
+	for _, surface := range surfaces {
+		t.Run("anonymous "+surface.path, func(t *testing.T) {
+			if status, _ := postMock(t, server, surface.path, surface.body, nil); status != http.StatusUnauthorized {
+				t.Fatalf("anonymous %s: status %d, want 401", surface.path, status)
+			}
+		})
+
+		// Not 200: a service credential does not authorize this surface. The
+		// status is what a real gateway answers a caller it cannot resolve an
+		// actor for.
+		t.Run("service credential "+surface.path, func(t *testing.T) {
+			if status, _ := postMock(t, server, surface.path, surface.body, withServiceCredential); status != http.StatusUnauthorized {
+				t.Fatalf("%s accepted a service credential: status %d, want 401", surface.path, status)
+			}
+		})
+
+		// An empty ticket is not a ticket. Without this, a client bug that
+		// formatted the header but left the credential blank would pass.
+		t.Run("empty ticket "+surface.path, func(t *testing.T) {
+			blank := func(req *http.Request) { req.Header.Set("Authorization", "CaseTicket ") }
+			if status, _ := postMock(t, server, surface.path, surface.body, blank); status != http.StatusUnauthorized {
+				t.Fatalf("%s accepted an empty ticket: status %d, want 401", surface.path, status)
+			}
+		})
+
+		// Positive controls: all three declared schemes are accepted. Asserting
+		// only the rejections would pass against a handler that refused
+		// everything, including the credentials AgentAtlas actually sends.
+		for name, decorate := range map[string]func(*http.Request){
+			"case ticket":     withCaseTicket,
+			"browser token":   func(req *http.Request) { req.Header.Set("Authorization", "Bearer tok_conformance00001") },
+			"browser session": withBrowserSession,
+		} {
+			t.Run(name+" "+surface.path, func(t *testing.T) {
+				if status, _ := postMock(t, server, surface.path, surface.body, decorate); status != http.StatusOK {
+					t.Fatalf("%s rejected an accepted credential (%s): status %d, want 200", surface.path, name, status)
+				}
+			})
+		}
 	}
 }
 
@@ -232,7 +319,7 @@ func TestMockNexusEvidenceHandlersRejectWhatAgentNexusRejects(t *testing.T) {
 func TestMockNexusReadEnvelopeMatchesTheRealHandler(t *testing.T) {
 	server, _, _ := newConformanceServer(t)
 
-	status, located := postMock(t, server, "/v1/runtime/locate", locateBody(nil), nil)
+	status, located := postMock(t, server, "/v1/runtime/locate", locateBody(nil), withCaseTicket)
 	if status != http.StatusOK {
 		t.Fatalf("locate: status %d", status)
 	}
@@ -246,7 +333,7 @@ func TestMockNexusReadEnvelopeMatchesTheRealHandler(t *testing.T) {
 		t.Fatalf("evidence_ref = %q, want %q", evidenceRef, conformanceEvidenceRef)
 	}
 
-	status, read := postMock(t, server, "/v1/runtime/read", readBody(nil), nil)
+	status, read := postMock(t, server, "/v1/runtime/read", readBody(nil), withCaseTicket)
 	if status != http.StatusOK {
 		t.Fatalf("read: status %d", status)
 	}
@@ -288,7 +375,7 @@ func TestMockNexusReadEnvelopeMatchesTheRealHandler(t *testing.T) {
 func TestMockNexusReadFailsClosedOnAnUnknownHandle(t *testing.T) {
 	server, _, _ := newConformanceServer(t)
 	body := readBody(map[string]any{"evidence_ref": "evd_neverlocated0001"})
-	if status, _ := postMock(t, server, "/v1/runtime/read", body, nil); status != http.StatusForbidden {
+	if status, _ := postMock(t, server, "/v1/runtime/read", body, withCaseTicket); status != http.StatusForbidden {
 		t.Fatalf("read of an unknown handle: status %d, want 403", status)
 	}
 }

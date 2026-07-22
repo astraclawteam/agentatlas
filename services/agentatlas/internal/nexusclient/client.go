@@ -404,6 +404,34 @@ func (c *HTTPClient) bearerPost(ctx context.Context, path, accessToken, idempote
 	if len(accessToken) < 16 {
 		return fmt.Errorf("nexus %s: missing BFF credential", path)
 	}
+	return c.actorPost(ctx, path, "Bearer "+accessToken, idempotency, in, out, headers)
+}
+
+// ErrMissingCaseTicket reports a per-actor call with no Access Ticket to
+// present. The frozen evidence surface accepts only browserSession,
+// browserAccessToken or caseTicket — deliberately NOT trustedServiceSecret —
+// so a caller with no ticket has no credential it is allowed to send. Failing
+// here keeps that a named local error rather than an unauthenticated request
+// that a real AgentNexus can only answer 401.
+var ErrMissingCaseTicket = errors.New("no Access Ticket to present on a per-actor surface")
+
+// ticketPost is bearerPost's Access Ticket twin. The pinned contract defines
+// the caseTicket scheme as an apiKey in the Authorization header with the
+// exact format "CaseTicket <opaque>", so the ticket rides the same header the
+// bearer token does under a different scheme — it is NOT an X-Case-Ticket
+// header, and it never travels in the body, where it would be a caller-
+// supplied identity claim of exactly the kind the frozen contract removed.
+func (c *HTTPClient) ticketPost(ctx context.Context, path, ticketID, idempotency string, in, out any, headers map[string]string) error {
+	if strings.TrimSpace(ticketID) == "" {
+		return fmt.Errorf("nexus %s: %w", path, ErrMissingCaseTicket)
+	}
+	return c.actorPost(ctx, path, "CaseTicket "+ticketID, idempotency, in, out, headers)
+}
+
+// actorPost carries one verified per-actor credential, already formatted as an
+// Authorization value. It deliberately does NOT fall back to the service
+// credential: on these operations that credential is not an accepted scheme.
+func (c *HTTPClient) actorPost(ctx context.Context, path, authorization, idempotency string, in, out any, headers map[string]string) error {
 	body, err := json.Marshal(in)
 	if err != nil {
 		return err
@@ -413,7 +441,7 @@ func (c *HTTPClient) bearerPost(ctx context.Context, path, accessToken, idempote
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Authorization", authorization)
 	if idempotency != "" {
 		req.Header.Set("Idempotency-Key", idempotency)
 	}

@@ -313,15 +313,21 @@ func NewRegistryWithServices(e Executors) Registry {
 			if err := requireDep("evidence", e.Evidence != nil); err != nil {
 				return nil, err
 			}
-			// No ticket_id is read from node config: identity is derived from the
-			// verified service credential at ingress. A caller-supplied identity
-			// field is exactly what the frozen contract removed, so requiring one
-			// here would have kept the retired model alive in workflow config.
+			// No ticket_id is read from node config: a caller-supplied identity
+			// field is exactly what the frozen contract removed. The ticket
+			// comes from runtime-owned provenance instead. locate accepts only
+			// per-actor credentials and no service one, so a run with no
+			// verified actor has nothing it is permitted to send; it used to
+			// send none at all, which a real AgentNexus can only answer 401.
+			ticketID, err := run.actorTicket(node)
+			if err != nil {
+				return nil, err
+			}
 			pointerID, _ := resolveString(node, run, "evidence_pointer_id")
 			if pointerID == "" {
 				return nil, fmt.Errorf("node %s: evidence_pointer_id missing", node.ID)
 			}
-			located, err := e.Evidence.Locate(ctx, nexusruntime.EvidenceRequest{
+			located, err := e.Evidence.Locate(ctx, ticketID, nexusruntime.EvidenceRequest{
 				RequestID: "workflow-locate-" + node.ID,
 				Purpose:   workflowEvidencePurpose,
 				DataNeeds: []nexusruntime.DataNeed{{
@@ -352,16 +358,17 @@ func NewRegistryWithServices(e Executors) Registry {
 			if err := requireDep("evidence", e.Evidence != nil); err != nil {
 				return nil, err
 			}
-			// No ticket_id is read from node config: identity is derived from the
-			// verified service credential at ingress. A caller-supplied identity
-			// field is exactly what the frozen contract removed, so requiring one
-			// here would have kept the retired model alive in workflow config.
+			// See NodeNexusLocate: read is the same per-actor surface.
+			ticketID, err := run.actorTicket(node)
+			if err != nil {
+				return nil, err
+			}
 			evidenceRef, ok := resolveString(node, run, "evidence_ref")
 			if !ok {
 				return nil, fmt.Errorf("node %s: evidence_ref missing (locate first)", node.ID)
 			}
 			businessContextRef, _ := resolveString(node, run, "business_context_ref")
-			read, err := e.Evidence.Read(ctx, nexusruntime.EvidenceReadRequest{
+			read, err := e.Evidence.Read(ctx, ticketID, nexusruntime.EvidenceReadRequest{
 				RequestID:          "workflow-read-" + node.ID,
 				BusinessContextRef: businessContextRef,
 				EvidenceRef:        evidenceRef,

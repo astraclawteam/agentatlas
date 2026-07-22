@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	sdkworkflow "github.com/astraclawteam/agentatlas/sdk/go/workflow"
 )
@@ -26,7 +27,33 @@ type RunContext struct {
 	Input        map[string]any
 	Outputs      map[string]map[string]any
 	Dream        *VerifiedDreamContext
+	// ActorTicketID is the run's verified AgentNexus Access Ticket. Like
+	// Dream it is runtime-owned provenance: it must be set from a ticket the
+	// runtime itself verified, never from Input or node config, or it would
+	// be a forgeable identity claim.
+	//
+	// It is empty on every producer today, which is why the per-actor
+	// evidence nodes fail closed. That is the honest state of the world: no
+	// path currently starts a workflow run from a verified actor, so no run
+	// can lawfully read evidence. Populate this where such a path is built.
+	ActorTicketID string
 }
+
+// actorTicket returns the run's verified Access Ticket, or an error naming why
+// a per-actor node cannot proceed without one.
+func (r *RunContext) actorTicket(node sdkworkflow.Node) (string, error) {
+	if r == nil || strings.TrimSpace(r.ActorTicketID) == "" {
+		return "", fmt.Errorf("node %s: %w", node.ID, ErrRunHasNoVerifiedActor)
+	}
+	return r.ActorTicketID, nil
+}
+
+// ErrRunHasNoVerifiedActor reports a per-actor AgentNexus call from a workflow
+// run that carries no verified Access Ticket. The frozen locate and read
+// operations accept only per-actor credentials — browserSession,
+// browserAccessToken or caseTicket, deliberately never trustedServiceSecret —
+// so there is no credential such a run is permitted to present.
+var ErrRunHasNoVerifiedActor = errors.New("workflow run carries no verified Access Ticket for a per-actor AgentNexus surface")
 
 // VerifiedDreamContext is runtime-owned provenance. Executors must never
 // derive this authority from workflow input or node configuration.

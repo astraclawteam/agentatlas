@@ -154,7 +154,7 @@ func (d *answerDeps) handleAnswer(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, "evidence_unavailable", "AgentNexus evidence surface unavailable")
 			return
 		}
-		located, err := d.evidence.Locate(ctx, nexusruntime.EvidenceRequest{
+		located, err := d.evidence.Locate(ctx, ticket, nexusruntime.EvidenceRequest{
 			RequestID: "answer-locate-" + res.EvidencePointerID,
 			Purpose:   answerEvidencePurpose,
 			DataNeeds: []nexusruntime.DataNeed{{
@@ -177,7 +177,7 @@ func (d *answerDeps) handleAnswer(w http.ResponseWriter, r *http.Request) {
 			// simply resolves to no readable evidence for this principal.
 			continue
 		}
-		read, err := d.evidence.Read(ctx, nexusruntime.EvidenceReadRequest{
+		read, err := d.evidence.Read(ctx, ticket, nexusruntime.EvidenceReadRequest{
 			RequestID:          "answer-read-" + res.EvidencePointerID,
 			BusinessContextRef: located.BusinessContextRef,
 			EvidenceRef:        located.Evidence[0].EvidenceRef,

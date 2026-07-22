@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -276,15 +277,23 @@ func TestRetrievalSearchExcludesNonAuthoritativeFromGeneratedAnswer(t *testing.T
 	}
 }
 
+// workflowRunTicket is a verified Access Ticket standing in for one the
+// runtime resolved. It goes on RunContext, never in node config or run input.
+const workflowRunTicket = "tick_workflow_run001"
+
 // TestNexusEvidenceNodesCarryNoCallerIdentity replaces the old
 // fail-closed-without-ticket test. The nodes used to require a ticket_id in
-// workflow config; identity is now derived from the verified service
-// credential at ingress, so a caller-supplied identity field in node config
-// would be the retired model kept alive in configuration.
+// workflow CONFIG, which is the retired caller-supplied-identity model; the
+// ticket now comes from runtime-owned provenance on the RunContext instead.
+// Both halves are asserted here: no identity is read from config, and the
+// runtime-owned ticket does reach the wire.
 func TestNexusEvidenceNodesCarryNoCallerIdentity(t *testing.T) {
 	evidence := &fakeWorkflowEvidence{}
 	r := NewRegistryWithServices(Executors{Evidence: evidence})
-	run := &RunContext{EnterpriseID: "ent_1", Input: map[string]any{"evidence_pointer_id": "ev_1"}, Outputs: map[string]map[string]any{}}
+	run := &RunContext{
+		EnterpriseID: "ent_1", Input: map[string]any{"evidence_pointer_id": "ev_1"},
+		Outputs: map[string]map[string]any{}, ActorTicketID: workflowRunTicket,
+	}
 
 	// No ticket_id anywhere in config, and locate still succeeds.
 	out := execNode(t, r, sdkworkflow.Node{ID: "l", Type: sdkworkflow.NodeNexusLocate}, run)
@@ -298,6 +307,41 @@ func TestNexusEvidenceNodesCarryNoCallerIdentity(t *testing.T) {
 	if len(evidence.locates) != 1 || evidence.locates[0].DataNeeds[0].NeedID != "ev_1" {
 		t.Fatalf("locate request = %+v", evidence.locates)
 	}
+	// The per-actor surface accepts no service credential, so the run's ticket
+	// is the only thing that can authorize this call. Asserting the request
+	// body alone would pass against a node that sent no credential at all —
+	// which is the state the whole evidence path was actually in.
+	if len(evidence.tickets) != 1 || evidence.tickets[0] != workflowRunTicket {
+		t.Fatalf("locate presented tickets %q, want one %q", evidence.tickets, workflowRunTicket)
+	}
+}
+
+// TestNexusEvidenceNodesFailClosedWithoutAVerifiedActor pins the other half:
+// locate and read accept only per-actor credentials, so a run with no verified
+// Access Ticket has nothing it is permitted to present. It must fail before
+// the wire rather than send an unauthenticated request a real AgentNexus can
+// only answer 401 — the failure mode the permissive mock used to conceal.
+func TestNexusEvidenceNodesFailClosedWithoutAVerifiedActor(t *testing.T) {
+	for _, nodeType := range []sdkworkflow.NodeType{sdkworkflow.NodeNexusLocate, sdkworkflow.NodeNexusRead} {
+		t.Run(string(nodeType), func(t *testing.T) {
+			evidence := &fakeWorkflowEvidence{}
+			r := NewRegistryWithServices(Executors{Evidence: evidence})
+			// ActorTicketID deliberately unset.
+			run := &RunContext{EnterpriseID: "ent_1", Input: map[string]any{
+				"evidence_pointer_id": "ev_1", "evidence_ref": "evd_0123456789abcdef0123",
+			}, Outputs: map[string]map[string]any{}}
+
+			out, err := r[nodeType].Execute(context.Background(), sdkworkflow.Node{ID: "n", Type: nodeType}, run)
+			if !errors.Is(err, ErrRunHasNoVerifiedActor) {
+				t.Fatalf("want ErrRunHasNoVerifiedActor, got out=%v err=%v", out, err)
+			}
+			// Failing closed means the request never happened. If it reached
+			// the client, the node would be leaking an unauthenticated call.
+			if len(evidence.locates) != 0 || len(evidence.reads) != 0 {
+				t.Fatalf("an unauthorized run still called AgentNexus: locates=%v reads=%v", evidence.locates, evidence.reads)
+			}
+		})
+	}
 }
 
 // TestNexusReadNodeFailsOnADeniedDecision: a refusal is a SUCCESSFUL 200
@@ -309,7 +353,7 @@ func TestNexusReadNodeFailsOnADeniedDecision(t *testing.T) {
 	r := NewRegistryWithServices(Executors{Evidence: evidence})
 	run := &RunContext{EnterpriseID: "ent_1", Input: map[string]any{
 		"evidence_ref": "evd_0123456789abcdef0123", "business_context_ref": "wc_0123456789abcdef0123",
-	}, Outputs: map[string]map[string]any{}}
+	}, Outputs: map[string]map[string]any{}, ActorTicketID: workflowRunTicket}
 
 	out, err := r[sdkworkflow.NodeNexusRead].Execute(context.Background(), sdkworkflow.Node{ID: "rd", Type: sdkworkflow.NodeNexusRead}, run)
 	if err == nil {

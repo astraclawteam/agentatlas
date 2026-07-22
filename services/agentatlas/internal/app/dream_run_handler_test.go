@@ -367,6 +367,15 @@ func TestDreamEvidenceAccessRequiresScopeBoundGrantAndAudit(t *testing.T) {
 				if !bytes.Contains(resp.Body.Bytes(), []byte("served_from_cache")) {
 					t.Fatalf("freshness disclosure dropped: %s", resp.Body.String())
 				}
+				// Both calls must present THIS actor's verified Access Ticket.
+				// locate and read accept no service credential, so the ticket
+				// is the only thing that can authorize them — and asserting the
+				// exact value, not merely that one is non-empty, is what
+				// distinguishes forwarding the verified actor from forwarding
+				// some constant that happens to be a string.
+				if len(evd.tickets) != 2 || evd.tickets[0] != "ticket-1" || evd.tickets[1] != "ticket-1" {
+					t.Fatalf("evidence calls presented tickets %q, want both %q", evd.tickets, "ticket-1")
+				}
 			}
 			if (tc.failAudit || tc.emptyAudit) && bytes.Contains(resp.Body.Bytes(), []byte("sealed-detail")) {
 				t.Fatal("detail leaked before mandatory audit")

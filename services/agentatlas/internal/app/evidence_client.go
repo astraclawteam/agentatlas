@@ -20,9 +20,12 @@ import (
 // ApprovalClient and OrgAuthorizationClient are: a test double that only knows
 // the retired evidence surface keeps compiling while the migration proceeds
 // call site by call site.
+// Both methods take the caller's verified Access Ticket. The frozen locate and
+// read operations accept only per-actor credentials, so a handler that cannot
+// name an actor cannot make the call at all.
 type FrozenEvidenceClient interface {
-	Locate(ctx context.Context, req nexusruntime.EvidenceRequest) (nexusclient.LocateEvidenceResult, error)
-	Read(ctx context.Context, req nexusruntime.EvidenceReadRequest) (nexusclient.ReadEvidenceResult, error)
+	Locate(ctx context.Context, ticketID string, req nexusruntime.EvidenceRequest) (nexusclient.LocateEvidenceResult, error)
+	Read(ctx context.Context, ticketID string, req nexusruntime.EvidenceReadRequest) (nexusclient.ReadEvidenceResult, error)
 }
 
 // evidenceRequestTTL bounds how long a located evidence request stays valid.

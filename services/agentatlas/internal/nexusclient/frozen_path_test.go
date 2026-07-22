@@ -54,7 +54,11 @@ func TestNexusClientCallsOnlyFrozenContractPaths(t *testing.T) {
 	ctx := context.Background()
 	// Response verification failures are irrelevant here: the assertion is about
 	// which endpoint the client reaches for, not what came back.
-	_, _ = client.Locate(ctx, nexusruntime.EvidenceRequest{
+	// The Access Ticket must be non-empty for the same reason RequestAction
+	// below must be structurally valid: ticketPost refuses an empty ticket
+	// locally, so the call would never reach the wire and this surface would
+	// silently go unexercised.
+	_, _ = client.Locate(ctx, "tick_frozen_path", nexusruntime.EvidenceRequest{
 		RequestID: "req-locate-0123456789abcdef",
 		Purpose:   "answer_employee_question",
 		DataNeeds: []nexusruntime.DataNeed{{
@@ -64,7 +68,7 @@ func TestNexusClientCallsOnlyFrozenContractPaths(t *testing.T) {
 		}},
 		ExpiresAt: time.Now().Add(5 * time.Minute).UTC(),
 	})
-	_, _ = client.Read(ctx, nexusruntime.EvidenceReadRequest{
+	_, _ = client.Read(ctx, "tick_frozen_path", nexusruntime.EvidenceReadRequest{
 		RequestID:          "req-read-0123456789abcdef",
 		BusinessContextRef: "wc_0123456789abcdef0123",
 		EvidenceRef:        "evd_0123456789abcdef0123",

@@ -251,10 +251,12 @@ func (h *dreamRunHandler) evidenceAccess(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusServiceUnavailable, "evidence_unavailable", "AgentNexus evidence surface unavailable")
 		return
 	}
-	// Declare WHAT is needed and receive opaque handles. Identity comes from
-	// the verified service credential at ingress, so no ticket or enterprise
-	// identifier travels in the body, and no resource URI is put on the wire.
-	located, err := h.evidence.Locate(r.Context(), nexusruntime.EvidenceRequest{
+	// Declare WHAT is needed and receive opaque handles. WHO is asking travels
+	// as the verified Access Ticket in the Authorization header, never in the
+	// body: no ticket or enterprise identifier is a body member, and no
+	// resource URI is put on the wire. It is emphatically NOT the service
+	// credential — locate and read do not accept one.
+	located, err := h.evidence.Locate(r.Context(), actor.TicketID, nexusruntime.EvidenceRequest{
 		RequestID: "dream-evidence-" + view.RunID,
 		Purpose:   dreamEvidencePurpose,
 		DataNeeds: []nexusruntime.DataNeed{{
@@ -275,7 +277,7 @@ func (h *dreamRunHandler) evidenceAccess(w http.ResponseWriter, r *http.Request)
 	// Fields is deliberately omitted: the retired surface read a byte-capped
 	// blob, and inventing a field list here would silently narrow what the
 	// drill-down returns. Omitted means every field the policy permits.
-	read, err := h.evidence.Read(r.Context(), nexusruntime.EvidenceReadRequest{
+	read, err := h.evidence.Read(r.Context(), actor.TicketID, nexusruntime.EvidenceReadRequest{
 		RequestID:          "dream-evidence-read-" + view.RunID,
 		BusinessContextRef: located.BusinessContextRef,
 		EvidenceRef:        located.Evidence[0].EvidenceRef,

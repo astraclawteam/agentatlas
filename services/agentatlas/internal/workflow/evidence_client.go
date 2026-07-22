@@ -15,9 +15,11 @@ import (
 // imports this package; a shared declaration would invert that dependency. A
 // two-method consumer-side interface is the idiomatic Go answer to that, and it
 // keeps each package honest about exactly what it needs.
+// Both methods take the caller's verified Access Ticket; see the identically
+// shaped app.FrozenEvidenceClient for why it is required rather than optional.
 type EvidenceClient interface {
-	Locate(ctx context.Context, req nexusruntime.EvidenceRequest) (nexusclient.LocateEvidenceResult, error)
-	Read(ctx context.Context, req nexusruntime.EvidenceReadRequest) (nexusclient.ReadEvidenceResult, error)
+	Locate(ctx context.Context, ticketID string, req nexusruntime.EvidenceRequest) (nexusclient.LocateEvidenceResult, error)
+	Read(ctx context.Context, ticketID string, req nexusruntime.EvidenceReadRequest) (nexusclient.ReadEvidenceResult, error)
 }
 
 const (

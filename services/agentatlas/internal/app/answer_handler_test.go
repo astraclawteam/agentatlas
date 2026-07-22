@@ -189,11 +189,25 @@ func TestAnswerTreatsADeniedReadAsDeniedNotAsEvidence(t *testing.T) {
 func TestAnswerCompletesWithEvidenceAndAudit(t *testing.T) {
 	mock := nexusclient.NewMock()
 	mock.Tickets["tick_ok"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "u_zhang"}
-	srv, traceStore := testAnswerServer(t, mock)
+	evd := &fakeFrozenEvidence{}
+	srv, traceStore := testAnswerServerWithEvidence(t, mock, evd)
 
 	resp, out := postAnswer(t, srv.URL, "tick_ok", `{"enterprise_id":"ent_1","question":"我的工作内容是什么？"}`)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d: %v", resp.StatusCode, out)
+	}
+	// Every evidence call must present THIS request's verified Access Ticket:
+	// locate and read accept no service credential, so nothing else can
+	// authorize them. Asserting the exact value rather than mere non-emptiness
+	// is what separates forwarding the verified actor from forwarding a
+	// constant.
+	if len(evd.tickets) == 0 {
+		t.Fatal("the answer path made no evidence call, so this proves nothing about ticket forwarding")
+	}
+	for i, presented := range evd.tickets {
+		if presented != "tick_ok" {
+			t.Fatalf("evidence call %d presented ticket %q, want %q", i, presented, "tick_ok")
+		}
 	}
 	if out["status"] != "completed" || out["trace_id"] == "" {
 		t.Fatalf("response: %v", out)
