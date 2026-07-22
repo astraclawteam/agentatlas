@@ -88,6 +88,16 @@ func run() error {
 	defer pool.Close()
 	queries := db.New(pool)
 
+	// WorkCase orchestration. Composed here (the ONE composition point) before
+	// any consumer starts, so a deployment that asked for governed execution
+	// fails at startup rather than after the async planes are already running.
+	// Task C2 drives Advance from the returned Orchestrator; C1 only composes it.
+	workCases, err := composeWorkCaseOrchestrator(cfg, pool, logger)
+	if err != nil {
+		return workCaseStartupError(err)
+	}
+	_ = workCases // driven by task C2; see composeWorkCaseOrchestrator.
+
 	objects, err := storage.NewObjectStore(cfg.ObjectStorage, tlsLinks.objectStorage)
 	if err != nil {
 		return err

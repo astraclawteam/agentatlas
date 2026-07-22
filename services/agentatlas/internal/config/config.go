@@ -52,7 +52,15 @@ type AgentNexus struct {
 	// AgentNexus transmits them there; neither product decides. An empty
 	// value is a deployment gap, not a default, so the governance paths
 	// fail closed rather than approving locally.
-	ApprovalAuthority                       string `yaml:"approval_authority"`
+	ApprovalAuthority string `yaml:"approval_authority"`
+	// ActionSigningKeyID / ActionSigningKeyFile locate AgentNexus's ed25519
+	// receipt-signing PUBLIC key. Every governed Action receipt is verified
+	// against it fail-closed, so an unset key is not a relaxed mode: it is a
+	// deployment in which no receipt can ever complete a step. Empty by
+	// default, which keeps the WorkCase orchestrator uncomposed and named as
+	// such at startup rather than silently inert.
+	ActionSigningKeyID                      string `yaml:"action_signing_key_id"`
+	ActionSigningKeyFile                    string `yaml:"action_signing_key_file"`
 	BrowserClientID                         string `yaml:"browser_client_id"`
 	BrowserClientSecretFile                 string `yaml:"browser_client_secret_file"`
 	BrowserSessionEncryptionKeyID           string `yaml:"browser_session_encryption_key_id"`
@@ -241,6 +249,8 @@ func (c *Config) applyEnv() {
 	set(&c.AgentNexus.ClientID, "ATLAS_NEXUS_CLIENT_ID")
 	set(&c.AgentNexus.SecretFile, "ATLAS_NEXUS_SERVICE_SECRET_FILE")
 	set(&c.AgentNexus.ApprovalAuthority, "ATLAS_APPROVAL_AUTHORITY")
+	set(&c.AgentNexus.ActionSigningKeyID, "ATLAS_NEXUS_ACTION_SIGNING_KEY_ID")
+	set(&c.AgentNexus.ActionSigningKeyFile, "ATLAS_NEXUS_ACTION_SIGNING_KEY_FILE")
 	set(&c.AgentNexus.BrowserClientID, "ATLAS_NEXUS_BROWSER_CLIENT_ID")
 	set(&c.AgentNexus.BrowserClientSecretFile, "ATLAS_NEXUS_BROWSER_CLIENT_SECRET_FILE")
 	set(&c.AgentNexus.BrowserSessionEncryptionKeyID, "ATLAS_BROWSER_SESSION_ENCRYPTION_KEY_ID")
