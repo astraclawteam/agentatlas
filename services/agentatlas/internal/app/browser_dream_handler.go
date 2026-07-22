@@ -988,7 +988,26 @@ func (h *browserDreamHandler) reviewPolicy(w http.ResponseWriter, r *http.Reques
 		// The authority already approved in its own system; applying it here
 		// keeps the decision in one place instead of asking a human to click
 		// approve a second time.
-		decided, err := h.operations.Decide(r.Context(), session.EnterpriseID, current.ID, reviewer, audit, key, "approve", input.Revision)
+		// Decide needs an operation row of kind 'decision' owned by the deciding
+		// actor -- the authority, not the requester who refreshed. `key` names
+		// this REVIEW operation, so passing it could never commit against real
+		// Postgres. Same defect as the service-credential path.
+		decisionOp, err := h.operations.BeginOperation(r.Context(), session.EnterpriseID, key+":decision", "decision", current.ID, reviewer,
+			operationHash(map[string]any{"revision": input.Revision, "decision": "approve", "authority": reviewer}))
+		if err != nil {
+			writeError(w, http.StatusConflict, "idempotency_conflict", err.Error())
+			return
+		}
+		decisionAudit := audit
+		if decisionOp.Row.AuditRefID.Valid {
+			decisionAudit = decisionOp.Row.AuditRefID.String
+		} else if recorded, recErr := h.operations.RecordOperationAudit(r.Context(), session.EnterpriseID, decisionOp.Row.OperationKey, audit); recErr == nil {
+			decisionAudit = recorded.AuditRefID.String
+		} else {
+			writeError(w, http.StatusInternalServerError, "operation_receipt_failed", recErr.Error())
+			return
+		}
+		decided, err := h.operations.Decide(r.Context(), session.EnterpriseID, current.ID, reviewer, decisionAudit, decisionOp.Row.OperationKey, "approve", input.Revision)
 		if err != nil {
 			writeError(w, http.StatusConflict, "decision_failed", err.Error())
 			return

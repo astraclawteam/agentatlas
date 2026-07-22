@@ -340,7 +340,18 @@ func (f *fakePolicyStore) DecideDreamPolicyIfRevision(_ context.Context, a db.De
 	p, ok := f.policies[a.TargetID]
 	actor := a.ActorUserID
 	validActor := (p.ReviewMode == "upward_review" && p.ReviewerUserID.Valid && p.ReviewerUserID.String == actor && p.RequesterUserID != actor) || (p.RiskLevel == "low" && p.ReviewMode == "single_confirmation" && p.RequesterUserID == actor)
-	if !ok || p.EnterpriseID != a.TargetEnterpriseID || p.Revision != a.ExpectedRevision || p.ReviewState != "pending" || !validActor {
+	// The real query (db/queries/dream.sql, DecideDreamPolicyIfRevision) opens
+	// with a CTE that selects the operation row FOR UPDATE and requires
+	// operation_kind='decision', the same actor, status='pending' and a
+	// matching audit_ref_id. This fake tracked operations but never consulted
+	// them here, so a caller could decide with any key at all -- including a
+	// review operation's -- and still be green. That is why the refresh path
+	// looked correct while it could not commit against real Postgres.
+	op, opFound := f.operations[a.TargetEnterpriseID+"\x00"+a.OperationKey]
+	validOp := opFound && op.OperationKind == "decision" && op.PolicyID == a.TargetID &&
+		op.ActorUserID == actor && op.Status == "pending" &&
+		op.AuditRefID.String == a.AuditRefID.String
+	if !ok || p.EnterpriseID != a.TargetEnterpriseID || p.Revision != a.ExpectedRevision || p.ReviewState != "pending" || !validActor || !validOp {
 		return db.DecideDreamPolicyIfRevisionRow{}, pgx.ErrNoRows
 	}
 	p.Decision = a.Decision

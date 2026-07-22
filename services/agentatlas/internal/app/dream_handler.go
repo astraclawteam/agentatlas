@@ -58,6 +58,32 @@ func (h *dreamPolicyHandler) beginOperation(w http.ResponseWriter, r *http.Reque
 	}
 	return op, true
 }
+
+// beginOperationAs begins an operation owned by someone other than the caller.
+// The refresh path needs it: the authority is the deciding actor, not the
+// requester who happened to refresh, and Decide matches the operation row's
+// actor against the actor it is given. The key is derived from the caller's
+// key so a repeated refresh stays idempotent instead of opening a second
+// decision.
+func (h *dreamPolicyHandler) beginOperationAs(w http.ResponseWriter, r *http.Request, kind, policyID, actorUserID string, payload any) (dream.Operation, bool) {
+	actor, _ := actorFrom(r.Context())
+	key, err := operationKey(r)
+	if err != nil {
+		writeError(w, 400, "bad_request", err.Error())
+		return dream.Operation{}, false
+	}
+	op, err := h.deps.Dreams.BeginOperation(r.Context(), actor.Ticket.EnterpriseID, key+":decision", kind, policyID, actorUserID, operationHash(payload))
+	if err != nil {
+		writeError(w, 409, "idempotency_conflict", err.Error())
+		return dream.Operation{}, false
+	}
+	if op.Replay != nil {
+		writeJSON(w, http.StatusOK, *op.Replay)
+		return op, false
+	}
+	return op, true
+}
+
 func (h *dreamPolicyHandler) operationAudit(w http.ResponseWriter, r *http.Request, op dream.Operation, action nexus.AuditAction, id, phase string, details map[string]any) (string, bool) {
 	if op.Row.AuditRefID.Valid {
 		return op.Row.AuditRefID.String, true
@@ -402,7 +428,22 @@ func (h *dreamPolicyHandler) review(w http.ResponseWriter, r *http.Request) {
 		// rather than waiting for someone to click approve a second time keeps
 		// the decision in ONE place: a second click would be duplicate work, and
 		// a decision that exists in two systems can disagree with itself.
-		decided, err := h.deps.Dreams.Decide(r.Context(), actor.Ticket.EnterpriseID, id, reviewer, audit, op.Row.OperationKey, "approve", req.Revision)
+		// Decide requires an operation row of kind 'decision' owned by the
+		// deciding actor -- the SQL selects it FOR UPDATE and matches on kind,
+		// actor, pending status and audit ref. This is a REVIEW operation, so
+		// passing its key could never commit; it only appeared to work because
+		// the fake store did not consult the operation row at all.
+		decisionOp, proceed := h.beginOperationAs(w, r, "decision", id, reviewer, map[string]any{
+			"revision": req.Revision, "decision": "approve", "authority": reviewer,
+		})
+		if !proceed {
+			return
+		}
+		decisionAudit, ok := h.operationAudit(w, r, decisionOp, nexus.AuditDreamPolicyCreated, id, "decision", map[string]any{"revision": req.Revision, "decision": "approve", "authority": reviewer})
+		if !ok {
+			return
+		}
+		decided, err := h.deps.Dreams.Decide(r.Context(), actor.Ticket.EnterpriseID, id, reviewer, decisionAudit, decisionOp.Row.OperationKey, "approve", req.Revision)
 		if err != nil {
 			writeError(w, 409, "decision_failed", err.Error())
 			return
