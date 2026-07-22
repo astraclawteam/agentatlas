@@ -136,7 +136,18 @@ func TestNexusClientCallsOnlyFrozenContractPaths(t *testing.T) {
 	// migrated but AgentAtlas's ActionRequest still declares actor and
 	// org_scope, which AgentNexus re-derives from the verified credential.
 	notYetMigrated := map[string]bool{
-		"/v1/tickets/verify": true, // -> StepGrantVerifyRequest
+		// /v1/tickets/verify has NO migration target, and this entry is not a
+		// pending rename. The annotation here used to read "-> StepGrantVerifyRequest",
+		// which reads as "send that shape instead and the entry comes off the
+		// list". It does not: that path is operationId verifyStepGrant, which
+		// verifies a Step Grant against one exact operation and answers with no
+		// actor at all, while this call is ticketGuard asking who the actor is.
+		// Sending a well-formed StepGrantVerifyRequest would earn a response
+		// that still cannot answer the question. The entry can only be removed
+		// once ticketGuard's identity round trip is resolved at the contract
+		// level — see TestFrozenContractHasNoAccessTicketVerification and
+		// TestAccessTicketVerificationHasNoFrozenCounterpart.
+		"/v1/tickets/verify": true,
 		"/v1/runtime/act":    true, // -> frozen ActionRequest (business_context_ref, typed parameters, signed risk_decision)
 	}
 	var offending []string

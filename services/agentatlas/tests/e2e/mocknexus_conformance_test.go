@@ -568,3 +568,106 @@ func TestMockNexusApprovalTransmissionSurface(t *testing.T) {
 		}
 	})
 }
+
+// TestMockNexusTicketVerifyServesVerifyStepGrant pins POST /v1/tickets/verify
+// to the operation the frozen snapshot actually declares there.
+//
+// This is the surface an earlier audit half-saw. It recorded that the mock
+// served "the retired Case-Ticket shape" while the snapshot has verifyStepGrant,
+// filed it as mock infidelity, and stopped — so the mock was reshaped toward
+// what AgentAtlas's client sends and the client itself was never opened. The
+// mismatch that mattered survived behind a mock that now agreed with it.
+//
+// So this test deliberately does NOT describe the mock in terms of what
+// AgentAtlas sends. It describes verifyStepGrant, and AgentAtlas's VerifyTicket
+// fails against it — see
+// nexusclient.TestAccessTicketVerificationHasNoFrozenCounterpart, which is red
+// on purpose. If this file is ever edited to make the deployed path green
+// again, that is the blind spot reopening.
+func TestMockNexusTicketVerifyServesVerifyStepGrant(t *testing.T) {
+	server, _, _ := newConformanceServer(t)
+	const path = "/v1/tickets/verify"
+
+	// The frozen body: additionalProperties:false, required grant_ref +
+	// capability + parameter_hash, each in its declared grammar.
+	frozenBody := map[string]any{
+		"grant_ref":      "grant_conformance00001",
+		"capability":     "workflow.publish",
+		"parameter_hash": conformanceHash,
+	}
+	// What AgentAtlas's HTTPClient.VerifyTicket puts on the wire today.
+	retiredBody := map[string]any{"ticket_id": conformanceCaseTicket}
+
+	// --- credential half -------------------------------------------------
+	// verifyStepGrant declares browserSession, browserAccessToken and
+	// caseTicket, and NOT trustedServiceSecret. Both rejections are asserted:
+	// checking only that the service credential is refused is equally
+	// satisfied by a handler that authenticates nobody, and checking only the
+	// anonymous case is equally satisfied by one that accepts anything named.
+	t.Run("anonymous", func(t *testing.T) {
+		if status, _ := postMock(t, server, path, frozenBody, nil); status != http.StatusUnauthorized {
+			t.Fatalf("anonymous %s: status %d, want 401", path, status)
+		}
+	})
+	t.Run("service credential", func(t *testing.T) {
+		// This is the credential AgentAtlas presents today: doPost's allowlist
+		// attaches Basic auth to this path.
+		if status, _ := postMock(t, server, path, frozenBody, withServiceCredential); status != http.StatusUnauthorized {
+			t.Fatalf("%s accepted a service credential: status %d, want 401", path, status)
+		}
+	})
+
+	// --- body half -------------------------------------------------------
+	// Isolated from the credential: every request below carries an accepted
+	// Access Ticket, so a rejection can only be about the body.
+	t.Run("retired Case-Ticket body", func(t *testing.T) {
+		if status, _ := postMock(t, server, path, retiredBody, withCaseTicket); status != http.StatusBadRequest {
+			t.Fatalf("%s accepted a {\"ticket_id\":...} body: status %d, want 400", path, status)
+		}
+	})
+	t.Run("frozen body with an extra member", func(t *testing.T) {
+		extended := map[string]any{"ticket_id": conformanceCaseTicket}
+		for key, value := range frozenBody {
+			extended[key] = value
+		}
+		if status, _ := postMock(t, server, path, extended, withCaseTicket); status != http.StatusBadRequest {
+			t.Fatalf("%s accepted an unknown member alongside the frozen ones: status %d, want 400 "+
+				"(StepGrantVerifyRequest is additionalProperties:false)", path, status)
+		}
+	})
+	t.Run("malformed handle grammar", func(t *testing.T) {
+		malformed := map[string]any{
+			"grant_ref":      "tick_not_a_grant_handle",
+			"capability":     "workflow.publish",
+			"parameter_hash": conformanceHash,
+		}
+		if status, _ := postMock(t, server, path, malformed, withCaseTicket); status != http.StatusBadRequest {
+			t.Fatalf("%s accepted a grant_ref outside ^grant_[A-Za-z0-9_-]{16,128}$: status %d, want 400", path, status)
+		}
+	})
+
+	// --- positive control ------------------------------------------------
+	// Without this, every assertion above would pass against a handler that
+	// refused everything, and the mock would be useless rather than faithful.
+	t.Run("accepted credential and frozen body", func(t *testing.T) {
+		status, body := postMock(t, server, path, frozenBody, withCaseTicket)
+		if status != http.StatusOK {
+			t.Fatalf("%s rejected an accepted credential with the frozen body: status %d, want 200", path, status)
+		}
+		if valid, _ := body["valid"].(bool); !valid {
+			t.Fatalf("%s: valid=%v, want true: %v", path, body["valid"], body)
+		}
+		// And the point of the whole exercise: success still carries no actor.
+		// ticketGuard needs enterprise_id/actor_user_id/scopes; a Step Grant
+		// verification answers with its own binding and nothing else, so no
+		// amount of fixing the client turns this into the identity ticketGuard
+		// is asking for.
+		for _, member := range []string{"enterprise_id", "actor_user_id", "scopes"} {
+			if _, present := body[member]; present {
+				t.Fatalf("%s answered with %q; the mock is inventing an actor identity that "+
+					"StepGrantVerifyResponse does not declare, which is exactly the infidelity that hid this defect: %v",
+					path, member, body)
+			}
+		}
+	})
+}

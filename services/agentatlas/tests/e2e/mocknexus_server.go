@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +17,14 @@ import (
 	"github.com/astraclawteam/agentatlas/sdk/go/nexus"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/nexusclient"
 	nexusruntime "github.com/astraclawteam/agentnexus/sdk/go/runtime"
+)
+
+// The frozen handle grammars StepGrantVerifyRequest composes, from the pinned
+// snapshot's GrantRef/Capability/Sha256Ref schemas.
+var (
+	mockGrantRef      = regexp.MustCompile(`^grant_[A-Za-z0-9_-]{16,128}$`)
+	mockCapability    = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+	mockParameterHash = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
 
 // startMockNexusServer serves the frozen AgentNexus gateway-runtime contract
@@ -47,14 +56,48 @@ func newMockNexusHandler(backing *nexusclient.Mock, events []nexus.OrgEvent) htt
 	mux := http.NewServeMux()
 	approvals := newMockApprovalPlane()
 
+	// POST /v1/tickets/verify is operationId verifyStepGrant.
+	//
+	// This handler used to serve the retired Case-Ticket shape: it decoded a
+	// {"ticket_id":...} body, checked no credential whatsoever, and answered
+	// with an enterprise_id/actor_user_id/scopes identity that appears nowhere
+	// in the frozen contract. An audit did notice the divergence, but filed it
+	// as mock infidelity alone — so the mock was corrected toward what
+	// AgentAtlas's client happened to send, the client was never checked, and
+	// the real mismatch survived with a matching mock in front of it.
+	//
+	// It now serves the frozen operation: the three declared schemes and
+	// nothing else, then a strict StepGrantVerifyRequest, then a
+	// StepGrantVerifyResponse that contains no actor. AgentAtlas's
+	// VerifyTicket cannot get through it — the same way it cannot get through
+	// a real AgentNexus. Making this handler permissive again to turn the
+	// real-stack path green would restore exactly the blind spot that hid the
+	// defect; the credential-derived identity ticketGuard needs has to come
+	// from a contract decision, not from a lenient double.
 	mux.HandleFunc("POST /v1/tickets/verify", func(w http.ResponseWriter, r *http.Request) {
-		var req nexus.VerifyTicketRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		resp, err := backing.VerifyTicket(r.Context(), req)
-		if err != nil {
-			resp = nexus.VerifyTicketResponse{Valid: false}
+		if !mockActorCredentialPresent(r) {
+			writeMockError(w, http.StatusUnauthorized, "invalid_credential")
+			return
 		}
-		writeJSONMock(w, http.StatusOK, resp)
+		var request struct {
+			GrantRef      string `json:"grant_ref"`
+			Capability    string `json:"capability"`
+			ParameterHash string `json:"parameter_hash"`
+		}
+		decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<16))
+		decoder.DisallowUnknownFields() // additionalProperties: false
+		if err := decoder.Decode(&request); err != nil ||
+			!mockGrantRef.MatchString(request.GrantRef) ||
+			!mockCapability.MatchString(request.Capability) ||
+			!mockParameterHash.MatchString(request.ParameterHash) {
+			writeMockError(w, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		writeJSONMock(w, http.StatusOK, map[string]any{
+			"valid": true, "grant_ref": request.GrantRef,
+			"capability": request.Capability, "parameter_hash": request.ParameterHash,
+			"one_use": true, "expires_at": time.Now().Add(time.Minute).UTC().Format(time.RFC3339),
+		})
 	})
 
 	// The frozen evidence surface. Both handlers decode through the SDK's

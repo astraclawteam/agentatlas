@@ -23,22 +23,22 @@ func contractServer(t *testing.T, serviceSecret string) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("POST /v1/tickets/verify", func(w http.ResponseWriter, r *http.Request) {
-		clientID, secret, ok := r.BasicAuth()
-		if !ok || clientID != "agentatlas" || secret != serviceSecret {
-			t.Errorf("ticket verify Basic credentials client=%q ok=%t", clientID, ok)
-		}
-		var req nexus.VerifyTicketRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		resp := nexus.VerifyTicketResponse{Valid: false}
-		if req.TicketID == "tick_ok" {
-			resp = nexus.VerifyTicketResponse{
-				Valid: true, EnterpriseID: "ent_1", ActorUserID: "u_zhang",
-				Scopes: []string{"space.read"}, OrgVersion: 7, OrgUnitIDs: []string{"team"}, ExpiresAt: time.Now().Add(time.Hour),
-			}
-		}
-		_ = json.NewEncoder(w).Encode(resp)
-	})
+	// POST /v1/tickets/verify is operationId verifyStepGrant, and this handler
+	// serves exactly that — see serveFrozenStepGrantVerify.
+	//
+	// It used to serve the retired Case-Ticket shape instead: it REQUIRED the
+	// Basic service credential (which the frozen operation does not declare)
+	// and decoded a {"ticket_id":...} body (which StepGrantVerifyRequest,
+	// additionalProperties:false, refuses), then answered with a fabricated
+	// enterprise_id/actor_user_id/scopes that appear nowhere in the contract.
+	// Both of the client's defects were therefore asserted to be correct
+	// behaviour by the very test meant to catch them, which is why the suite
+	// was green with the defect present.
+	//
+	// HTTPClient.VerifyTicket cannot pass through this handler. That is the
+	// point, and it is covered deliberately in
+	// TestAccessTicketVerificationHasNoFrozenCounterpart rather than here.
+	mux.HandleFunc("POST /v1/tickets/verify", serveFrozenStepGrantVerify)
 
 	// The frozen evidence surface. Denial is keyed by the DECLARED NEED now:
 	// there is no ticket in the body to key it by.
@@ -204,14 +204,13 @@ func TestHTTPClientContract(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	verify, err := c.VerifyTicket(ctx, nexus.VerifyTicketRequest{TicketID: "tick_ok"})
-	if err != nil || !verify.Valid || verify.EnterpriseID != "ent_1" {
-		t.Fatalf("verify: %+v err=%v", verify, err)
-	}
-	invalid, err := c.VerifyTicket(ctx, nexus.VerifyTicketRequest{TicketID: "nope"})
-	if err != nil || invalid.Valid {
-		t.Fatalf("invalid ticket must be valid=false without transport error: %+v err=%v", invalid, err)
-	}
+	// VerifyTicket is deliberately NOT exercised here. It used to be, against a
+	// handler shaped like the retired Case-Ticket contract, and asserting that
+	// it returned enterprise_id "ent_1" was the assertion holding both of its
+	// defects in place. The frozen operation at that path is verifyStepGrant
+	// and cannot answer what ticketGuard asks of it, so the call is covered by
+	// TestAccessTicketVerificationHasNoFrozenCounterpart — which fails on
+	// purpose — instead of being made to look healthy here.
 
 	sample := func(ref string) nexusruntime.EvidenceReadRequest {
 		return nexusruntime.EvidenceReadRequest{
