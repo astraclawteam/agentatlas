@@ -28,12 +28,32 @@ type LocateEvidenceResult struct {
 	Evidence           []nexusruntime.EvidenceHandle `json:"evidence"`
 }
 
+// Frozen PolicyDecision members of a read. AgentNexus emits allow and deny
+// today; the other two are declared by the frozen enum and are matched here so
+// a server that starts emitting them is understood rather than misread.
+const (
+	ReadAllow               = "allow"
+	ReadDeny                = "deny"
+	ReadNeedExternalReceipt = "need_external_receipt"
+	ReadAllowWithMasking    = "allow_with_masking"
+)
+
 // ReadEvidenceResult is the decoded EvidenceReadResponse. The freshness trio
 // (SourceVersion / AsOf / ServedFromCache) is always present on an allowed
 // read: a cached answer must never masquerade as a live one, so AgentAtlas
 // carries the disclosure through to its Answer Trace rather than dropping it.
 type ReadEvidenceResult struct {
-	Decision        string         `json:"decision"`
+	Decision string `json:"decision"`
+	// GrantRef is declared optional by the frozen EvidenceReadResponse schema
+	// and is NEVER populated by AgentNexus: the read handler answers with the
+	// decision, the data and the freshness trio, because a read is served from
+	// evidence authorized at locate time. A Step Grant is a separate audited
+	// object minted by POST /v1/step-grants.
+	//
+	// Do not gate anything on it. Two handlers did, and because a mock filled
+	// it in they were dead against a real AgentNexus without anyone noticing.
+	// Decision is the member that carries the authorization verdict, and the
+	// schema marks it required; use Allowed.
 	GrantRef        string         `json:"grant_ref,omitempty"`
 	Data            map[string]any `json:"data,omitempty"`
 	ReceiptRef      string         `json:"receipt_ref,omitempty"`
@@ -44,6 +64,16 @@ type ReadEvidenceResult struct {
 	// Results are never silently truncated, so an ignored continuation is a
 	// caller bug, not a complete result.
 	ContinuationRef string `json:"continuation_ref,omitempty"`
+}
+
+// Allowed reports whether the decision permits the caller to use the read.
+//
+// A denied read is NOT a transport error: AgentNexus answers 200 with
+// {"decision":"deny"} and no data, so a caller that only checks err treats a
+// refusal as an empty success and can go on to render, audit or feed a model
+// with nothing. Every consumer of a read must gate on this.
+func (r ReadEvidenceResult) Allowed() bool {
+	return r.Decision == ReadAllow || r.Decision == ReadAllowWithMasking
 }
 
 // Locate resolves declared business-semantic data needs to opaque evidence

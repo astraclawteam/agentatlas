@@ -14,7 +14,7 @@ paths:
     post:
       operationId: authorizeGovernanceOperation
       summary: Authorize a browser Bearer or original CaseTicket-bound governance operation.
-      security: [{agentAtlasServiceSecret: []}, {browserAccessToken: []}]
+      security: [{trustedServiceSecret: []}, {browserAccessToken: []}]
       requestBody:
         required: true
         content: {application/json: {schema: {$ref: '#/components/schemas/GovernanceAuthorizationRequest'}}}
@@ -29,7 +29,7 @@ paths:
     post:
       operationId: transmitApprovalPlan
       summary: Transmit a caller-authored approval plan to the approval authority.
-      security: [{agentAtlasServiceSecret: []}, {browserAccessToken: []}]
+      security: [{trustedServiceSecret: []}, {browserAccessToken: []}]
       requestBody:
         required: true
         content: {application/json: {schema: {$ref: '#/components/schemas/ApprovalRequest'}}}
@@ -39,7 +39,7 @@ paths:
     get:
       operationId: getApprovalTransmission
       summary: Read the transmission status of one approval plan.
-      security: [{agentAtlasServiceSecret: []}, {browserAccessToken: []}]
+      security: [{trustedServiceSecret: []}, {browserAccessToken: []}]
       parameters:
         - {name: plan_ref, in: path, required: true, schema: {type: string}}
       responses:
@@ -49,7 +49,7 @@ paths:
     post:
       operationId: verifyTicket
       summary: Verify an access ticket and resolve its actor context
-      security: [{agentAtlasServiceSecret: []}]
+      security: [{trustedServiceSecret: []}]
       requestBody:
         required: true
         content:
@@ -148,8 +148,8 @@ paths:
   /v1/audit/evidence:
     post:
       operationId: appendAuditEvidence
-      summary: Record a trusted AgentAtlas service request in the audit chain.
-      security: [{agentAtlasServiceSecret: []}, {browserAccessToken: []}]
+      summary: Record a trusted first-party service request in the audit chain.
+      security: [{trustedServiceSecret: []}, {browserAccessToken: []}]
       parameters:
         - {name: Idempotency-Key, in: header, required: false, schema: {type: string, minLength: 16, maxLength: 128}, description: Stable operation-derived key; retries with the same canonical payload return the same audit_ref_id.}
       requestBody:
@@ -167,7 +167,7 @@ paths:
         '401': {description: Invalid service credentials or Case Ticket.}
         '409': {description: Idempotency-Key was already used with a different canonical audit payload.}
         '503': {description: Ticket or audit persistence unavailable.}
-  /v1/actions/request:
+  /v1/runtime/act:
     post:
       operationId: requestAction
       summary: Submit a governed ActionRequest and receive an ActionGrant (GA Task 0D).
@@ -179,7 +179,7 @@ paths:
         returned ActionGrant (sdk/go/nexus.VerifyActionGrant: exact
         WorkCase/actor/org/capability/parameter-hash binding, one-use,
         non-expiry, replay) before treating it as success.
-      security: [{agentAtlasServiceSecret: []}]
+      security: [{trustedServiceSecret: []}]
       requestBody:
         required: true
         content: {application/json: {schema: {$ref: '#/components/schemas/ActionRequest'}}}
@@ -188,46 +188,35 @@ paths:
         '400': {description: Invalid ActionRequest (malformed parameter_hash, missing idempotency key, detached postcondition/verification-need binding, missing expiry).}
         '401': {description: Invalid service credentials.}
         '403': {description: Denied by AgentNexus identity, org, approval, replay or capability enforcement.}
-  /v1/actions/receipt:
-    post:
+  /v1/runtime/receipts/{receipt_ref}:
+    get:
       operationId: fetchActionReceipt
-      summary: Fetch the signed ActionReceipt for a previously requested Action (GA Task 0D).
+      summary: Fetch the signed ActionReceipt under one opaque receipt handle (GA Task 0D).
       description: >
         ActionReceipt proves technical execution ONLY; it never asserts that
-        a WorkCase Goal or business Outcome was achieved. The AgentAtlas
-        client rechecks the signature and Action/parameter-hash binding
-        (sdk/go/nexus.VerifyActionReceipt) before treating a fetched receipt
-        as success.
-      security: [{agentAtlasServiceSecret: []}]
-      requestBody:
-        required: true
-        content: {application/json: {schema: {$ref: '#/components/schemas/ActionReceiptFetchRequest'}}}
+        a WorkCase Goal or business Outcome was achieved. The surface is
+        addressed by the opaque ReceiptRef AgentNexus mints and returns on the
+        Action from /v1/runtime/act — there is no by-action-id lookup. The
+        AgentAtlas client rechecks the signature and Action/parameter-hash
+        binding (sdk/go/nexus.VerifyActionReceipt) before treating a fetched
+        receipt as success.
+      security: [{trustedServiceSecret: []}]
+      parameters:
+        - {name: receipt_ref, in: path, required: true, schema: {type: string}}
       responses:
         '200': {description: Signed ActionReceipt., content: {application/json: {schema: {$ref: '#/components/schemas/ActionReceipt'}}}}
         '401': {description: Invalid service credentials.}
-        '404': {description: Unknown action_id, or no receipt issued yet.}
-  /v1/actions/observation:
-    post:
-      operationId: fetchObservationReceipt
-      summary: Fetch the signed ObservationReceipt confirming one VerificationNeed for a previously requested Action (GA Task 0D).
-      description: >
-        ObservationReceipt proves one bounded, source-authoritative
-        post-action observation; it never asserts that a WorkCase Goal or
-        business Outcome was achieved. NOT part of AgentNexus's frozen v1
-        contract candidate (agentnexus@73ed5a7e83d0804673e3191cf79cc22699f41b3f)
-        — implemented against the cross-product agreed spec pending
-        AgentNexus's own freeze; see evidence/2026.2-lts/ga-task-0d/notes.md.
-        The AgentAtlas client rejects a receipt detached from its Action or
-        PostconditionSpec (sdk/go/nexus.VerifyObservationReceipt) before
-        treating a fetched observation as success.
-      security: [{agentAtlasServiceSecret: []}]
-      requestBody:
-        required: true
-        content: {application/json: {schema: {$ref: '#/components/schemas/ObservationReceiptFetchRequest'}}}
-      responses:
-        '200': {description: Signed ObservationReceipt., content: {application/json: {schema: {$ref: '#/components/schemas/ObservationReceipt'}}}}
-        '401': {description: Invalid service credentials.}
-        '404': {description: Unknown action_id/verification_need_id, or no observation issued yet.}
+        '404': {description: No receipt exists under this handle for the verified principal.}
+  # NO observation-fetch path is declared, deliberately. ObservationReceipt is
+  # AgentAtlas's implementation of the cross-product agreed spec (see
+  # evidence/2026.2-lts/ga-task-0d/notes.md) and AgentNexus's frozen contract
+  # has no observation-read surface: its only receipt surface is the GET above,
+  # which returns an ActionReceipt. The retired POST /v1/actions/observation was
+  # never an AgentNexus endpoint and could only 404, so
+  # nexusclient.FetchObservationReceipt is dormant (ErrNoFrozenSurface) until
+  # AgentNexus freezes one. The ObservationReceipt schema below stays: it is the
+  # shape sdk/go/nexus.VerifyObservationReceipt validates wherever an
+  # ObservationReceipt is obtained.
   /v1/org-events:
     get:
       operationId: subscribeOrgEvents
@@ -247,14 +236,14 @@ paths:
               schema: { type: string }
 components:
   securitySchemes:
-    agentAtlasServiceSecret:
+    trustedServiceSecret:
       type: http
       scheme: basic
-      description: AgentAtlas service credentials using client_id=agentatlas and its confidential client secret.
+      description: Confidential client credentials of a trusted first-party service; the tenant and service identity are derived from the verified credentials, never from the request body.
     browserAccessToken:
       type: http
       scheme: bearer
-      description: Opaque AgentAtlas BFF token bound to client, audience, enterprise, user, and browser session.
+      description: Opaque browser BFF token bound to client, audience, enterprise, user, and browser session.
   schemas:
     ApprovalRequest:
       type: object
@@ -333,24 +322,19 @@ components:
         - answer_trace_created
         - sensitive_artifact_parsed
         - visibility_rule_changed
-        - governance_change_decided
     AuditEvidenceRequest:
       type: object
       additionalProperties: false
-      required: [enterprise_id, action, resource_type, resource_id]
+      description: Trusted first-party service audit append; the tenant and service identity come from the verified service credentials, never from this body.
+      required: [business_context_ref, action, resource_type, resource_id]
       properties:
-        ticket_id: {type: string, minLength: 0, maxLength: 4096, description: Required and verified for AgentAtlas service Basic authentication; omit or send an empty string for a browserAccessToken actor. A non-empty Bearer ticket must resolve to the same enterprise user.}
-        enterprise_id: {type: string, minLength: 1, maxLength: 128}
+        request_id: {type: string, maxLength: 128}
+        business_context_ref: {type: string, minLength: 1, maxLength: 4096, description: Opaque work-case / Case Ticket reference binding the audit lineage; accepts both legacy Case Ticket strings and wc_ work-case handles until the runtime cutover retires the legacy bridge.}
         action: {$ref: '#/components/schemas/AuditEvidenceAction'}
         resource_type: {type: string, minLength: 1, maxLength: 64}
         resource_id: {type: string, minLength: 1, maxLength: 128, description: Preallocated resource identifier bound into the audit lineage.}
         trace_id: {type: string, maxLength: 128}
         details: {type: object, maxProperties: 100, additionalProperties: true, description: Keys are at most 128 Unicode code points; string values at most 1024; arrays/maps at most 100 entries; nesting depth at most 4.}
-        org_version: {type: integer, minimum: 1, description: Required when binding a scoped CaseTicket operation.}
-        org_unit_id: {type: string}
-        authorized_action: {type: string, description: Exact permission action authorized by the scoped ticket.}
-        review_mode: {type: string, enum: [enterprise_knowledge_admin_queue]}
-        queue: {type: string, enum: [enterprise_knowledge_admin]}
       oneOf:
         - properties:
             action: {type: string, enum: [dream_policy_create_requested]}
@@ -359,9 +343,6 @@ components:
             action:
               type: string
               enum: [workflow_draft_created, workflow_version_published, dream_policy_created, dream_job_run, retrieval_plan_created, evidence_located, evidence_read, answer_trace_created, sensitive_artifact_parsed, visibility_rule_changed]
-        - required: [org_version, org_unit_id, authorized_action, review_mode, queue, details]
-          properties:
-            action: {type: string, enum: [governance_change_decided]}
     AuditEvidenceResponse:
       type: object
       additionalProperties: false
@@ -539,16 +520,3 @@ components:
         (agentnexus@73ed5a7e83d0804673e3191cf79cc22699f41b3f) — implemented
         against the cross-product agreed spec; see
         evidence/2026.2-lts/ga-task-0d/notes.md.
-    ActionReceiptFetchRequest:
-      type: object
-      additionalProperties: false
-      required: [action_id]
-      properties:
-        action_id: {type: string}
-    ObservationReceiptFetchRequest:
-      type: object
-      additionalProperties: false
-      required: [action_id, verification_need_id]
-      properties:
-        action_id: {type: string}
-        verification_need_id: {type: string}

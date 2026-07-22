@@ -60,8 +60,10 @@ func contractServer(t *testing.T, serviceSecret string) *httptest.Server {
 			http.Error(w, `{"code":"forbidden","message":"scope missing"}`, http.StatusForbidden)
 			return
 		}
+		// The real read envelope, member for member — and therefore no
+		// grant_ref: AgentNexus never emits one on a read.
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"decision": "allow", "grant_ref": "grn_0123456789abcdef",
+			"decision":       "allow",
 			"data":           map[string]any{"detail": "ok"},
 			"source_version": 1, "as_of": "2026-07-21T00:00:00Z", "served_from_cache": false,
 		})
@@ -186,8 +188,14 @@ func TestHTTPClientContract(t *testing.T) {
 	}
 
 	read, err := c.Read(ctx, sample(located.Evidence[0].EvidenceRef))
-	if err != nil || read.GrantRef == "" || read.Decision != "allow" {
+	if err != nil || !read.Allowed() {
 		t.Fatalf("read: %+v err=%v", read, err)
+	}
+	// An allowed read that carries no grant_ref is the normal case, not a
+	// degraded one: nothing downstream may treat the absent handle as a
+	// refusal.
+	if read.GrantRef != "" {
+		t.Fatalf("grant_ref decoded from a read envelope that has none: %+v", read)
 	}
 	// The freshness disclosure must survive decoding: a caller that cannot see
 	// served_from_cache cannot tell a staged answer from a live one.
@@ -201,7 +209,7 @@ func TestHTTPClientContract(t *testing.T) {
 
 	audit, err := c.AppendAuditEvidence(ctx, nexus.AppendAuditEvidenceRequest{
 		IdempotencyKey: "audit-contract-key-0001",
-		TicketID:       "tick_ok", EnterpriseID: "ent_1", Action: nexus.AuditEvidenceRead,
+		BusinessContextRef: "tick_ok", Action: nexus.AuditEvidenceRead,
 		ResourceType: "answer_trace", ResourceID: "trace-1",
 	})
 	if err != nil || audit.AuditRefID != "audit_1" {
@@ -263,7 +271,7 @@ func TestHTTPClientNeverForwardsServiceCredentialOnRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.AppendAuditEvidence(context.Background(), nexus.AppendAuditEvidenceRequest{TicketID: "ticket", EnterpriseID: "ent", Action: nexus.AuditEvidenceRead, ResourceType: "answer_trace", ResourceID: "trace"})
+	_, err = client.AppendAuditEvidence(context.Background(), nexus.AppendAuditEvidenceRequest{BusinessContextRef: "ticket", Action: nexus.AuditEvidenceRead, ResourceType: "answer_trace", ResourceID: "trace"})
 	if err == nil {
 		t.Fatal("audit redirect accepted")
 	}
@@ -284,7 +292,7 @@ func TestHTTPClientMapsAuditPayloadMismatchToConflict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.AppendAuditEvidence(context.Background(), nexus.AppendAuditEvidenceRequest{IdempotencyKey: "audit-conflict-key-0001", TicketID: "ticket", EnterpriseID: "ent", Action: nexus.AuditDreamPolicyCreated, ResourceType: "dream_policy", ResourceID: "policy"})
+	_, err = client.AppendAuditEvidence(context.Background(), nexus.AppendAuditEvidenceRequest{IdempotencyKey: "audit-conflict-key-0001", BusinessContextRef: "ticket", Action: nexus.AuditDreamPolicyCreated, ResourceType: "dream_policy", ResourceID: "policy"})
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("error=%v", err)
 	}

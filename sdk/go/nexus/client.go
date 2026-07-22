@@ -35,6 +35,15 @@ type VerifyTicketResponse struct {
 
 // AuditAction enumerates the AgentAtlas actions that must reach the
 // AgentNexus audit chain.
+//
+// The first eleven are exactly the frozen AuditEvidenceAction enum.
+// AuditGovernanceChangeDecided is NOT in it: AgentNexus's own
+// internal/audit.ValidAction accepts eleven values and rejects this one with
+// 400 invalid_request. It stays declared because a governance decision is a
+// real thing AgentAtlas must record and there is no frozen action for it yet;
+// the parity test names it as the single still-unfrozen value rather than
+// letting it hide, and it must be retired or accepted upstream before
+// AppendDecision can succeed against a real AgentNexus.
 type AuditAction string
 
 const (
@@ -49,23 +58,35 @@ const (
 	AuditAnswerTraceCreated         AuditAction = "answer_trace_created"
 	AuditSensitiveArtifactParsed    AuditAction = "sensitive_artifact_parsed"
 	AuditVisibilityRuleChanged      AuditAction = "visibility_rule_changed"
-	AuditGovernanceChangeDecided    AuditAction = "governance_change_decided"
+
+	// AuditGovernanceChangeDecided is not part of the frozen enum. See the
+	// type comment above before adding a call site.
+	AuditGovernanceChangeDecided AuditAction = "governance_change_decided"
 )
 
+// AppendAuditEvidenceRequest mirrors the frozen AuditEvidenceRequest schema
+// exactly and nothing more: additionalProperties:false, and the tenant and
+// service identity are DERIVED FROM THE VERIFIED CREDENTIAL, never carried in
+// the body. The retired enterprise_id/ticket_id pair and the
+// org_version/org_unit_id/authorized_action/review_mode/queue block are gone
+// because AgentNexus's handler decodes this body under a strict allowed-key
+// check — any one of them made the whole append a 400, not a merely ignored
+// field. Facts worth keeping from that block belong in Details, which is the
+// contract's own bounded extension point.
 type AppendAuditEvidenceRequest struct {
-	IdempotencyKey   string         `json:"-"`
-	TicketID         string         `json:"ticket_id,omitempty"`
-	EnterpriseID     string         `json:"enterprise_id"`
-	Action           AuditAction    `json:"action"`
-	ResourceType     string         `json:"resource_type"`
-	ResourceID       string         `json:"resource_id"`
-	TraceID          string         `json:"trace_id,omitempty"`
-	Details          map[string]any `json:"details,omitempty"`
-	OrgVersion       int64          `json:"org_version,omitempty"`
-	OrgUnitID        string         `json:"org_unit_id,omitempty"`
-	AuthorizedAction string         `json:"authorized_action,omitempty"`
-	ReviewMode       string         `json:"review_mode,omitempty"`
-	Queue            string         `json:"queue,omitempty"`
+	IdempotencyKey string `json:"-"`
+
+	RequestID string `json:"request_id,omitempty"`
+	// BusinessContextRef is the opaque work-case / Case Ticket reference the
+	// audit lineage binds to. The frozen schema accepts both legacy Case
+	// Ticket strings and wc_ work-case handles until the runtime cutover
+	// retires the legacy bridge.
+	BusinessContextRef string         `json:"business_context_ref"`
+	Action             AuditAction    `json:"action"`
+	ResourceType       string         `json:"resource_type"`
+	ResourceID         string         `json:"resource_id"`
+	TraceID            string         `json:"trace_id,omitempty"`
+	Details            map[string]any `json:"details,omitempty"`
 }
 
 type AppendAuditEvidenceResponse struct {

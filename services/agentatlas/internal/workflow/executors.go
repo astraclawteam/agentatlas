@@ -371,6 +371,12 @@ func NewRegistryWithServices(e Executors) Registry {
 			if err != nil {
 				return nil, fmt.Errorf("node %s: %w", node.ID, err)
 			}
+			// A refusal arrives as a successful 200 carrying decision "deny" and
+			// no data, so err is nil and the node would otherwise hand an empty
+			// map to the rest of the workflow as though it were evidence.
+			if !read.Allowed() {
+				return nil, fmt.Errorf("node %s: AgentNexus returned decision %q for %s", node.ID, read.Decision, evidenceRef)
+			}
 			// The freshness trio travels with the data: a downstream node must be
 			// able to tell a staged read from a live one.
 			return map[string]any{

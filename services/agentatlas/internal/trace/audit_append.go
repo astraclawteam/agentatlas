@@ -13,12 +13,15 @@ import (
 // answer path rather than serve an unaudited answer.
 func (s *Service) AppendAudit(ctx context.Context, client nexus.Client, ticketID string, traceRow db.AnswerTrace) (string, error) {
 	resp, err := client.AppendAuditEvidence(ctx, nexus.AppendAuditEvidenceRequest{
-		TicketID:     ticketID,
-		EnterpriseID: traceRow.EnterpriseID,
-		Action:       nexus.AuditAnswerTraceCreated,
-		ResourceType: "answer_trace",
-		ResourceID:   traceRow.ID,
-		TraceID:      traceRow.ID,
+		// Deliberately NO enterprise id: the frozen schema is
+		// additionalProperties:false and AgentNexus derives the tenant from
+		// the verified service credential. traceRow.EnterpriseID is still the
+		// tenant this trace belongs to locally; it just no longer travels.
+		BusinessContextRef: ticketID,
+		Action:             nexus.AuditAnswerTraceCreated,
+		ResourceType:       "answer_trace",
+		ResourceID:         traceRow.ID,
+		TraceID:            traceRow.ID,
 		Details: map[string]any{
 			"question_hash": traceRow.QuestionHash,
 			"answer_hash":   traceRow.AnswerHash,

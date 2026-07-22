@@ -185,7 +185,23 @@ func (a NexusAuditAppender) Append(ctx context.Context, actor Actor, rec Record,
 	if rec.Draft.ResourceType == model.ResourceWorkflow {
 		prefix = "workflow"
 	}
-	req := nexus.AppendAuditEvidenceRequest{IdempotencyKey: key, TicketID: actor.UpstreamTicketID, EnterpriseID: actor.EnterpriseID, Action: action, ResourceType: string(rec.Draft.ResourceType), ResourceID: rec.Draft.ResourceID, Details: map[string]any{"change_id": rec.Draft.ChangeID, "revision": rec.Draft.Revision, "org_unit_id": rec.Draft.OrgUnitID}, OrgVersion: actor.OrgVersion, OrgUnitID: rec.Draft.OrgUnitID, AuthorizedAction: prefix + ".edit"}
+	// org_version/org_unit_id/authorized_action are no longer top-level members
+	// of the frozen AuditEvidenceRequest, and the schema is
+	// additionalProperties:false — sending them made the whole append a 400.
+	// They move into details, the contract's own bounded extension point, so
+	// the audit record keeps exactly the facts it carried before.
+	req := nexus.AppendAuditEvidenceRequest{
+		IdempotencyKey:     key,
+		BusinessContextRef: actor.UpstreamTicketID,
+		Action:             action,
+		ResourceType:       string(rec.Draft.ResourceType),
+		ResourceID:         rec.Draft.ResourceID,
+		Details: map[string]any{
+			"change_id": rec.Draft.ChangeID, "revision": rec.Draft.Revision,
+			"org_unit_id": rec.Draft.OrgUnitID, "org_version": actor.OrgVersion,
+			"authorized_action": prefix + ".edit",
+		},
+	}
 	var out nexus.AppendAuditEvidenceResponse
 	var err error
 	if actor.UpstreamAccessToken != "" {
@@ -206,21 +222,22 @@ func (a NexusAuditAppender) AppendDecision(ctx context.Context, actor Actor, rec
 	if a.Client == nil || (actor.UpstreamAccessToken == "" && actor.UpstreamTicketID == "") {
 		return "", ErrForbidden
 	}
+	authorizedAction := "knowledge.approve_high_risk"
+	if rec.Draft.ResourceType == model.ResourceWorkflow {
+		authorizedAction = "workflow.approve_high_risk"
+	}
+	// review_mode/queue/org_unit_id were already duplicated into details; the
+	// retired top-level members simply stop travelling. org_version and
+	// authorized_action join them there for the same reason as in Append.
 	req := nexus.AppendAuditEvidenceRequest{
-		IdempotencyKey: stableID("decision", actor.EnterpriseID, operationKey),
-		TicketID:       actor.UpstreamTicketID,
-		EnterpriseID:   actor.EnterpriseID,
-		Action:         nexus.AuditGovernanceChangeDecided,
-		ResourceType:   string(rec.Draft.ResourceType),
-		ResourceID:     rec.Draft.ResourceID,
+		IdempotencyKey:     stableID("decision", actor.EnterpriseID, operationKey),
+		BusinessContextRef: actor.UpstreamTicketID,
+		Action:             nexus.AuditGovernanceChangeDecided,
+		ResourceType:       string(rec.Draft.ResourceType),
+		ResourceID:         rec.Draft.ResourceID,
 		Details: map[string]any{"change_id": rec.Draft.ChangeID, "revision": rec.Draft.Revision, "decision": in.Decision,
-			"review_mode": string(rec.Route.Mode), "queue": rec.Route.Queue, "org_unit_id": rec.Draft.OrgUnitID},
-		OrgVersion: actor.OrgVersion, OrgUnitID: rec.Draft.OrgUnitID, AuthorizedAction: func() string {
-			if rec.Draft.ResourceType == model.ResourceWorkflow {
-				return "workflow.approve_high_risk"
-			}
-			return "knowledge.approve_high_risk"
-		}(), ReviewMode: string(rec.Route.Mode), Queue: rec.Route.Queue,
+			"review_mode": string(rec.Route.Mode), "queue": rec.Route.Queue, "org_unit_id": rec.Draft.OrgUnitID,
+			"org_version": actor.OrgVersion, "authorized_action": authorizedAction},
 	}
 	var out nexus.AppendAuditEvidenceResponse
 	var err error

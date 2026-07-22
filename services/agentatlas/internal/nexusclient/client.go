@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -136,8 +137,7 @@ func (c *HTTPClient) doPost(ctx context.Context, path string, in, out any) error
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if path == "/v1/audit/evidence" || path == "/v1/authorization/decisions" || path == "/v1/tickets/verify" ||
-		path == "/v1/approvals/transmissions" ||
-		path == "/v1/actions/request" || path == "/v1/actions/receipt" || path == "/v1/actions/observation" {
+		path == "/v1/approvals/transmissions" || path == runtimeActPath {
 		req.SetBasicAuth(c.serviceClientID, c.serviceSecret)
 		if auditReq, ok := in.(nexus.AppendAuditEvidenceRequest); ok && auditReq.IdempotencyKey != "" {
 			req.Header.Set("Idempotency-Key", auditReq.IdempotencyKey)
@@ -153,6 +153,46 @@ func (c *HTTPClient) doPost(ctx context.Context, path string, in, out any) error
 	}
 	if resp.StatusCode == http.StatusConflict {
 		return fmt.Errorf("nexus %s: %w", path, ErrConflict)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("nexus %s: status %d: %s", path, resp.StatusCode, snippet)
+	}
+	if out == nil {
+		return nil
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("nexus %s: decode: %w", path, err)
+	}
+	return nil
+}
+
+// get is doPost's read-only twin for the frozen surfaces that are GETs rather
+// than POSTs. It carries the same service credential and the same no-follow
+// redirect guard the client was built with.
+func (c *HTTPClient) get(ctx context.Context, path string, out any) error {
+	ctx, span := observability.Tracer("nexusclient").Start(ctx, "nexus"+strings.ReplaceAll(path, "/", "."))
+	defer span.End()
+	err := c.doGet(ctx, path, out)
+	if err != nil {
+		span.RecordError(err)
+	}
+	return err
+}
+
+func (c *HTTPClient) doGet(ctx context.Context, path string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return fmt.Errorf("nexus %s: %w", path, err)
+	}
+	req.SetBasicAuth(c.serviceClientID, c.serviceSecret)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("nexus %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden {
+		return fmt.Errorf("nexus %s: %w", path, ErrDenied)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
@@ -202,20 +242,29 @@ func loadServiceSecretFile(path string) (string, error) {
 	return secret, nil
 }
 
-// actionReceiptFetchRequest and observationReceiptFetchRequest are the
-// minimal wire-identifying bodies for the two fetch endpoints: AgentNexus
-// already owns the full receipt once issued, so the client need only name
-// which one it wants. These are transport plumbing, not part of the nexus
-// SDK's Action protocol surface (which stops at ActionRequest/ActionGrant/
-// ActionReceipt/ObservationReceipt) — kept private to this file.
-type actionReceiptFetchRequest struct {
-	ActionID string `json:"action_id"`
+// The frozen Action surfaces. /v1/actions/request, /v1/actions/receipt and
+// /v1/actions/observation — the paths this client used to POST to — appear
+// nowhere in AgentNexus's contract and could only ever 404.
+//
+// runtimeReceiptPath is a TEMPLATE: the frozen receipt surface is addressed by
+// an opaque ReceiptRef, not by an action id. That handle is minted by
+// AgentNexus and travels back on the Action returned from /v1/runtime/act, so
+// the caller has to carry it here — see FetchActionReceipt.
+const (
+	runtimeActPath          = "/v1/runtime/act"
+	runtimeReceiptPathTmpl  = "/v1/runtime/receipts/{receipt_ref}"
+	runtimeReceiptPathParam = "{receipt_ref}"
+)
+
+func runtimeReceiptPath(receiptRef string) string {
+	return strings.Replace(runtimeReceiptPathTmpl, runtimeReceiptPathParam, url.PathEscape(receiptRef), 1)
 }
 
-type observationReceiptFetchRequest struct {
-	ActionID           string `json:"action_id"`
-	VerificationNeedID string `json:"verification_need_id"`
-}
+// ErrNoFrozenSurface reports a governed-Action operation AgentNexus has not
+// frozen an endpoint for. Failing closed here is the point: the alternative is
+// a request to an invented path, which is indistinguishable from an outage at
+// the call site and silently rots as the contract moves.
+var ErrNoFrozenSurface = errors.New("no frozen AgentNexus surface for this operation")
 
 // RequestAction implements nexus.ActionClient. It rejects a structurally
 // invalid ActionRequest before any network call (see
@@ -233,7 +282,7 @@ func (c *HTTPClient) RequestAction(ctx context.Context, req nexus.ActionRequest)
 	if err := req.Validate(); err != nil {
 		return grant, fmt.Errorf("nexus action request: %w", err)
 	}
-	if err := c.post(ctx, "/v1/actions/request", req, &grant); err != nil {
+	if err := c.post(ctx, runtimeActPath, req, &grant); err != nil {
 		return grant, err
 	}
 	if err := nexus.VerifyActionGrant(req, grant, c.grantTracker, time.Now()); err != nil {
@@ -242,14 +291,19 @@ func (c *HTTPClient) RequestAction(ctx context.Context, req nexus.ActionRequest)
 	return grant, nil
 }
 
-// FetchActionReceipt implements nexus.ActionClient. It retrieves the signed
-// ActionReceipt AgentNexus issued for req.ActionID and rechecks it with
+// FetchActionReceipt implements nexus.ActionClient. It GETs the frozen receipt
+// surface for receiptRef and rechecks the result with
 // nexus.VerifyActionReceipt (exact Action/parameter-hash binding plus a
 // signature that verifies against the trusted key configured by
 // ConfigureActionSigningKey) before returning it. An unsigned, wrong-key,
 // detached or parameter-hash-mismatched receipt from the wire is never
 // returned as success.
-func (c *HTTPClient) FetchActionReceipt(ctx context.Context, req nexus.ActionRequest) (nexus.ActionReceipt, error) {
+//
+// receiptRef is the opaque handle AgentNexus mints and returns on the Action
+// from /v1/runtime/act; the frozen surface has no by-action-id lookup, so a
+// caller without a handle has nothing to fetch and is refused here rather than
+// having req.ActionID passed off as a receipt handle.
+func (c *HTTPClient) FetchActionReceipt(ctx context.Context, req nexus.ActionRequest, receiptRef string) (nexus.ActionReceipt, error) {
 	var receipt nexus.ActionReceipt
 	// Validate the request up front (mirrors RequestAction) so a garbage
 	// req.ActionID/parameter_hash is rejected before any network call and
@@ -257,7 +311,10 @@ func (c *HTTPClient) FetchActionReceipt(ctx context.Context, req nexus.ActionReq
 	if err := req.Validate(); err != nil {
 		return receipt, fmt.Errorf("nexus action request: %w", err)
 	}
-	if err := c.post(ctx, "/v1/actions/receipt", actionReceiptFetchRequest{ActionID: req.ActionID}, &receipt); err != nil {
+	if strings.TrimSpace(receiptRef) == "" {
+		return receipt, fmt.Errorf("nexus %s: missing receipt handle", runtimeReceiptPathTmpl)
+	}
+	if err := c.get(ctx, runtimeReceiptPath(receiptRef), &receipt); err != nil {
 		return receipt, err
 	}
 	if err := nexus.VerifyActionReceipt(req, receipt, c.actionSigningKeyID, c.actionTrustedKey); err != nil {
@@ -266,30 +323,21 @@ func (c *HTTPClient) FetchActionReceipt(ctx context.Context, req nexus.ActionReq
 	return receipt, nil
 }
 
-// FetchObservationReceipt implements nexus.ActionClient. It retrieves the
-// signed ObservationReceipt confirming verificationNeedID for req.ActionID
-// and rechecks it with nexus.VerifyObservationReceipt (exact Action/
-// parameter-hash binding, that the referenced PostconditionSpec and
-// VerificationNeed were actually declared on req, plus a signature that
-// verifies against the trusted key) before returning it. An
-// ObservationReceipt detached from its Action or PostconditionSpec, or one
-// that is unsigned or wrong-key-signed, is never returned as success.
-func (c *HTTPClient) FetchObservationReceipt(ctx context.Context, req nexus.ActionRequest, verificationNeedID string) (nexus.ObservationReceipt, error) {
-	var obs nexus.ObservationReceipt
-	// Validate the request up front (mirrors RequestAction) so a garbage
-	// req is rejected before any network call and before it is used as the
-	// binding baseline for the observation recheck.
-	if err := req.Validate(); err != nil {
-		return obs, fmt.Errorf("nexus action request: %w", err)
-	}
-	fetchReq := observationReceiptFetchRequest{ActionID: req.ActionID, VerificationNeedID: verificationNeedID}
-	if err := c.post(ctx, "/v1/actions/observation", fetchReq, &obs); err != nil {
-		return obs, err
-	}
-	if err := nexus.VerifyObservationReceipt(req, obs, c.actionSigningKeyID, c.actionTrustedKey); err != nil {
-		return nexus.ObservationReceipt{}, err
-	}
-	return obs, nil
+// FetchObservationReceipt implements nexus.ActionClient, and is DORMANT.
+//
+// AgentNexus's frozen contract has no observation-read surface at all: the only
+// receipt surface is GET /v1/runtime/receipts/{receipt_ref}, which returns an
+// ActionReceipt. The retired POST /v1/actions/observation was never an
+// AgentNexus endpoint — it was AgentAtlas's own agreed-spec placeholder pending
+// AgentNexus's freeze (see the ObservationReceipt note in
+// api/openapi/agentnexus-client.yaml), and it could only 404.
+//
+// Failing closed here keeps that visible. The recheck this method used to wire
+// up, nexus.VerifyObservationReceipt, is unchanged and independently covered in
+// sdk/go/nexus/action_test.go, so nothing about ObservationReceipt validation is
+// lost — only the transport, which does not exist to test.
+func (c *HTTPClient) FetchObservationReceipt(context.Context, nexus.ActionRequest, string) (nexus.ObservationReceipt, error) {
+	return nexus.ObservationReceipt{}, fmt.Errorf("nexus observation receipt: %w", ErrNoFrozenSurface)
 }
 
 func (c *HTTPClient) VerifyTicket(ctx context.Context, req nexus.VerifyTicketRequest) (nexus.VerifyTicketResponse, error) {
@@ -298,8 +346,27 @@ func (c *HTTPClient) VerifyTicket(ctx context.Context, req nexus.VerifyTicketReq
 	return out, err
 }
 
+// ErrAuditContextUnbound reports an audit append that has no
+// business_context_ref to bind. The frozen AuditEvidenceRequest requires one
+// and AgentNexus resolves it with VerifyAccessTicket for every credential
+// source, so an unbound append can only ever be answered 401 invalid_ticket.
+// Failing here keeps that a named local error instead of a remote rejection
+// the caller has to decode.
+var ErrAuditContextUnbound = errors.New("audit append has no business_context_ref to bind")
+
+func requireAuditContext(req nexus.AppendAuditEvidenceRequest) error {
+	if strings.TrimSpace(req.BusinessContextRef) == "" {
+		return fmt.Errorf("nexus /v1/audit/evidence: %w (action %q, resource %s/%s)",
+			ErrAuditContextUnbound, req.Action, req.ResourceType, req.ResourceID)
+	}
+	return nil
+}
+
 func (c *HTTPClient) AppendAuditEvidence(ctx context.Context, req nexus.AppendAuditEvidenceRequest) (nexus.AppendAuditEvidenceResponse, error) {
 	var out nexus.AppendAuditEvidenceResponse
+	if err := requireAuditContext(req); err != nil {
+		return out, err
+	}
 	err := c.post(ctx, "/v1/audit/evidence", req, &out)
 	return out, err
 }
@@ -322,6 +389,13 @@ func (c *HTTPClient) AuthorizeTicketOperation(ctx context.Context, ticketID stri
 }
 func (c *HTTPClient) AppendAuditEvidenceWithBearer(ctx context.Context, accessToken string, input nexus.AppendAuditEvidenceRequest) (nexus.AppendAuditEvidenceResponse, error) {
 	var out nexus.AppendAuditEvidenceResponse
+	// A browser token does NOT exempt the append from carrying a business
+	// context: AgentNexus verifies the ref as an access ticket and then
+	// requires the token's principal to match it. See browserAuditContextRef
+	// in internal/app for why no browser session can satisfy this yet.
+	if err := requireAuditContext(input); err != nil {
+		return out, err
+	}
 	err := c.bearerPost(ctx, "/v1/audit/evidence", accessToken, input.IdempotencyKey, input, &out, nil)
 	return out, err
 }

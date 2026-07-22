@@ -134,7 +134,17 @@ func TestAdminQueueDecisionBindsModeQueueAndAuditsTransition(t *testing.T) {
 	if _, err := (NexusAuditAppender{Client: client}).AppendDecision(context.Background(), actor, rec, decision, "decision-operation-key-001"); err != nil {
 		t.Fatalf("decision audit: %v", err)
 	}
-	if client.auditRequest.Action != nexus.AuditGovernanceChangeDecided || client.auditRequest.OrgVersion != 8 || client.auditRequest.OrgUnitID != "team" || client.auditRequest.AuthorizedAction != "workflow.approve_high_risk" || client.auditRequest.ReviewMode != string(model.ReviewAdminQueue) || client.auditRequest.Queue != "enterprise_knowledge_admin" || client.auditRequest.Details["review_mode"] != string(model.ReviewAdminQueue) || client.auditRequest.Details["queue"] != "enterprise_knowledge_admin" {
+	// org_version/org_unit_id/authorized_action/review_mode/queue are no longer
+	// top-level members of the frozen AuditEvidenceRequest — the schema is
+	// additionalProperties:false — so every one of them is asserted where it
+	// now travels, in the contract's own bounded details object. The facts the
+	// audit record carries are unchanged; only their position is.
+	if client.auditRequest.Action != nexus.AuditGovernanceChangeDecided ||
+		client.auditRequest.Details["org_version"] != int64(8) ||
+		client.auditRequest.Details["org_unit_id"] != "team" ||
+		client.auditRequest.Details["authorized_action"] != "workflow.approve_high_risk" ||
+		client.auditRequest.Details["review_mode"] != string(model.ReviewAdminQueue) ||
+		client.auditRequest.Details["queue"] != "enterprise_knowledge_admin" {
 		t.Fatalf("unbound decision audit: %+v", client.auditRequest)
 	}
 }

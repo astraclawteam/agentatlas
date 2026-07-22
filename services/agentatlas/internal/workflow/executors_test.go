@@ -300,6 +300,29 @@ func TestNexusEvidenceNodesCarryNoCallerIdentity(t *testing.T) {
 	}
 }
 
+// TestNexusReadNodeFailsOnADeniedDecision: a refusal is a SUCCESSFUL 200
+// carrying decision "deny" and no data, so err is nil. Without a decision
+// check the node would hand an empty map to the rest of the workflow as though
+// it were evidence, and every downstream node would run on nothing.
+func TestNexusReadNodeFailsOnADeniedDecision(t *testing.T) {
+	evidence := &fakeWorkflowEvidence{deny: true}
+	r := NewRegistryWithServices(Executors{Evidence: evidence})
+	run := &RunContext{EnterpriseID: "ent_1", Input: map[string]any{
+		"evidence_ref": "evd_0123456789abcdef0123", "business_context_ref": "wc_0123456789abcdef0123",
+	}, Outputs: map[string]map[string]any{}}
+
+	out, err := r[sdkworkflow.NodeNexusRead].Execute(context.Background(), sdkworkflow.Node{ID: "rd", Type: sdkworkflow.NodeNexusRead}, run)
+	if err == nil {
+		t.Fatalf("a denied read must fail the node, got output %v", out)
+	}
+	if !strings.Contains(err.Error(), nexusclient.ReadDeny) {
+		t.Fatalf("the failure must name the decision that caused it, got %v", err)
+	}
+	if out != nil {
+		t.Fatalf("a denied read must produce no node output, got %v", out)
+	}
+}
+
 // TestNexusEvidenceNodesFailClosedWithoutEvidenceClient keeps the fail-closed
 // property the old test protected, moved to the dependency that now matters.
 func TestNexusEvidenceNodesFailClosedWithoutEvidenceClient(t *testing.T) {

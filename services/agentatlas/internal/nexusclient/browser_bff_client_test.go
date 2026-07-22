@@ -27,7 +27,7 @@ func TestBrowserBFFAuditUsesBearerAndOmitsCaseTicket(t *testing.T) {
 	}))
 	defer server.Close()
 	client := &HTTPClient{baseURL: server.URL, http: server.Client()}
-	out, err := client.AppendAuditEvidenceWithBearer(context.Background(), "upstream-browser-access-token", nexus.AppendAuditEvidenceRequest{IdempotencyKey: "browser-audit-key-1234", EnterpriseID: "ent-1", Action: nexus.AuditWorkflowVersionPublished, ResourceType: "workflow", ResourceID: "wf-1"})
+	out, err := client.AppendAuditEvidenceWithBearer(context.Background(), "upstream-browser-access-token", nexus.AppendAuditEvidenceRequest{IdempotencyKey: "browser-audit-key-1234", BusinessContextRef: "wc_browser000000000001", Action: nexus.AuditWorkflowVersionPublished, ResourceType: "workflow", ResourceID: "wf-1"})
 	if err != nil || out.AuditRefID != "audit-browser-1" {
 		t.Fatalf("out=%+v err=%v", out, err)
 	}

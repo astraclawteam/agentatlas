@@ -13,12 +13,6 @@ type fakeClient struct{}
 func (fakeClient) VerifyTicket(_ context.Context, req VerifyTicketRequest) (VerifyTicketResponse, error) {
 	return VerifyTicketResponse{Valid: req.TicketID != ""}, nil
 }
-func (fakeClient) LocateEvidence(context.Context, LocateEvidenceRequest) (LocateEvidenceResponse, error) {
-	return LocateEvidenceResponse{}, nil
-}
-func (fakeClient) ReadEvidence(context.Context, ReadEvidenceRequest) (ReadEvidenceResponse, error) {
-	return ReadEvidenceResponse{}, nil
-}
 func (fakeClient) AppendAuditEvidence(context.Context, AppendAuditEvidenceRequest) (AppendAuditEvidenceResponse, error) {
 	return AppendAuditEvidenceResponse{AuditRefID: "ref"}, nil
 }
@@ -46,9 +40,15 @@ func TestVerifyTicketContract(t *testing.T) {
 	}
 }
 
+// TestAppendAuditEvidenceMatchesPublishedAgentNexusContract pins the exact key
+// set that reaches the wire. The frozen AuditEvidenceRequest is
+// additionalProperties:false AND AgentNexus decodes it under an allowed-key
+// check that rejects trusted-identity members outright, so an extra key is not
+// an ignored field — it fails the whole append. An absent required key fails it
+// too. Both directions are asserted.
 func TestAppendAuditEvidenceMatchesPublishedAgentNexusContract(t *testing.T) {
 	req := AppendAuditEvidenceRequest{
-		TicketID: "ticket", EnterpriseID: "ent", Action: AuditDreamPolicyCreateRequested,
+		RequestID: "req-1", BusinessContextRef: "wc_0123456789abcdef0123", Action: AuditDreamPolicyCreateRequested,
 		ResourceType: "dream_policy", ResourceID: "policy-1", TraceID: "trace-1",
 		Details: map[string]any{"phase": "create_requested"},
 	}
@@ -60,7 +60,7 @@ func TestAppendAuditEvidenceMatchesPublishedAgentNexusContract(t *testing.T) {
 	if err := json.Unmarshal(raw, &body); err != nil {
 		t.Fatal(err)
 	}
-	wantKeys := []string{"action", "details", "enterprise_id", "resource_id", "resource_type", "ticket_id", "trace_id"}
+	wantKeys := []string{"action", "business_context_ref", "details", "request_id", "resource_id", "resource_type", "trace_id"}
 	gotKeys := make([]string, 0, len(body))
 	for key := range body {
 		gotKeys = append(gotKeys, key)
@@ -69,8 +69,12 @@ func TestAppendAuditEvidenceMatchesPublishedAgentNexusContract(t *testing.T) {
 	if !reflect.DeepEqual(gotKeys, wantKeys) || body["action"] != "dream_policy_create_requested" || body["resource_type"] != "dream_policy" || body["resource_id"] != "policy-1" {
 		t.Fatalf("body=%s", raw)
 	}
-	if _, exists := body["workflow_run_id"]; exists {
-		t.Fatalf("unpersisted workflow_run_id emitted: %s", raw)
+	// The tenant and the actor are derived from the verified credential. Either
+	// one in the body is a 400 from AgentNexus, not a field it ignores.
+	for _, banned := range []string{"enterprise_id", "ticket_id", "actor_user_id", "org_version", "org_unit_id", "authorized_action", "review_mode", "queue", "workflow_run_id"} {
+		if _, exists := body[banned]; exists {
+			t.Fatalf("%q is not a member of the frozen AuditEvidenceRequest: %s", banned, raw)
+		}
 	}
 	if AuditDreamPolicyCreated != "dream_policy_created" {
 		t.Fatal("legacy dream_policy_created action changed")
@@ -83,10 +87,10 @@ func TestAppendAuditEvidenceMatchesPublishedAgentNexusContract(t *testing.T) {
 	if err := json.Unmarshal(emptyRaw, &emptyBody); err != nil {
 		t.Fatal(err)
 	}
-	if _, exists := emptyBody["ticket_id"]; exists {
-		t.Fatalf("optional browser bearer ticket_id must be omitted when empty: %s", emptyRaw)
+	if _, exists := emptyBody["request_id"]; exists {
+		t.Fatalf("optional request_id must be omitted when empty: %s", emptyRaw)
 	}
-	for _, required := range []string{"enterprise_id", "action", "resource_type", "resource_id"} {
+	for _, required := range []string{"business_context_ref", "action", "resource_type", "resource_id"} {
 		if _, exists := emptyBody[required]; !exists {
 			t.Fatalf("required field %q has omitempty tag: %s", required, emptyRaw)
 		}

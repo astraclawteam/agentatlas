@@ -1,0 +1,53 @@
+<style>
+  .ke{--paper:#F9F8F0;--ink:#131314;--muted:#46464A;--quiet:#9D9B90;--line:#E6E1D3;--strong:#D6D0BE;--clay:#D97757;--deep:#B8593B;--olive:#6E8765;--ochre:#C19A4B;--teal:#5E8294;--glass:linear-gradient(180deg,rgba(255,255,255,.72),rgba(255,255,255,.38));font-family:"Hanken Grotesk Variable","Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--paper)}
+  .ke *{box-sizing:border-box}.ke svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .ke .glass{background:var(--glass);backdrop-filter:blur(22px) saturate(1.4);border:1px solid rgba(255,255,255,.82);box-shadow:inset 0 1px 0 rgba(255,255,255,.95),0 26px 46px -24px rgba(19,19,20,.3),0 6px 14px -8px rgba(19,19,20,.16)}
+  .ke .rest{background:rgba(252,251,245,.82);border:1px solid var(--line);box-shadow:0 1px 2px rgba(19,19,20,.06),inset 0 1px 0 rgba(255,255,255,.86)}
+  .ke .meta{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:10px;color:var(--quiet)}
+  .ke .btn{height:34px;border:1px solid var(--strong);border-radius:11px;background:transparent;color:var(--ink);padding:0 12px;font:inherit;font-size:11px;font-weight:550;display:inline-flex;align-items:center;justify-content:center;gap:6px}.ke .btn.primary{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+</style>
+
+<h2>设计第 2 部分：知识查看与编辑</h2>
+<p class="subtitle">普通维护者像修改一份结构化说明书；不暴露 JSON、节点类型或数据库字段。SOP 流程图作为高级视图存在。</p>
+
+<div class="ke" style="border-radius:20px;overflow:hidden;box-shadow:0 36px 60px -26px rgba(19,19,20,.36),0 0 0 1px rgba(217,119,87,.18)">
+  <header class="glass" style="height:62px;border-radius:0;border-width:0 0 1px 0;display:flex;align-items:center;padding:0 22px">
+    <div style="display:flex;align-items:baseline;gap:10px"><strong style="font-size:18px">AgentAtlas</strong><span class="meta">KNOWLEDGE RUNTIME</span></div>
+    <nav style="display:flex;gap:25px;margin-left:42px;font-size:12px;color:var(--muted)"><span style="color:var(--deep);font-weight:650">企业知识</span><span>工作记忆</span><span>做事流程</span><span>回答依据</span></nav>
+    <div style="margin-left:auto;height:40px;display:flex;align-items:center;gap:12px;white-space:nowrap"><button style="width:38px;height:38px;border:0;border-radius:12px;background:var(--ink);color:var(--paper);display:grid;place-items:center"><svg viewBox="0 0 24 24"><path d="m12 3-1.3 3.7L7 8l3.7 1.3L12 13l1.3-3.7L17 8l-3.7-1.3L12 3Z"/><path d="m19 14-.8 2.2L16 17l2.2.8L19 20l.8-2.2L22 17l-2.2-.8L19 14Z"/></svg></button><button style="height:38px;border:0;background:transparent;display:flex;align-items:center;gap:7px;white-space:nowrap;font:inherit"><span style="font-size:12px">陈经理</span><svg style="width:14px;height:14px" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button></div>
+  </header>
+
+  <div style="min-height:720px;padding:20px 24px 18px;background:radial-gradient(circle at 70% 0,rgba(217,119,87,.08),transparent 35%),var(--paper)">
+    <div style="display:flex;align-items:center;font-size:11px;color:var(--muted)"><button class="btn" style="border:0;padding-left:0"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg>返回研发一部</button><span style="margin:0 7px;color:var(--quiet)">/</span><span>MES 异常工单处理</span></div>
+
+    <div style="display:flex;align-items:start;margin-top:12px"><div><div style="font-size:23px;font-weight:700">编辑 MES 异常工单处理</div><div style="font-size:11px;color:var(--muted);margin-top:5px">修改会先保存为草稿，发布前会再次显示影响范围。</div></div><div style="margin-left:auto;display:flex;align-items:center;gap:6px;padding:7px 10px;border-radius:12px;background:rgba(110,135,101,.14);color:var(--olive);font-size:10px"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg>草稿已保存</div></div>
+
+    <div style="display:grid;grid-template-columns:160px minmax(0,1fr) 230px;gap:14px;margin-top:18px;align-items:start">
+      <aside class="glass" style="border-radius:18px;padding:14px;box-shadow:inset 0 1px 0 rgba(255,255,255,.95),0 1px 2px rgba(19,19,20,.06)">
+        <div class="meta" style="margin:0 4px 8px">内容目录</div>
+        <div style="font-size:11px;line-height:2.55;color:var(--muted)"><div style="padding:0 9px">基本说明</div><div style="padding:0 9px">开始前准备</div><div style="padding:0 9px;border-left:2px solid var(--clay);background:linear-gradient(160deg,rgba(217,119,87,.18),rgba(217,119,87,.04));border-radius:10px;color:var(--ink);font-weight:650">处理步骤</div><div style="padding:0 9px">需要的证据</div><div style="padding:0 9px">完成标准</div></div>
+        <div style="height:1px;background:var(--line);margin:13px 4px"></div>
+        <button class="btn" style="width:100%"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>修改目录</button>
+      </aside>
+
+      <main class="glass" style="border-radius:18px;overflow:hidden;box-shadow:inset 0 1px 0 rgba(255,255,255,.95),0 14px 28px -18px rgba(19,19,20,.26)">
+        <div style="padding:19px 20px;border-bottom:1px solid rgba(230,225,211,.78)"><div class="meta">处理步骤</div><div style="font-size:12px;color:var(--muted);margin-top:6px">按实际执行顺序排列。使用上下按钮调整顺序。</div></div>
+        <div style="padding:15px;display:grid;gap:10px">
+          <div class="rest" style="border-radius:14px;padding:13px;display:grid;grid-template-columns:28px 1fr auto;gap:10px;align-items:start"><div style="width:28px;height:28px;border-radius:10px;background:rgba(94,130,148,.14);color:var(--teal);display:grid;place-items:center;font-weight:650;font-size:11px">1</div><div><b style="font-size:12px">接收并登记异常工单</b><div style="font-size:11px;line-height:1.65;color:var(--muted);margin-top:5px">记录工单编号、设备、异常现象和提交人。</div></div><div style="display:flex;gap:4px"><button class="btn" style="width:30px;padding:0"><svg viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></svg></button><button class="btn" style="width:30px;padding:0"><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button></div></div>
+          <div class="rest" style="border-radius:14px;padding:13px;display:grid;grid-template-columns:28px 1fr auto;gap:10px;align-items:start;border-left:2px solid var(--clay)"><div style="width:28px;height:28px;border-radius:10px;background:rgba(217,119,87,.12);color:var(--deep);display:grid;place-items:center;font-weight:650;font-size:11px">2</div><div><label class="meta">步骤名称</label><div style="margin-top:4px;border:1px solid var(--clay);border-radius:12px;background:rgba(252,251,245,.9);padding:9px 11px;font-size:12px;box-shadow:0 0 0 1px rgba(217,119,87,.18)">15 分钟内响应并判断影响范围</div><label class="meta" style="display:block;margin-top:10px">怎么做</label><div style="margin-top:4px;border:1px solid var(--line);border-radius:12px;background:rgba(252,251,245,.9);padding:9px 11px;font-size:11px;line-height:1.65;color:var(--muted)">值班负责人确认是否影响生产；如影响生产，立即通知部门负责人。</div></div><div style="display:flex;gap:4px"><button class="btn" style="width:30px;padding:0"><svg viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></svg></button><button class="btn" style="width:30px;padding:0"><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button></div></div>
+          <div class="rest" style="border-radius:14px;padding:13px;display:grid;grid-template-columns:28px 1fr auto;gap:10px;align-items:start"><div style="width:28px;height:28px;border-radius:10px;background:rgba(193,154,75,.14);color:var(--ochre);display:grid;place-items:center;font-weight:650;font-size:11px">3</div><div><b style="font-size:12px">处理并上传结果证据</b><div style="font-size:11px;line-height:1.65;color:var(--muted);margin-top:5px">填写处理结果，上传现场照片或系统回执。</div></div><div style="display:flex;gap:4px"><button class="btn" style="width:30px;padding:0"><svg viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></svg></button><button class="btn" style="width:30px;padding:0"><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button></div></div>
+          <button class="btn" style="justify-self:start"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加一个步骤</button>
+        </div>
+        <div style="height:58px;padding:0 16px;border-top:1px solid rgba(230,225,211,.78);display:flex;align-items:center;background:rgba(249,248,240,.55)"><span class="meta">所有修改已自动保存</span><button class="btn" style="margin-left:auto">退出编辑</button><button class="btn primary" style="margin-left:8px">下一步：检查并发布<svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></button></div>
+      </main>
+
+      <aside style="display:grid;gap:11px">
+        <div class="glass" style="border-radius:18px;padding:14px;box-shadow:inset 0 1px 0 rgba(255,255,255,.95),0 1px 2px rgba(19,19,20,.06)"><div class="meta">适用范围</div><b style="display:block;font-size:12px;margin-top:8px">研发一部</b><div style="font-size:10px;color:var(--muted);line-height:1.7;margin-top:4px">43 名员工<br>影响相关问答和 SOP 执行</div><button class="btn" style="width:100%;margin-top:10px">更改适用范围</button></div>
+        <div class="glass" style="border-radius:18px;padding:14px;box-shadow:inset 0 1px 0 rgba(255,255,255,.95),0 1px 2px rgba(19,19,20,.06)"><div class="meta">参考资料</div><div style="font-size:11px;line-height:1.85;color:var(--muted);margin-top:7px"><div>制度文件 2026-07.pdf</div><div>MES 操作手册 v3</div></div><button class="btn" style="width:100%;margin-top:9px"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>添加参考资料</button></div>
+        <div class="rest" style="border-radius:14px;padding:13px"><div class="meta">高级维护</div><div style="font-size:11px;color:var(--muted);line-height:1.65;margin-top:6px">仅授权人员可以查看完整流程图和节点配置。</div><button class="btn" style="width:100%;margin-top:9px"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="15" width="6" height="6" rx="1"/><path d="M9 6h3a3 3 0 0 1 3 3v6"/></svg>查看流程图</button></div>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:18px;padding:13px 15px;border-radius:12px;background:#f5f3ef;font-size:12px"><b>易用性原则：</b>普通编辑只面对“目录、步骤、适用范围、参考资料”；保存自动完成；唯一主操作是“下一步：检查并发布”。FlowGram 只在高级维护入口出现。</div>

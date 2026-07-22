@@ -102,9 +102,14 @@ func (m *memTraceStore) InsertAnswerTraceAuditRef(_ context.Context, arg db.Inse
 
 func testAnswerServer(t *testing.T, mock *nexusclient.Mock) (*httptest.Server, *memTraceStore) {
 	t.Helper()
+	return testAnswerServerWithEvidence(t, mock, &fakeFrozenEvidence{})
+}
+
+func testAnswerServerWithEvidence(t *testing.T, mock *nexusclient.Mock, evd FrozenEvidenceClient) (*httptest.Server, *memTraceStore) {
+	t.Helper()
 	traceStore := &memTraceStore{}
 	deps := &answerDeps{
-		evidence:  &fakeFrozenEvidence{},
+		evidence:  evd,
 		nexus:     mock,
 		retrieval: retrieval.NewService(&memPlanStore{}, staticSearch{}, nil, nil),
 		traces:    trace.NewService(traceStore),
@@ -145,6 +150,39 @@ func TestAnswerFailsClosedWithoutTicket(t *testing.T) {
 	resp, _ = postAnswer(t, srv.URL, "tick_bogus", `{"enterprise_id":"ent_1","question":"我的工作内容是什么？"}`)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("invalid ticket: status %d", resp.StatusCode)
+	}
+}
+
+// TestAnswerTreatsADeniedReadAsDeniedNotAsEvidence.
+//
+// A refusal is not a transport error: AgentNexus answers 200 with
+// {"decision":"deny"} and no data, so err is nil and the read falls straight
+// through the ErrDenied branch. Without a decision check the handler would
+// serialize an empty Data map into the prompt under a citation marker and
+// record the pointer in the Answer Trace — an ungrounded claim presented as
+// grounded, which is the one thing the answer path exists to prevent.
+func TestAnswerTreatsADeniedReadAsDeniedNotAsEvidence(t *testing.T) {
+	mock := nexusclient.NewMock()
+	mock.Tickets["tick_ok"] = nexus.VerifyTicketResponse{Valid: true, EnterpriseID: "ent_1", ActorUserID: "u_zhang"}
+	srv, traceStore := testAnswerServerWithEvidence(t, mock, &fakeFrozenEvidence{deny: true})
+
+	resp, out := postAnswer(t, srv.URL, "tick_ok", `{"enterprise_id":"ent_1","question":"我的工作内容是什么？"}`)
+	// The answer still completes from the retrieval snippets; what must not
+	// happen is the denial being cited as evidence.
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %v", resp.StatusCode, out)
+	}
+	if evidence, present := out["evidence"]; present && len(evidence.([]any)) != 0 {
+		t.Fatalf("a denied read was returned as evidence: %v", evidence)
+	}
+	if len(traceStore.traces) != 1 {
+		t.Fatalf("trace persisted %d times", len(traceStore.traces))
+	}
+	if len(traceStore.traces[0].EvidencePointerIds) != 0 {
+		t.Fatalf("a denied read was recorded in the Answer Trace: %v", traceStore.traces[0].EvidencePointerIds)
+	}
+	if strings.Contains(out["answer"].(string), "sealed-detail") {
+		t.Fatalf("denied content reached the answer: %v", out["answer"])
 	}
 }
 

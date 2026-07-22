@@ -361,7 +361,7 @@ func TestDreamEvidenceAccessRequiresScopeBoundGrantAndAudit(t *testing.T) {
 			if tc.want == http.StatusOK {
 				// The read must be bound to the located opaque handle, and the
 				// freshness disclosure must survive to the caller.
-				if len(evd.reads) != 1 || evd.reads[0].EvidenceRef != "evd_0123456789abcdef0123" || len(nx.audits) != 1 || nx.audits[0].Details["grant_ref"] != "grn_bound" {
+				if len(evd.reads) != 1 || evd.reads[0].EvidenceRef != "evd_0123456789abcdef0123" || len(nx.audits) != 1 || nx.audits[0].Details["decision"] != nexusclient.ReadAllow {
 					t.Fatalf("binding/audit = %+v %+v", evd.reads, nx.audits)
 				}
 				if !bytes.Contains(resp.Body.Bytes(), []byte("served_from_cache")) {
@@ -372,5 +372,26 @@ func TestDreamEvidenceAccessRequiresScopeBoundGrantAndAudit(t *testing.T) {
 				t.Fatal("detail leaked before mandatory audit")
 			}
 		})
+	}
+}
+
+// TestDreamEvidenceAccessRefusesADeniedRead pins the refusal path, which had no
+// coverage because the retired guard tripped on an absent Step Grant long
+// before any decision was consulted.
+//
+// AgentNexus answers a refusal with a SUCCESSFUL 200 carrying decision "deny"
+// and no data. The handler must therefore fail closed on the decision itself —
+// and must not audit an evidence read that never happened.
+func TestDreamEvidenceAccessRefusesADeniedRead(t *testing.T) {
+	store := &fakeDreamRunStore{run: dreamRunFixture()}
+	nx := &evidenceNexus{scopes: []string{"dream:evidence:read"}}
+	allowDreamOrg(nx, "dream:evidence:read", "ent-1", "department:rd")
+	evd := &fakeFrozenEvidence{deny: true}
+	resp := requestDream(t, NewAgentRouter(AgentRouterDeps{OrgAuthorization: &allowOrgAuthorization{}, ApprovalTransmitter: &fakeApprovalTransmitter{decision: nexusclient.ApprovalApproved, authority: "oa.example"}, ApprovalAuthority: "oa.example", WorkCaseContextFor: alwaysWorkCaseBacked, Evidence: evd, Nexus: nx, DreamRuns: store}), http.MethodPost, "/v1/dream/runs/run-1/evidence-access", nil)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("a denied read must not be served: status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if len(nx.audits) != 0 {
+		t.Fatalf("a denied read was audited as an evidence read: %+v", nx.audits)
 	}
 }

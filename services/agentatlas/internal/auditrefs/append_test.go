@@ -31,7 +31,7 @@ func (f *failingNexus) AppendAuditEvidence(ctx context.Context, req nexus.Append
 func TestAppenderCountsFailures(t *testing.T) {
 	metrics := observability.NewMetrics()
 	req := nexus.AppendAuditEvidenceRequest{
-		TicketID: "t", EnterpriseID: "e", Action: nexus.AuditAnswerTraceCreated,
+		BusinessContextRef: "t", Action: nexus.AuditAnswerTraceCreated,
 	}
 
 	down := New(&failingNexus{Mock: *nexusclient.NewMock(), mode: "error"}, metrics)

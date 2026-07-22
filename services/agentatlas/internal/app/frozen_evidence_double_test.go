@@ -20,6 +20,10 @@ type fakeFrozenEvidence struct {
 	readErr error
 	// empty makes Locate return no handles.
 	empty bool
+	// deny makes Read answer the way AgentNexus answers a refusal: a
+	// SUCCESSFUL 200 carrying decision "deny" and no data. Modelling it as an
+	// error would have hidden the bug this knob exists to catch.
+	deny bool
 }
 
 func (f *fakeFrozenEvidence) Locate(_ context.Context, req nexusruntime.EvidenceRequest) (nexusclient.LocateEvidenceResult, error) {
@@ -44,9 +48,14 @@ func (f *fakeFrozenEvidence) Read(_ context.Context, req nexusruntime.EvidenceRe
 	if f.readErr != nil {
 		return nexusclient.ReadEvidenceResult{}, f.readErr
 	}
+	if f.deny {
+		return nexusclient.ReadEvidenceResult{Decision: nexusclient.ReadDeny}, nil
+	}
+	// No GrantRef: the real AgentNexus read handler never emits one, and a
+	// double that invents one is precisely what kept two handlers dead in
+	// production while their tests passed.
 	return nexusclient.ReadEvidenceResult{
-		Decision:        "allow",
-		GrantRef:        "grn_bound",
+		Decision:        nexusclient.ReadAllow,
 		Data:            map[string]any{"detail": "sealed-detail"},
 		ReceiptRef:      "rcp_0123456789abcdef0123",
 		SourceVersion:   7,

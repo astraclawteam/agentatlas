@@ -1,0 +1,37 @@
+<style>
+  .ra{--paper:#F9F8F0;--ink:#131314;--muted:#46464A;--quiet:#9D9B90;--line:#E6E1D3;--strong:#D6D0BE;--clay:#D97757;--deep:#B8593B;--olive:#6E8765;--ochre:#C19A4B;--glass:linear-gradient(180deg,rgba(255,255,255,.72),rgba(255,255,255,.38));font-family:"Hanken Grotesk Variable","Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--paper)}
+  .ra *{box-sizing:border-box}.ra svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.ra .glass{background:var(--glass);backdrop-filter:blur(22px) saturate(1.4);border:1px solid rgba(255,255,255,.82);box-shadow:inset 0 1px 0 rgba(255,255,255,.95),0 26px 46px -24px rgba(19,19,20,.3),0 6px 14px -8px rgba(19,19,20,.16)}.ra .rest{background:rgba(252,251,245,.82);border:1px solid var(--line);box-shadow:0 1px 2px rgba(19,19,20,.06),inset 0 1px 0 rgba(255,255,255,.86)}.ra .meta{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:10px;color:var(--quiet)}.ra .btn{height:36px;border:1px solid var(--strong);border-radius:11px;background:transparent;color:var(--ink);padding:0 13px;font:inherit;font-size:11px;font-weight:550;display:inline-flex;align-items:center;gap:6px}.ra .primary{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+</style>
+
+<h2>设计第 3 部分：检查、发布与向上审批</h2>
+<p class="subtitle">系统用确定性规则判断风险，Agent 只负责解释。高风险变更自动沿组织架构寻找下一位有发布权限、且不是发起人的负责人。</p>
+
+<div class="ra" style="border-radius:20px;overflow:hidden;box-shadow:0 36px 60px -26px rgba(19,19,20,.36),0 0 0 1px rgba(217,119,87,.18)">
+  <header class="glass" style="height:62px;border-radius:0;border-width:0 0 1px 0;display:flex;align-items:center;padding:0 22px"><div style="display:flex;align-items:baseline;gap:10px"><strong style="font-size:18px">AgentAtlas</strong><span class="meta">KNOWLEDGE RUNTIME</span></div><nav style="display:flex;gap:25px;margin-left:42px;font-size:12px;color:var(--muted)"><span style="color:var(--deep);font-weight:650">企业知识</span><span>工作记忆</span><span>做事流程</span><span>回答依据</span></nav><div style="margin-left:auto;height:40px;display:flex;align-items:center;gap:12px;white-space:nowrap"><button style="width:38px;height:38px;border:0;border-radius:12px;background:var(--ink);color:var(--paper);display:grid;place-items:center"><svg viewBox="0 0 24 24"><path d="m12 3-1.3 3.7L7 8l3.7 1.3L12 13l1.3-3.7L17 8l-3.7-1.3L12 3Z"/><path d="m19 14-.8 2.2L16 17l2.2.8L19 20l.8-2.2L22 17l-2.2-.8L19 14Z"/></svg></button><button style="height:38px;border:0;background:transparent;display:flex;align-items:center;gap:7px;white-space:nowrap;font:inherit"><span style="font-size:12px">陈经理</span><svg style="width:14px;height:14px" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button></div></header>
+
+  <main style="min-height:710px;padding:24px 30px;background:radial-gradient(circle at 68% 0,rgba(217,119,87,.08),transparent 38%),var(--paper)">
+    <div style="max-width:920px;margin:0 auto">
+      <button class="btn" style="border:0;padding-left:0"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg>返回继续编辑</button>
+      <div style="margin-top:9px"><div style="font-family:'Noto Serif SC',serif;font-size:29px;font-weight:680">发布前，请检查这次修改</div><div style="font-size:12px;color:var(--muted);margin-top:6px">确认内容和影响范围无误后，系统会把它交给下一位负责人复核。</div></div>
+
+      <div class="glass" style="margin-top:20px;border-radius:18px;padding:16px;border-left:2px solid var(--clay);box-shadow:inset 0 1px 0 rgba(255,255,255,.95),0 14px 28px -18px rgba(19,19,20,.26)">
+        <div style="display:flex;align-items:center"><div style="width:32px;height:32px;border-radius:10px;background:rgba(217,119,87,.12);color:var(--deep);display:grid;place-items:center"><svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.7 2.8 17a2 2 0 0 0 1.7 3h15a2 2 0 0 0 1.7-3L13.7 3.7a2 2 0 0 0-3.4 0Z"/></svg></div><div style="margin-left:11px"><div class="meta" style="color:var(--deep)">高风险变更 · 需要双人复核</div><b style="font-size:13px">修改了 SOP 的响应时限</b></div></div>
+        <div style="font-size:11px;line-height:1.75;color:var(--muted);margin-top:10px">判定依据：修改对象是已发布 SOP；影响 43 名员工；会改变后续 SOP 执行和相关问答。风险级别由企业规则确定，不能由 Agent 或发起人降低。</div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px">
+        <section class="rest" style="border-radius:18px;padding:16px"><div class="meta">修改前</div><div style="font-size:15px;font-weight:650;margin-top:10px;color:var(--muted)">30 分钟内响应并判断影响范围</div><div style="font-size:11px;color:var(--quiet);line-height:1.7;margin-top:8px">值班负责人确认是否影响生产；如影响生产，通知部门负责人。</div></section>
+        <section class="glass" style="border-radius:18px;padding:16px;box-shadow:inset 0 1px 0 rgba(255,255,255,.95),0 1px 2px rgba(19,19,20,.06)"><div class="meta" style="color:var(--deep)">修改后</div><div style="font-size:15px;font-weight:700;margin-top:10px">15 分钟内响应并判断影响范围</div><div style="font-size:11px;color:var(--muted);line-height:1.7;margin-top:8px">值班负责人确认是否影响生产；如影响生产，<b style="color:var(--deep)">立即</b>通知部门负责人。</div></section>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px">
+        <section class="rest" style="border-radius:18px;padding:16px"><div class="meta">生效后会影响</div><div style="display:grid;gap:9px;margin-top:10px;font-size:12px;color:var(--muted)"><div style="display:flex;align-items:center;gap:8px"><svg style="color:var(--ochre)" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9"/><path d="M16 3.1a4 4 0 0 1 0 7.8"/></svg>研发一部 43 名员工</div><div style="display:flex;align-items:center;gap:8px"><svg style="color:var(--olive)" viewBox="0 0 24 24"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/></svg>相关员工 Agent 回答</div><div style="display:flex;align-items:center;gap:8px"><svg style="color:var(--deep)" viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="15" width="6" height="6" rx="1"/><path d="M9 6h3a3 3 0 0 1 3 3v6"/></svg>后续 MES SOP 执行</div></div></section>
+        <section class="glass" style="border-radius:18px;padding:16px;box-shadow:inset 0 1px 0 rgba(255,255,255,.95),0 1px 2px rgba(19,19,20,.06)"><div class="meta">下一位复核人</div><div style="display:flex;align-items:center;margin-top:11px"><div style="width:38px;height:38px;border-radius:14px;background:linear-gradient(160deg,rgba(217,119,87,.2),rgba(217,119,87,.06));display:grid;place-items:center;font-weight:700;color:var(--deep)">王</div><div style="margin-left:10px"><b style="font-size:13px">王主任</b><div style="font-size:10px;color:var(--muted);margin-top:3px">研发中心负责人 · SOP 发布权限</div></div></div><div style="font-size:10px;color:var(--quiet);line-height:1.7;margin-top:9px">审批链：研发一部 → 研发中心。王主任是组织架构中向上的第一位合格复核人。</div></section>
+      </div>
+
+      <div style="display:flex;align-items:center;margin-top:18px;padding-top:16px;border-top:1px solid var(--line)"><span class="meta">提交后仍可在复核完成前撤回</span><button class="btn" style="margin-left:auto">保存草稿，稍后处理</button><button class="btn primary" style="margin-left:8px">提交给王主任复核<svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></button></div>
+    </div>
+  </main>
+</div>
+
+<div class="section" style="margin-top:18px;padding:13px 15px;border-radius:12px;background:#f5f3ef;font-size:12px"><b>低风险差异：</b>页面结构不变，但顶部显示“低风险 · 可直接发布”，主按钮改为“确认并发布”；没有编辑权限的员工只能产生建议，主按钮为“提交纠错建议”。</div>

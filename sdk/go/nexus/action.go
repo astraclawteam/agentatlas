@@ -698,14 +698,23 @@ type ActionClient interface {
 	// success.
 	RequestAction(ctx context.Context, req ActionRequest) (ActionGrant, error)
 
-	// FetchActionReceipt retrieves the signed ActionReceipt for req and
-	// rechecks it with VerifyActionReceipt before returning it. An
-	// unsigned, wrong-key, detached or parameter-hash-mismatched receipt
-	// is never returned as success.
-	FetchActionReceipt(ctx context.Context, req ActionRequest) (ActionReceipt, error)
+	// FetchActionReceipt retrieves the signed ActionReceipt under
+	// receiptRef and rechecks it with VerifyActionReceipt before returning
+	// it. An unsigned, wrong-key, detached or parameter-hash-mismatched
+	// receipt is never returned as success.
+	//
+	// receiptRef is an opaque handle minted by AgentNexus: the frozen
+	// receipt surface is addressed by handle and offers no by-action-id
+	// lookup, so the caller carries the handle it was issued.
+	FetchActionReceipt(ctx context.Context, req ActionRequest, receiptRef string) (ActionReceipt, error)
 
 	// FetchObservationReceipt retrieves the signed ObservationReceipt
 	// confirming verificationNeedID for req and rechecks it with
 	// VerifyObservationReceipt before returning it.
+	//
+	// AgentNexus has frozen no observation-read surface, so implementations
+	// are expected to fail closed rather than invent a path. The recheck
+	// itself, VerifyObservationReceipt, stands on its own and is used
+	// wherever an ObservationReceipt is obtained.
 	FetchObservationReceipt(ctx context.Context, req ActionRequest, verificationNeedID string) (ObservationReceipt, error)
 }

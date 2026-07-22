@@ -24,6 +24,24 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// browserAuditContextRef is the business_context_ref a browser-session audit
+// append can bind — and today there is none.
+//
+// The frozen AuditEvidenceRequest requires a non-empty business_context_ref,
+// and AgentNexus resolves it with VerifyAccessTicket for EVERY credential
+// source, browser access tokens included: the append is rejected 401
+// invalid_ticket without one, and a browser token's principal must additionally
+// match the ticket's. browsersession.Session carries an upstream Bearer token
+// and neither a CaseTicket nor a wc_ work-case handle, so no browser console
+// audit append can be bound until it does.
+//
+// Returning the empty string rather than synthesizing a plausible-looking ref
+// is deliberate: nexusclient refuses an unbindable append locally, so the gap
+// surfaces as a named client error instead of a remote 401 — or, worse, as a
+// fabricated ref that AgentNexus resolves to somebody else's ticket. Tracked
+// with the browser work-case binding, not silently dropped.
+func browserAuditContextRef(browsersession.Session) string { return "" }
+
 type browserDreamEvidenceClient interface {
 	LocateWithBearer(context.Context, string, nexusruntime.EvidenceRequest) (nexusclient.LocateEvidenceResult, error)
 	ReadWithBearer(context.Context, string, nexusruntime.EvidenceReadRequest) (nexusclient.ReadEvidenceResult, error)
@@ -448,11 +466,19 @@ func (h *browserDreamHandler) evidenceAccess(w http.ResponseWriter, r *http.Requ
 		h.evidenceError(w, err)
 		return
 	}
-	if strings.TrimSpace(read.GrantRef) == "" {
-		writeError(w, http.StatusForbidden, "grant_required", "AgentNexus returned no bound Step Grant")
+	// Gate on the decision, not on a Step Grant — see the ticket-authenticated
+	// twin in dream_run_handler.go. A refusal arrives as 200 with
+	// {"decision":"deny"} and no data, so without this the console would render
+	// a denial as an empty evidence panel.
+	if !read.Allowed() {
+		writeError(w, http.StatusForbidden, "evidence_denied", "AgentNexus did not allow this evidence read")
 		return
 	}
-	audit, err := h.evidence.AppendAuditEvidenceWithBearer(r.Context(), session.UpstreamAccessToken, nexus.AppendAuditEvidenceRequest{IdempotencyKey: browserDreamID("audit", session.EnterpriseID, view.RunID, read.GrantRef), EnterpriseID: session.EnterpriseID, OrgVersion: session.OrgVersion, OrgUnitID: view.OrgUnitID, AuthorizedAction: "dream.evidence.read", Action: nexus.AuditEvidenceRead, ResourceType: "dream_run", ResourceID: view.RunID, Details: map[string]any{"evidence_pointer_id": view.EvidencePointerID, "grant_ref": read.GrantRef, "actor_user_id": session.UserID}})
+	// The idempotency key names the act being audited — this actor reading this
+	// run's evidence pointer — so a retried click appends once. It used to be
+	// keyed on read.GrantRef, which is always empty against a real AgentNexus,
+	// so every read of every pointer in a run collapsed onto one key.
+	audit, err := h.evidence.AppendAuditEvidenceWithBearer(r.Context(), session.UpstreamAccessToken, nexus.AppendAuditEvidenceRequest{IdempotencyKey: browserDreamID("audit", session.EnterpriseID, view.RunID, view.EvidencePointerID), BusinessContextRef: browserAuditContextRef(session), Action: nexus.AuditEvidenceRead, ResourceType: "dream_run", ResourceID: view.RunID, Details: map[string]any{"evidence_pointer_id": view.EvidencePointerID, "decision": read.Decision, "source_version": read.SourceVersion, "actor_user_id": session.UserID, "org_unit_id": view.OrgUnitID, "org_version": session.OrgVersion, "authorized_action": "dream.evidence.read"}})
 	if err != nil || strings.TrimSpace(audit.AuditRefID) == "" {
 		writeError(w, http.StatusServiceUnavailable, "audit_failed", "Evidence access could not be audited")
 		return
@@ -506,7 +532,7 @@ func (h *browserDreamHandler) rerunRun(w http.ResponseWriter, r *http.Request) {
 		h.writeRunHandle(w, session, view.OrgUnitID, id, http.StatusAccepted)
 		return
 	}
-	audit, err := h.evidence.AppendAuditEvidenceWithBearer(r.Context(), session.UpstreamAccessToken, nexus.AppendAuditEvidenceRequest{IdempotencyKey: auditIdempotencyKey(session.EnterpriseID, key), EnterpriseID: session.EnterpriseID, OrgVersion: session.OrgVersion, OrgUnitID: view.OrgUnitID, AuthorizedAction: "dream.rerun", Action: nexus.AuditDreamJobRun, ResourceType: "dream_run", ResourceID: view.RunID, Details: map[string]any{"org_unit_id": view.OrgUnitID, "idempotency_key": key, "phase": "manual_rerun_attempt"}})
+	audit, err := h.evidence.AppendAuditEvidenceWithBearer(r.Context(), session.UpstreamAccessToken, nexus.AppendAuditEvidenceRequest{IdempotencyKey: auditIdempotencyKey(session.EnterpriseID, key), BusinessContextRef: browserAuditContextRef(session), Action: nexus.AuditDreamJobRun, ResourceType: "dream_run", ResourceID: view.RunID, Details: map[string]any{"org_unit_id": view.OrgUnitID, "idempotency_key": key, "phase": "manual_rerun_attempt", "org_version": session.OrgVersion, "authorized_action": "dream.rerun"}})
 	if err != nil || strings.TrimSpace(audit.AuditRefID) == "" {
 		writeError(w, http.StatusServiceUnavailable, "audit_failed", "Dream rerun could not be audited")
 		return
@@ -613,7 +639,7 @@ func (h *browserDreamHandler) createPolicy(w http.ResponseWriter, r *http.Reques
 		h.writePolicy(w, session, *op.Replay, http.StatusCreated)
 		return
 	}
-	audit, err := h.evidence.AppendAuditEvidenceWithBearer(r.Context(), session.UpstreamAccessToken, nexus.AppendAuditEvidenceRequest{IdempotencyKey: auditIdempotencyKey(session.EnterpriseID, key), EnterpriseID: session.EnterpriseID, OrgVersion: session.OrgVersion, OrgUnitID: input.OrgUnitID, AuthorizedAction: action, Action: nexus.AuditDreamPolicyCreateRequested, ResourceType: "dream_policy", ResourceID: policyID, Details: map[string]any{"phase": "create", "org_unit_id": input.OrgUnitID}})
+	audit, err := h.evidence.AppendAuditEvidenceWithBearer(r.Context(), session.UpstreamAccessToken, nexus.AppendAuditEvidenceRequest{IdempotencyKey: auditIdempotencyKey(session.EnterpriseID, key), BusinessContextRef: browserAuditContextRef(session), Action: nexus.AuditDreamPolicyCreateRequested, ResourceType: "dream_policy", ResourceID: policyID, Details: map[string]any{"phase": "create", "org_unit_id": input.OrgUnitID, "org_version": session.OrgVersion, "authorized_action": action}})
 	if err != nil || strings.TrimSpace(audit.AuditRefID) == "" {
 		writeError(w, http.StatusServiceUnavailable, "audit_failed", "Dream policy creation could not be audited")
 		return
@@ -1200,7 +1226,7 @@ func (h *browserDreamHandler) backfillPolicy(w http.ResponseWriter, r *http.Requ
 		h.writeRunHandle(w, session, current.Policy.OrgUnitID, id, http.StatusAccepted)
 		return
 	}
-	audit, err := h.evidence.AppendAuditEvidenceWithBearer(r.Context(), session.UpstreamAccessToken, nexus.AppendAuditEvidenceRequest{IdempotencyKey: auditIdempotencyKey(session.EnterpriseID, key), EnterpriseID: session.EnterpriseID, OrgVersion: session.OrgVersion, OrgUnitID: current.Policy.OrgUnitID, AuthorizedAction: "dream.policy.backfill", Action: nexus.AuditDreamJobRun, ResourceType: "dream_policy", ResourceID: current.ID, Details: map[string]any{"window_start": input.WindowStart, "window_end": input.WindowEnd, "rerun": input.RerunHandle != "", "phase": "backfill_attempt"}})
+	audit, err := h.evidence.AppendAuditEvidenceWithBearer(r.Context(), session.UpstreamAccessToken, nexus.AppendAuditEvidenceRequest{IdempotencyKey: auditIdempotencyKey(session.EnterpriseID, key), BusinessContextRef: browserAuditContextRef(session), Action: nexus.AuditDreamJobRun, ResourceType: "dream_policy", ResourceID: current.ID, Details: map[string]any{"window_start": input.WindowStart, "window_end": input.WindowEnd, "rerun": input.RerunHandle != "", "phase": "backfill_attempt", "org_unit_id": current.Policy.OrgUnitID, "org_version": session.OrgVersion, "authorized_action": "dream.policy.backfill"}})
 	if err != nil || strings.TrimSpace(audit.AuditRefID) == "" {
 		writeError(w, http.StatusServiceUnavailable, "audit_failed", "Backfill could not be audited")
 		return
@@ -1282,7 +1308,10 @@ func (h *browserDreamHandler) beginPolicyOperation(w http.ResponseWriter, r *htt
 }
 func (h *browserDreamHandler) auditPolicy(w http.ResponseWriter, r *http.Request, session browsersession.Session, op dream.Operation, view dream.LifecycleView, phase string, details map[string]any) (string, bool) {
 	details["phase"] = phase
-	audit, err := h.evidence.AppendAuditEvidenceWithBearer(r.Context(), session.UpstreamAccessToken, nexus.AppendAuditEvidenceRequest{IdempotencyKey: auditIdempotencyKey(session.EnterpriseID, op.Row.OperationKey), EnterpriseID: session.EnterpriseID, OrgVersion: session.OrgVersion, OrgUnitID: view.Policy.OrgUnitID, AuthorizedAction: "dream.policy." + strings.Split(phase, ":")[0], Action: nexus.AuditDreamPolicyCreated, ResourceType: "dream_policy", ResourceID: view.ID, Details: details})
+	details["org_unit_id"] = view.Policy.OrgUnitID
+	details["org_version"] = session.OrgVersion
+	details["authorized_action"] = "dream.policy." + strings.Split(phase, ":")[0]
+	audit, err := h.evidence.AppendAuditEvidenceWithBearer(r.Context(), session.UpstreamAccessToken, nexus.AppendAuditEvidenceRequest{IdempotencyKey: auditIdempotencyKey(session.EnterpriseID, op.Row.OperationKey), BusinessContextRef: browserAuditContextRef(session), Action: nexus.AuditDreamPolicyCreated, ResourceType: "dream_policy", ResourceID: view.ID, Details: details})
 	if err != nil || strings.TrimSpace(audit.AuditRefID) == "" {
 		writeError(w, http.StatusServiceUnavailable, "audit_failed", "Dream policy operation could not be audited")
 		return "", false

@@ -41,16 +41,22 @@ func TestAgentAtlasConsumerContractPathsExistInPublishedGatewayRuntime(t *testin
 	consumer := readOpenAPIMap(t, filepath.Join("..", "..", "api", "openapi", "agentnexus-client.yaml"))
 	published := readOpenAPIMap(t, filepath.Join("testdata", publishedGatewayRuntimeSnapshot))
 
-	// notYetMigrated mirrors the shrinking allowlist of the behavioural test
-	// next to this one. Each entry is a surface whose DECLARATION still names a
-	// retired operation; removing an entry is the definition of "this surface's
-	// declaration is migrated". The list is asserted to be exact in both
-	// directions, so neither a silent regression nor a stale entry can hide.
-	notYetMigrated := map[string]bool{
-		"/v1/actions/request":     true, // -> /v1/runtime/act
-		"/v1/actions/receipt":     true, // -> /v1/runtime/receipts/{receipt_ref}
-		"/v1/actions/observation": true, // -> folded into the receipt surface
-	}
+	// notYetMigrated is the DECLARATION-level counterpart to the body-level
+	// allowlist in the behavioural test next to this one. The two track
+	// different things — which paths AgentAtlas declares versus which fields it
+	// sends — and are deliberately no longer described as mirrors of each
+	// other, which they never were.
+	//
+	// It is empty, and that is the finished state of ELC-NEXUS-1's declaration
+	// half: /v1/actions/request became /v1/runtime/act,
+	// /v1/actions/receipt became the handle-addressed
+	// /v1/runtime/receipts/{receipt_ref}, and /v1/actions/observation is
+	// declared nowhere because AgentNexus froze no observation-read surface
+	// (nexusclient.FetchObservationReceipt is dormant). Each entry was a
+	// surface whose declaration still named a retired operation; the list is
+	// asserted to be exact in both directions, so neither a silent regression
+	// nor a stale entry can hide.
+	notYetMigrated := map[string]bool{}
 	publishedPaths := openAPIPathSet(t, published)
 	var missing []string
 	for _, path := range sortedKeys(openAPIPathSet(t, consumer)) {

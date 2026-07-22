@@ -10,6 +10,9 @@ import (
 type fakeWorkflowEvidence struct {
 	locates []nexusruntime.EvidenceRequest
 	reads   []nexusruntime.EvidenceReadRequest
+	// deny makes Read answer the way AgentNexus answers a refusal: a
+	// SUCCESSFUL 200 carrying decision "deny" and no data.
+	deny bool
 }
 
 func (f *fakeWorkflowEvidence) Locate(_ context.Context, req nexusruntime.EvidenceRequest) (nexusclient.LocateEvidenceResult, error) {
@@ -25,8 +28,12 @@ func (f *fakeWorkflowEvidence) Locate(_ context.Context, req nexusruntime.Eviden
 
 func (f *fakeWorkflowEvidence) Read(_ context.Context, req nexusruntime.EvidenceReadRequest) (nexusclient.ReadEvidenceResult, error) {
 	f.reads = append(f.reads, req)
+	if f.deny {
+		return nexusclient.ReadEvidenceResult{Decision: nexusclient.ReadDeny}, nil
+	}
+	// No GrantRef: the real read handler never emits one.
 	return nexusclient.ReadEvidenceResult{
-		Decision: "allow", GrantRef: "grn_bound",
+		Decision:      nexusclient.ReadAllow,
 		Data:          map[string]any{"detail": "sealed-detail"},
 		SourceVersion: 7, AsOf: "2026-07-21T00:00:00Z", ServedFromCache: false,
 	}, nil

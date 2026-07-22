@@ -59,7 +59,7 @@ func (m *Mock) AppendAuditEvidence(_ context.Context, req nexus.AppendAuditEvide
 		raw, _ := json.Marshal(req)
 		sum := sha256.Sum256(raw)
 		hash := hex.EncodeToString(sum[:])
-		if receipt, ok := m.auditReceipts[req.EnterpriseID+"\x00"+req.IdempotencyKey]; ok {
+		if receipt, ok := m.auditReceipts[req.BusinessContextRef+"\x00"+req.IdempotencyKey]; ok {
 			if receipt.hash != hash {
 				return nexus.AppendAuditEvidenceResponse{}, fmt.Errorf("audit idempotency payload mismatch")
 			}
@@ -67,7 +67,7 @@ func (m *Mock) AppendAuditEvidence(_ context.Context, req nexus.AppendAuditEvide
 		}
 		ref := fmt.Sprintf("audit_%d", len(m.AuditLog)+1)
 		m.AuditLog = append(m.AuditLog, req)
-		m.auditReceipts[req.EnterpriseID+"\x00"+req.IdempotencyKey] = mockAuditReceipt{hash: hash, ref: ref}
+		m.auditReceipts[req.BusinessContextRef+"\x00"+req.IdempotencyKey] = mockAuditReceipt{hash: hash, ref: ref}
 		return nexus.AppendAuditEvidenceResponse{AuditRefID: ref}, nil
 	}
 	m.AuditLog = append(m.AuditLog, req)

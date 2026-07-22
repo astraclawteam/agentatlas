@@ -204,7 +204,7 @@ func (h *dreamRunHandler) rerunRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, result)
 		return
 	}
-	audit, err := h.nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{IdempotencyKey: auditIdempotencyKey(actor.Ticket.EnterpriseID, key), TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, Action: nexus.AuditDreamJobRun, ResourceType: "dream_run", ResourceID: view.RunID, Details: map[string]any{"org_unit_id": view.OrgUnitID, "idempotency_key": key, "phase": "manual_rerun_attempt"}})
+	audit, err := h.nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{IdempotencyKey: auditIdempotencyKey(actor.Ticket.EnterpriseID, key), BusinessContextRef: actor.TicketID, Action: nexus.AuditDreamJobRun, ResourceType: "dream_run", ResourceID: view.RunID, Details: map[string]any{"org_unit_id": view.OrgUnitID, "idempotency_key": key, "phase": "manual_rerun_attempt"}})
 	if errors.Is(err, nexusclient.ErrConflict) {
 		writeError(w, http.StatusConflict, "idempotency_conflict", err.Error())
 		return
@@ -286,11 +286,17 @@ func (h *dreamRunHandler) evidenceAccess(w http.ResponseWriter, r *http.Request)
 		h.writeNexusEvidenceError(w, err)
 		return
 	}
-	if strings.TrimSpace(read.GrantRef) == "" {
-		writeError(w, http.StatusForbidden, "grant_required", "AgentNexus returned no bound Step Grant")
+	// Gate on the decision, not on a Step Grant. AgentNexus answers a refusal
+	// with 200 and {"decision":"deny"} and no data, so returning here on a
+	// non-allow is what keeps the refusal from being served as an empty
+	// success. This guard used to require a non-empty GrantRef, which the real
+	// read handler never sends — so this endpoint returned 403 for every
+	// request in production and only passed against a mock that invented one.
+	if !read.Allowed() {
+		writeError(w, http.StatusForbidden, "evidence_denied", "AgentNexus did not allow this evidence read")
 		return
 	}
-	audit, err := h.nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, Action: nexus.AuditEvidenceRead, ResourceType: "dream_run", ResourceID: view.RunID, Details: map[string]any{"evidence_pointer_id": view.EvidencePointerID, "grant_ref": read.GrantRef, "actor_user_id": actor.Ticket.ActorUserID}})
+	audit, err := h.nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{BusinessContextRef: actor.TicketID, Action: nexus.AuditEvidenceRead, ResourceType: "dream_run", ResourceID: view.RunID, Details: map[string]any{"evidence_pointer_id": view.EvidencePointerID, "decision": read.Decision, "source_version": read.SourceVersion, "actor_user_id": actor.Ticket.ActorUserID}})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "audit_failed", err.Error())
 		return
@@ -304,7 +310,6 @@ func (h *dreamRunHandler) evidenceAccess(w http.ResponseWriter, r *http.Request)
 	// never masquerade as a live one; swallowing it here would re-create that
 	// ambiguity one layer up.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"grant_ref":         read.GrantRef,
 		"audit_ref_id":      audit.AuditRefID,
 		"decision":          read.Decision,
 		"data":              read.Data,

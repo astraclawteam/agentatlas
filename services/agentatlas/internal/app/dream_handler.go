@@ -722,7 +722,7 @@ func (h *dreamPolicyHandler) audit(w http.ResponseWriter, r *http.Request, actio
 }
 func (h *dreamPolicyHandler) auditWithKey(w http.ResponseWriter, r *http.Request, action nexus.AuditAction, id, idempotencyKey string, details map[string]any) (string, bool) {
 	actor, _ := actorFrom(r.Context())
-	resp, err := h.deps.Nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{IdempotencyKey: idempotencyKey, TicketID: actor.TicketID, EnterpriseID: actor.Ticket.EnterpriseID, Action: action, ResourceType: "dream_policy", ResourceID: id, Details: details})
+	resp, err := h.deps.Nexus.AppendAuditEvidence(r.Context(), nexus.AppendAuditEvidenceRequest{IdempotencyKey: idempotencyKey, BusinessContextRef: actor.TicketID, Action: action, ResourceType: "dream_policy", ResourceID: id, Details: details})
 	if errors.Is(err, nexusclient.ErrConflict) {
 		writeError(w, http.StatusConflict, "idempotency_conflict", err.Error())
 		return "", false

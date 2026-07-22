@@ -239,7 +239,7 @@ func TestBrowserDreamAdvancedPolicyRequiresEntitlementAndExplicitMode(t *testing
 	update = update.WithContext(context.WithValue(update.Context(), chi.RouteCtxKey, route))
 	updated := httptest.NewRecorder()
 	h.putAdvancedPolicy(updated, update)
-	if updated.Code != http.StatusOK || nx.last.Action != "dream.policy.advanced.edit" || nx.lastAudit.AuthorizedAction != "dream.policy.advanced.edit" {
+	if updated.Code != http.StatusOK || nx.last.Action != "dream.policy.advanced.edit" || nx.lastAudit.Details["authorized_action"] != "dream.policy.advanced.edit" {
 		t.Fatalf("advanced update=%d body=%s auth=%+v audit=%+v", updated.Code, updated.Body.String(), nx.last, nx.lastAudit)
 	}
 }
@@ -722,8 +722,9 @@ func (f *fakeBrowserDreamNexus) LocateWithBearer(_ context.Context, _ string, _ 
 }
 func (f *fakeBrowserDreamNexus) ReadWithBearer(_ context.Context, _ string, _ nexusruntime.EvidenceReadRequest) (nexusclient.ReadEvidenceResult, error) {
 	f.reads++
+	// No GrantRef: the real read handler never emits one.
 	return nexusclient.ReadEvidenceResult{
-		Decision: "allow", GrantRef: "grant-secret",
+		Decision:      nexusclient.ReadAllow,
 		Data:          map[string]any{"detail": f.detail},
 		SourceVersion: 7, AsOf: "2026-07-21T00:00:00Z", ServedFromCache: false,
 	}, nil

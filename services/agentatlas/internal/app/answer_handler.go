@@ -192,6 +192,14 @@ func (d *answerDeps) handleAnswer(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadGateway, "nexus_read_failed", err.Error())
 			return
 		}
+		// A refusal is a 200 with {"decision":"deny"} and no data, so it never
+		// reaches the ErrDenied branch above. Counting it as denied here is what
+		// keeps an empty Data map from being serialized into the prompt as a
+		// cited excerpt — an ungrounded claim entering the answer.
+		if !read.Allowed() {
+			denied++
+			continue
+		}
 		evidenceIDs = append(evidenceIDs, res.EvidencePointerID)
 		grantIDs = append(grantIDs, read.GrantRef)
 		// The frozen read returns normalized, policy-masked business FIELDS

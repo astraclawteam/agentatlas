@@ -172,18 +172,27 @@ func observationReceiptFields(req nexus.ActionRequest) map[string]any {
 	}
 }
 
-// actionServer wires the three /v1/actions/* endpoints the test drives, each
-// returning the response body handed to it verbatim — tests control the
-// exact wire payload (signed correctly, signed wrongly, or not at all).
+// actionTestReceiptRef is the opaque handle the frozen receipt surface is
+// addressed by. AgentNexus mints it and returns it on the Action; tests stand in
+// for that by handing it to FetchActionReceipt directly.
+const actionTestReceiptRef = "rcp_fixture0000000001"
+
+func actionTestReceiptRoute() string { return "GET /v1/runtime/receipts/" + actionTestReceiptRef }
+
+// actionServer wires the frozen Action endpoints the test drives, each returning
+// the response body handed to it verbatim — tests control the exact wire payload
+// (signed correctly, signed wrongly, or not at all). Keys are full
+// "METHOD /path" routes: the receipt surface is a GET addressed by handle, not
+// another POST, so the method is part of what these tests pin.
 func actionServer(t *testing.T, serviceSecret string, responses map[string][]byte) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
-	for path, body := range responses {
-		body := body
-		mux.HandleFunc("POST "+path, func(w http.ResponseWriter, r *http.Request) {
+	for route, body := range responses {
+		body, route := body, route
+		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
 			clientID, secret, ok := r.BasicAuth()
 			if !ok || clientID != "agentatlas" || secret != serviceSecret {
-				t.Errorf("%s: missing/invalid service Basic credentials", path)
+				t.Errorf("%s: missing/invalid service Basic credentials", route)
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(body)
@@ -226,7 +235,7 @@ func TestActionClientRequestActionAcceptsValidGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := actionServer(t, actionTestServiceSecret, map[string][]byte{
-		"/v1/actions/request": grantJSON,
+		"POST /v1/runtime/act": grantJSON,
 	})
 	c := newActionTestClient(t, actionTestServiceSecret, srv, pub)
 
@@ -244,7 +253,7 @@ func TestActionClientRequestActionRejectsMissingIdempotencyKey(t *testing.T) {
 	req.IdempotencyKey = ""
 	pub, _ := fixtureKeyPair(t)
 	srv := actionServer(t, actionTestServiceSecret, map[string][]byte{
-		"/v1/actions/request": []byte(`{}`),
+		"POST /v1/runtime/act": []byte(`{}`),
 	})
 	c := newActionTestClient(t, actionTestServiceSecret, srv, pub)
 
@@ -261,7 +270,7 @@ func TestActionClientRequestActionRejectsExpiredGrant(t *testing.T) {
 	fields["expires_at"] = time.Now().Add(-time.Hour).Format(time.RFC3339)
 	grantJSON, _ := json.Marshal(fields)
 	srv := actionServer(t, actionTestServiceSecret, map[string][]byte{
-		"/v1/actions/request": grantJSON,
+		"POST /v1/runtime/act": grantJSON,
 	})
 	c := newActionTestClient(t, actionTestServiceSecret, srv, pub)
 
@@ -278,7 +287,7 @@ func TestActionClientRequestActionRejectsMismatchedOrgActor(t *testing.T) {
 	fields["actor"] = "actor-mallory"
 	grantJSON, _ := json.Marshal(fields)
 	srv := actionServer(t, actionTestServiceSecret, map[string][]byte{
-		"/v1/actions/request": grantJSON,
+		"POST /v1/runtime/act": grantJSON,
 	})
 	c := newActionTestClient(t, actionTestServiceSecret, srv, pub)
 
@@ -293,7 +302,7 @@ func TestActionClientRequestActionRejectsReplayedGrant(t *testing.T) {
 	pub, _ := fixtureKeyPair(t)
 	grantJSON, _ := json.Marshal(actionGrantFields(req))
 	srv := actionServer(t, actionTestServiceSecret, map[string][]byte{
-		"/v1/actions/request": grantJSON,
+		"POST /v1/runtime/act": grantJSON,
 	})
 	c := newActionTestClient(t, actionTestServiceSecret, srv, pub)
 
@@ -315,7 +324,7 @@ func TestActionClientRequestActionSendsNoConnectorSpecificBody(t *testing.T) {
 
 	var capturedBody []byte
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/actions/request", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /v1/runtime/act", func(w http.ResponseWriter, r *http.Request) {
 		capturedBody, _ = jsonBody(r)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(grantJSON)
@@ -354,11 +363,11 @@ func TestActionClientFetchActionReceiptAcceptsValidSigned(t *testing.T) {
 	payload := actionReceiptSigningPayload(t, fields)
 	receiptJSON := signedJSON(t, priv, "nexus-signing-key-1", fields, payload)
 	srv := actionServer(t, actionTestServiceSecret, map[string][]byte{
-		"/v1/actions/receipt": receiptJSON,
+		actionTestReceiptRoute(): receiptJSON,
 	})
 	c := newActionTestClient(t, actionTestServiceSecret, srv, pub)
 
-	receipt, err := c.FetchActionReceipt(context.Background(), req)
+	receipt, err := c.FetchActionReceipt(context.Background(), req, actionTestReceiptRef)
 	if err != nil {
 		t.Fatalf("FetchActionReceipt: %v", err)
 	}
@@ -373,11 +382,11 @@ func TestActionClientFetchActionReceiptRejectsUnsigned(t *testing.T) {
 	fields := actionReceiptFields(req)
 	unsigned, _ := json.Marshal(fields) // no "signature" key at all
 	srv := actionServer(t, actionTestServiceSecret, map[string][]byte{
-		"/v1/actions/receipt": unsigned,
+		actionTestReceiptRoute(): unsigned,
 	})
 	c := newActionTestClient(t, actionTestServiceSecret, srv, pub)
 
-	_, err := c.FetchActionReceipt(context.Background(), req)
+	_, err := c.FetchActionReceipt(context.Background(), req, actionTestReceiptRef)
 	if !errors.Is(err, nexus.ErrUnsignedReceipt) {
 		t.Fatalf("unsigned wire ActionReceipt rejected for the wrong reason: %v", err)
 	}
@@ -391,11 +400,11 @@ func TestActionClientFetchActionReceiptRejectsWrongKey(t *testing.T) {
 	payload := actionReceiptSigningPayload(t, fields)
 	receiptJSON := signedJSON(t, wrongPriv, "nexus-signing-key-1", fields, payload)
 	srv := actionServer(t, actionTestServiceSecret, map[string][]byte{
-		"/v1/actions/receipt": receiptJSON,
+		actionTestReceiptRoute(): receiptJSON,
 	})
 	c := newActionTestClient(t, actionTestServiceSecret, srv, pub)
 
-	_, err := c.FetchActionReceipt(context.Background(), req)
+	_, err := c.FetchActionReceipt(context.Background(), req, actionTestReceiptRef)
 	if !errors.Is(err, nexus.ErrUntrustedSignature) {
 		t.Fatalf("wrong-key wire ActionReceipt rejected for the wrong reason: %v", err)
 	}
@@ -418,11 +427,11 @@ func TestActionClientFetchActionReceiptRejectsChangedParameterHash(t *testing.T)
 	payload := actionReceiptSigningPayload(t, fields)
 	receiptJSON := signedJSON(t, priv, "nexus-signing-key-1", fields, payload)
 	srv := actionServer(t, actionTestServiceSecret, map[string][]byte{
-		"/v1/actions/receipt": receiptJSON,
+		actionTestReceiptRoute(): receiptJSON,
 	})
 	c := newActionTestClient(t, actionTestServiceSecret, srv, pub)
 
-	if _, err := c.FetchActionReceipt(context.Background(), req); err == nil {
+	if _, err := c.FetchActionReceipt(context.Background(), req, actionTestReceiptRef); err == nil {
 		t.Fatal("ActionReceipt with a changed parameter_hash was accepted by the client")
 	}
 }
@@ -434,11 +443,11 @@ func TestActionClientActionReceiptNeverConfirmsOutcome(t *testing.T) {
 	payload := actionReceiptSigningPayload(t, fields)
 	receiptJSON := signedJSON(t, priv, "nexus-signing-key-1", fields, payload)
 	srv := actionServer(t, actionTestServiceSecret, map[string][]byte{
-		"/v1/actions/receipt": receiptJSON,
+		actionTestReceiptRoute(): receiptJSON,
 	})
 	c := newActionTestClient(t, actionTestServiceSecret, srv, pub)
 
-	receipt, err := c.FetchActionReceipt(context.Background(), req)
+	receipt, err := c.FetchActionReceipt(context.Background(), req, actionTestReceiptRef)
 	if err != nil {
 		t.Fatalf("FetchActionReceipt: %v", err)
 	}
@@ -447,79 +456,37 @@ func TestActionClientActionReceiptNeverConfirmsOutcome(t *testing.T) {
 	}
 }
 
-// --- FetchObservationReceipt -----------------------------------------------
+// --- FetchObservationReceipt (dormant) -------------------------------------
 
-func TestActionClientFetchObservationReceiptAcceptsValidSigned(t *testing.T) {
+// TestActionClientFetchObservationReceiptIsDormantAndCallsNothing pins the
+// dormancy rather than leaving it to a comment. AgentNexus's frozen contract has
+// no observation-read surface — its only receipt surface is the GET the tests
+// above drive, which returns an ActionReceipt — so this method must reach for no
+// endpoint at all. It previously POSTed to /v1/actions/observation, a path that
+// appears nowhere in the contract and could only ever 404.
+//
+// The three rejection cases this replaces (detached from Action, detached from
+// PostconditionSpec, never-confirms-Outcome) were assertions about
+// nexus.VerifyObservationReceipt reached through a transport that does not
+// exist. They live on unchanged in sdk/go/nexus/action_test.go, against the
+// verifier directly.
+func TestActionClientFetchObservationReceiptIsDormantAndCallsNothing(t *testing.T) {
 	req := actionFixtureRequest()
-	pub, priv := fixtureKeyPair(t)
-	fields := observationReceiptFields(req)
-	payload := observationReceiptSigningPayload(t, fields)
-	obsJSON := signedJSON(t, priv, "nexus-signing-key-1", fields, payload)
-	srv := actionServer(t, actionTestServiceSecret, map[string][]byte{
-		"/v1/actions/observation": obsJSON,
-	})
+	pub, _ := fixtureKeyPair(t)
+	var called []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = append(called, r.Method+" "+r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
 	c := newActionTestClient(t, actionTestServiceSecret, srv, pub)
 
-	obs, err := c.FetchObservationReceipt(context.Background(), req, "need-0001")
-	if err != nil {
-		t.Fatalf("FetchObservationReceipt: %v", err)
+	_, err := c.FetchObservationReceipt(context.Background(), req, "need-0001")
+	if !errors.Is(err, ErrNoFrozenSurface) {
+		t.Fatalf("observation fetch must fail closed on the missing frozen surface, got: %v", err)
 	}
-	if obs.ObservationID != "obs-0001" {
-		t.Fatalf("unexpected observation receipt: %+v", obs)
-	}
-}
-
-func TestActionClientFetchObservationReceiptRejectsDetachedFromAction(t *testing.T) {
-	req := actionFixtureRequest()
-	pub, priv := fixtureKeyPair(t)
-	fields := observationReceiptFields(req)
-	fields["action_id"] = "act-9999-different"
-	payload := observationReceiptSigningPayload(t, fields)
-	obsJSON := signedJSON(t, priv, "nexus-signing-key-1", fields, payload)
-	srv := actionServer(t, actionTestServiceSecret, map[string][]byte{
-		"/v1/actions/observation": obsJSON,
-	})
-	c := newActionTestClient(t, actionTestServiceSecret, srv, pub)
-
-	if _, err := c.FetchObservationReceipt(context.Background(), req, "need-0001"); err == nil {
-		t.Fatal("ObservationReceipt detached from its Action was accepted by the client")
-	}
-}
-
-func TestActionClientFetchObservationReceiptRejectsDetachedFromPostcondition(t *testing.T) {
-	req := actionFixtureRequest()
-	pub, priv := fixtureKeyPair(t)
-	fields := observationReceiptFields(req)
-	fields["postcondition_id"] = "post-does-not-exist"
-	payload := observationReceiptSigningPayload(t, fields)
-	obsJSON := signedJSON(t, priv, "nexus-signing-key-1", fields, payload)
-	srv := actionServer(t, actionTestServiceSecret, map[string][]byte{
-		"/v1/actions/observation": obsJSON,
-	})
-	c := newActionTestClient(t, actionTestServiceSecret, srv, pub)
-
-	if _, err := c.FetchObservationReceipt(context.Background(), req, "need-0001"); err == nil {
-		t.Fatal("ObservationReceipt detached from its PostconditionSpec was accepted by the client")
-	}
-}
-
-func TestActionClientObservationReceiptNeverConfirmsOutcome(t *testing.T) {
-	req := actionFixtureRequest()
-	pub, priv := fixtureKeyPair(t)
-	fields := observationReceiptFields(req)
-	payload := observationReceiptSigningPayload(t, fields)
-	obsJSON := signedJSON(t, priv, "nexus-signing-key-1", fields, payload)
-	srv := actionServer(t, actionTestServiceSecret, map[string][]byte{
-		"/v1/actions/observation": obsJSON,
-	})
-	c := newActionTestClient(t, actionTestServiceSecret, srv, pub)
-
-	obs, err := c.FetchObservationReceipt(context.Background(), req, "need-0001")
-	if err != nil {
-		t.Fatalf("FetchObservationReceipt: %v", err)
-	}
-	if err := obs.ConfirmsOutcome(); !errors.Is(err, nexus.ErrReceiptNotOutcomeEvidence) {
-		t.Fatalf("a fetched ObservationReceipt must still never confirm a business Outcome, got: %v", err)
+	if len(called) > 0 {
+		t.Fatalf("dormant observation fetch put %v on the wire", called)
 	}
 }
 
@@ -532,7 +499,7 @@ func TestActionClientUnconfiguredSigningKeyRejectsReceipt(t *testing.T) {
 	payload := actionReceiptSigningPayload(t, fields)
 	receiptJSON := signedJSON(t, priv, "nexus-signing-key-1", fields, payload)
 	srv := actionServer(t, actionTestServiceSecret, map[string][]byte{
-		"/v1/actions/receipt": receiptJSON,
+		actionTestReceiptRoute(): receiptJSON,
 	})
 	// Client built WITHOUT ConfigureActionSigningKey: no trusted key is
 	// registered, so verifySignature cannot verify any signature and the
@@ -542,7 +509,7 @@ func TestActionClientUnconfiguredSigningKeyRejectsReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.FetchActionReceipt(context.Background(), req); !errors.Is(err, nexus.ErrUntrustedSignature) {
+	if _, err := c.FetchActionReceipt(context.Background(), req, actionTestReceiptRef); !errors.Is(err, nexus.ErrUntrustedSignature) {
 		t.Fatalf("unconfigured-key client must reject any receipt (fail-closed), got: %v", err)
 	}
 }
@@ -563,11 +530,11 @@ func TestActionClientFetchActionReceiptRoundTripsNonEmptyExternalReceipt(t *test
 	payload := actionReceiptSigningPayload(t, fields)
 	receiptJSON := signedJSON(t, priv, "nexus-signing-key-1", fields, payload)
 	srv := actionServer(t, actionTestServiceSecret, map[string][]byte{
-		"/v1/actions/receipt": receiptJSON,
+		actionTestReceiptRoute(): receiptJSON,
 	})
 	c := newActionTestClient(t, actionTestServiceSecret, srv, pub)
 
-	receipt, err := c.FetchActionReceipt(context.Background(), req)
+	receipt, err := c.FetchActionReceipt(context.Background(), req, actionTestReceiptRef)
 	if err != nil {
 		t.Fatalf("receipt with a non-empty external_receipt failed to round-trip over the wire: %v", err)
 	}

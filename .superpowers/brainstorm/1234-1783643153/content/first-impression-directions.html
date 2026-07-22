@@ -1,0 +1,82 @@
+<h2>AgentAtlas 第一眼应该是什么？</h2>
+<p class="subtitle">前提：用户平时不主动打开；只有小智 Claw 带着一个维护任务把他送进来。请判断哪种首页最符合这个产品。</p>
+
+<div class="cards" style="grid-template-columns:repeat(3,minmax(0,1fr));align-items:stretch">
+  <div class="card" data-choice="task-first" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:0;background:#f4f0e8;min-height:450px;border-top:4px solid #a45f3b">
+      <div style="height:44px;padding:0 16px;display:flex;align-items:center;border-bottom:1px solid #dfd7cb;background:#faf8f4">
+        <div style="font-weight:700;color:#2f2925">AgentAtlas</div>
+        <div style="font-size:11px;color:#8a8077;margin-left:8px">企业知识维护</div>
+        <div style="margin-left:auto;font-size:11px;color:#665d55">研发一部 · 陈经理</div>
+      </div>
+      <div style="padding:22px 18px">
+        <div style="font-size:23px;font-weight:700;color:#2f2925">这件事需要你确认</div>
+        <div style="font-size:12px;color:#84786d;margin-top:5px">小智已完成整理，你只需要检查修改是否正确。</div>
+        <div style="background:#fff;border:1px solid #ddd3c7;border-radius:15px;padding:16px;margin-top:18px;box-shadow:0 8px 25px #6d50331a">
+          <div style="display:flex;justify-content:space-between;align-items:start">
+            <div><span style="font-size:10px;background:#f0e4da;color:#965534;border-radius:99px;padding:4px 7px">低风险 · 可直接发布</span><div style="font-weight:680;margin-top:10px">修正 MES 异常响应时间</div></div>
+            <span style="font-size:18px">✓</span>
+          </div>
+          <div style="margin-top:13px;background:#f8f6f2;border-radius:10px;padding:11px;font-size:12px;line-height:1.7">
+            修改前：30 分钟内响应<br><b style="color:#995837">修改后：15 分钟内响应</b>
+          </div>
+          <div style="font-size:11px;color:#7b7168;margin-top:10px">影响：研发一部 43 人的小智回答和 SOP 执行</div>
+          <div style="display:flex;gap:8px;margin-top:14px"><button class="mock-button" style="flex:1">退回修改</button><button class="mock-button" style="flex:1;background:#9b5b38;color:white">确认发布</button></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px">
+          <div style="padding:11px;background:#faf8f4;border:1px solid #dfd7cb;border-radius:10px;font-size:11px"><b>还有 2 项待处理</b><br><span style="color:#857a70">资料入库 · SOP 复核</span></div>
+          <div style="padding:11px;background:#faf8f4;border:1px solid #dfd7cb;border-radius:10px;font-size:11px"><b>知识运行正常</b><br><span style="color:#857a70">最近同步于 3 分钟前</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A · 任务即首页</h3>
+      <p>第一眼只解释“为什么来到这里、要确认什么、会影响谁”。最符合按需使用，也最适合不熟悉电脑的管理者。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="conversation-first" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:0;background:#f4f0e8;min-height:450px;border-top:4px solid #6d7786">
+      <div style="height:44px;padding:0 16px;display:flex;align-items:center;border-bottom:1px solid #d9d5ce;background:#faf8f4"><b>Atlas 助手</b><span style="margin-left:auto;font-size:11px;color:#777">知识维护对话</span></div>
+      <div style="padding:18px;display:flex;flex-direction:column;min-height:360px">
+        <div style="font-size:21px;font-weight:700;margin-bottom:18px">你好，想维护什么知识？</div>
+        <div style="align-self:flex-end;background:#e8e3db;border-radius:13px 13px 3px 13px;padding:10px 12px;max-width:78%;font-size:12px">小智说 MES 响应时间可能写错了。</div>
+        <div style="align-self:flex-start;background:#fff;border:1px solid #ddd6cc;border-radius:13px 13px 13px 3px;padding:12px;max-width:86%;font-size:12px;margin-top:10px;line-height:1.7">我查到两份依据。当前知识写的是 30 分钟，新版制度是 15 分钟。<br><br><b>要我生成修改草稿吗？</b><div style="margin-top:9px"><button class="mock-button" style="background:#667383;color:white">生成草稿</button></div></div>
+        <div style="margin-top:auto;border:1px solid #d6cec3;background:white;border-radius:12px;padding:10px;color:#9a9289;font-size:12px">描述要修改的知识，或拖入文件… <span style="float:right">➤</span></div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B · 对话即首页</h3>
+      <p>自然，但与小智 Claw 重复；用户从小智跳进来后还要再聊一次，任务上下文容易断裂。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="operations-first" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:0;background:#f3f4f5;min-height:450px;border-top:4px solid #536576">
+      <div style="height:44px;padding:0 14px;display:flex;align-items:center;background:#28333c;color:white"><b>AgentAtlas</b><span style="font-size:10px;margin-left:7px;color:#b9c4cc">Knowledge Operations</span><span style="margin-left:auto;font-size:11px">研发一部 ▾</span></div>
+      <div style="display:grid;grid-template-columns:78px 1fr;min-height:406px">
+        <div style="background:#fff;border-right:1px solid #d8dde0;padding:12px 8px;font-size:10px;line-height:2.6">概览<br><b>待办 3</b><br>知识库<br>资料<br>工作流<br>版本<br>审计<br>系统</div>
+        <div style="padding:14px">
+          <div style="font-size:18px;font-weight:700">知识运营概览</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:12px">
+            <div style="background:white;border:1px solid #d8dde0;padding:9px;border-radius:7px;font-size:9px">知识覆盖率<br><b style="font-size:17px">86%</b></div>
+            <div style="background:white;border:1px solid #d8dde0;padding:9px;border-radius:7px;font-size:9px">待审核<br><b style="font-size:17px">3</b></div>
+            <div style="background:white;border:1px solid #d8dde0;padding:9px;border-radius:7px;font-size:9px">工作流<br><b style="font-size:17px">18</b></div>
+          </div>
+          <div style="background:white;border:1px solid #d8dde0;border-radius:8px;margin-top:9px;padding:10px;height:95px"><b style="font-size:10px">部门知识健康度</b><div style="display:flex;align-items:flex-end;gap:8px;height:62px"><i style="height:35px;width:18px;background:#8094a5"></i><i style="height:52px;width:18px;background:#607889"></i><i style="height:42px;width:18px;background:#9aa8b3"></i><i style="height:57px;width:18px;background:#506b7c"></i><i style="height:29px;width:18px;background:#b1bbc3"></i></div></div>
+          <div style="background:white;border:1px solid #d8dde0;border-radius:8px;margin-top:9px;padding:10px;font-size:10px;line-height:2"><b>最近事件</b><br>● MES SOP 等待审批<br>● 12 份文件解析完成<br>● 研发二部同步失败</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C · 运营仪表盘首页</h3>
+      <p>信息完整、专业感强，但用户会觉得自己进入了另一个后台系统；适合服务商，不适合作为普通维护者第一眼。</p>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px;padding:14px 16px;border-radius:12px;background:#f5f3ef">
+  <strong>推荐 A：任务即首页。</strong>
+  <span style="font-size:13px;color:#71665d">入口来自小智，因此页面不应重新让用户找功能，而应无缝接住小智已经建立的任务上下文。</span>
+  <div style="font-size:12px;color:#8b8178;margin-top:5px">点击选择；如果认可方向但不认可文案、品牌或布局，也请直接说明。</div>
+</div>
