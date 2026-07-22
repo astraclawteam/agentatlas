@@ -33,11 +33,11 @@ var optionalAgentDeps = map[string]string{
 // leaves nil, sorted. An empty result means every dependency the router needs
 // is present; it does NOT mean each one works.
 //
-// Only interface and func fields are considered. Concrete pointers (the
-// browser session service, the governance change service, the assessment
-// service) are left
-// alone deliberately: several are genuinely optional and their own code already
-// nil-checks them, so including them would force a second, noisier list.
+// Only interface and func fields are considered. Concrete pointers (the browser
+// session service, the governance change service, the assessment service) are
+// left alone deliberately: several are genuinely optional and their own code
+// already nil-checks them, so including them would force a second, noisier
+// list.
 func (d AgentRouterDeps) MissingRequired() []string {
 	value := reflect.ValueOf(d)
 	typ := value.Type()
