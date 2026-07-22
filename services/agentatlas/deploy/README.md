@@ -10,12 +10,30 @@ stores as runtime shortcuts.
 
 ## Local stack (Docker Compose)
 
+Prerequisite: an **agentnexus checkout beside this repository**.
+`services/agentatlas/go.mod` replaces
+`github.com/astraclawteam/agentnexus/sdk/go/runtime` with
+`../../../agentnexus/sdk/go/runtime`, a path outside this repository, so the Go
+service images are built from two contexts: the agentatlas repo root plus a
+named `nexus-runtime-sdk` context pointing at that sibling. Compose wires both.
+If the checkouts are not siblings, set `ATLAS_NEXUS_RUNTIME_SDK_DIR` (relative
+to `deploy/compose/`, or absolute) before building. Without it every Go service
+fails at `go mod download`. See the DECISION NOTE in `docker/Dockerfile` for why
+this is a workaround rather than the fix.
+
 ```sh
 cd deploy/compose
 cp .env.example .env        # adjust credentials / mirrors
 docker compose config -q    # validate
 docker compose build        # builds Go services, OpenSearch+smartcn, sidecars
 docker compose up -d
+```
+
+To check the container build on its own — the gate that CI runs, and the only
+check that fails when the image build breaks (`go build`/`go test` do not):
+
+```sh
+make -C services/agentatlas docker-build-check
 ```
 
 The previous browser-session encryption key is not required on a first
@@ -112,6 +130,12 @@ endpoints (`values.yaml -> config`). Production private-deployment control
 
 `helm lint` runs in CI; local machines without helm rely on
 `docker compose config` plus the integration/e2e suites for validation.
+
+The chart consumes already-built images and cannot build them: Helm has no
+equivalent of the named build context that the compose stack uses to reach the
+sibling agentnexus checkout. Until the AgentNexus runtime SDK is a published
+module, images must be produced through compose or `docker build` first — see
+the DECISION NOTE in `docker/Dockerfile`.
 
 Boundary and demo docs: `docs/specs/open-core-boundary.md`,
 `docs/mvp-demo.md`.

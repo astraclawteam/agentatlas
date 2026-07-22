@@ -4,6 +4,17 @@ name: agentatlas
 # integration tests, POC, SaaS-like and private-like validation.
 # No SQLite / in-memory queue / vector-only store substitutes.
 
+# Second build context for every Go service image. services/agentatlas/go.mod
+# `replace`s the AgentNexus runtime SDK with ../../../agentnexus/sdk/go/runtime,
+# a path OUTSIDE this repository, so the repo-root build context alone can never
+# satisfy `go mod download`. The default below is the sibling checkout in the
+# standard workspace layout (agentatlas/ and agentnexus/ side by side); override
+# ATLAS_NEXUS_RUNTIME_SDK_DIR when the checkouts sit elsewhere. See the DECISION
+# NOTE in ../docker/Dockerfile — this whole block disappears once the SDK is a
+# published module.
+x-nexus-runtime-sdk-context: &nexus-runtime-sdk-context
+  nexus-runtime-sdk: ${ATLAS_NEXUS_RUNTIME_SDK_DIR:-../../../../../agentnexus/sdk/go/runtime}
+
 x-atlas-env: &atlas-env
   ATLAS_POSTGRES_DSN: postgres://atlas:${POSTGRES_PASSWORD:-atlas}@postgres:5432/agentatlas?sslmode=disable
   ATLAS_OPENSEARCH_ADDRESSES: http://opensearch:9200
@@ -227,6 +238,7 @@ services:
     build:
       context: ../../../..
       dockerfile: services/agentatlas/deploy/docker/Dockerfile
+      additional_contexts: *nexus-runtime-sdk-context
       args:
         SERVICE: atlas-api
         GOPROXY: ${GOPROXY_BUILD:-https://proxy.golang.org,direct}
@@ -258,6 +270,7 @@ services:
     build:
       context: ../../../..
       dockerfile: services/agentatlas/deploy/docker/Dockerfile
+      additional_contexts: *nexus-runtime-sdk-context
       args:
         SERVICE: atlas-agent
         GOPROXY: ${GOPROXY_BUILD:-https://proxy.golang.org,direct}
@@ -287,6 +300,7 @@ services:
     build:
       context: ../../../..
       dockerfile: services/agentatlas/deploy/docker/Dockerfile
+      additional_contexts: *nexus-runtime-sdk-context
       args:
         SERVICE: atlas-worker
         GOPROXY: ${GOPROXY_BUILD:-https://proxy.golang.org,direct}
@@ -326,6 +340,7 @@ services:
     build:
       context: ../../../..
       dockerfile: services/agentatlas/deploy/docker/Dockerfile
+      additional_contexts: *nexus-runtime-sdk-context
       args:
         SERVICE: atlas-outcome-projector
         GOPROXY: ${GOPROXY_BUILD:-https://proxy.golang.org,direct}
@@ -364,6 +379,7 @@ services:
     build:
       context: ../../../..
       dockerfile: services/agentatlas/deploy/docker/Dockerfile
+      additional_contexts: *nexus-runtime-sdk-context
       args:
         SERVICE: parser-gateway
         GOPROXY: ${GOPROXY_BUILD:-https://proxy.golang.org,direct}

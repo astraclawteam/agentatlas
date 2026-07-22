@@ -1,4 +1,4 @@
-.PHONY: build test tidy generate verify-contracts
+.PHONY: build test tidy generate verify-contracts docker-build-check
 
 build:
 	go build ./...
@@ -17,3 +17,10 @@ generate:
 
 verify-contracts:
 	go test ./schemas ./internal/app -run 'Dream|Governance|ReviewRoute|ChangeDraft|Contract|GeneratedAgentTypes' -count=1
+
+# Builds real service images. `build`/`test` above pass on a developer machine
+# even when no image can be built, because go.mod reaches into a sibling
+# agentnexus checkout that no build context contains; only this target catches
+# that. SERVICES limits the set (default: every cmd/).
+docker-build-check:
+	sh deploy/docker/build-check.sh $(SERVICES)
