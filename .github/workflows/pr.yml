@@ -1,0 +1,32 @@
+# AgentAtlas — pull-request gate.
+#
+# Until this file existed the repository had NO pull-request CI: .github/workflows
+# held only release.yml, which triggers on tags and workflow_dispatch. Every
+# "the tests pass" claim in this repository's history was therefore a local
+# `go test` run, and nothing ever built a container — which is how
+# services/agentatlas/deploy/docker/Dockerfile stayed unable to build any of the
+# five services, with a fully green suite, until cdb22d9.
+#
+# The steps themselves live in build-test.yml, shared with release.yml, so the
+# PR gate and the release gate cannot drift apart.
+
+name: pr
+
+on:
+  pull_request:
+  # Lets the gate be exercised on a branch without opening a pull request.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    # Pull requests opened from a FORK do not receive repository secrets, so the
+    # AGENTNEXUS_READ_TOKEN preflight in build-test.yml fails there by design and
+    # says so. That is correct for this repository: no fork can build it either,
+    # because services/agentatlas/go.mod reaches into a sibling agentnexus
+    # checkout. It stops being a constraint when the SDK is a published module.
+    uses: ./.github/workflows/build-test.yml
+    secrets:
+      AGENTNEXUS_READ_TOKEN: ${{ secrets.AGENTNEXUS_READ_TOKEN }}

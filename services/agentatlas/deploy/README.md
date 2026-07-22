@@ -36,6 +36,27 @@ check that fails when the image build breaks (`go build`/`go test` do not):
 make -C services/agentatlas docker-build-check
 ```
 
+### CI prerequisite: the `AGENTNEXUS_READ_TOKEN` repository secret
+
+Because the sibling checkout is a prerequisite for *every* Go command in
+`services/agentatlas` — not only the image build — GitHub Actions has to fetch
+`astraclawteam/agentnexus` before it can run any of them. It does that with a
+repository secret named **`AGENTNEXUS_READ_TOKEN`**, holding a token with read
+access to that repository. `.github/workflows/build-test.yml` uses it for the
+`actions/checkout` of the sibling, and both the pull-request gate (`pr.yml`) and
+the release workflow (`release.yml`) depend on it.
+
+If the secret is absent, the gate stops at a preflight step that names it,
+rather than failing later with an opaque `actions/checkout` 404 or a Go
+`replacement directory ... does not exist` error. Configure it under
+*Settings → Secrets and variables → Actions*. Two consequences worth knowing:
+
+- Pull requests opened from a **fork** never receive repository secrets, so the
+  gate cannot pass on fork PRs. No fork can build this repository either, for
+  the same underlying reason.
+- The token requirement disappears entirely once the AgentNexus runtime SDK is a
+  published module — see the DECISION NOTE in `docker/Dockerfile`.
+
 The previous browser-session encryption key is not required on a first
 install. During a key rotation, set
 `ATLAS_BROWSER_SESSION_PREVIOUS_ENCRYPTION_KEY_ID` and
