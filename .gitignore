@@ -19,3 +19,7 @@ Thumbs.db
 # Local env
 .env
 *.local.yaml
+
+# Session/tooling scratch areas — never product code.
+.superpowers/
+.claude/
