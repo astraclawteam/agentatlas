@@ -102,6 +102,14 @@ func (d *answerDeps) handleAnswer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden", "ticket enterprise does not match request")
 		return
 	}
+	// No model, no answer — refuse before the retrieval and the authorized
+	// evidence reads below, which would otherwise spend real AgentNexus grants
+	// on a request that cannot produce anything. Checked after the auth
+	// decisions so an unauthorized caller still learns nothing about wiring.
+	if d.llm == nil {
+		writeError(w, http.StatusServiceUnavailable, "generation_unavailable", "answer generation is not configured")
+		return
+	}
 	actor := req.ActorUserID
 	if actor == "" {
 		actor = identity.ActorUserID

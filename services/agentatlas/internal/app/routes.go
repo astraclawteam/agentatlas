@@ -32,9 +32,17 @@ import (
 // Omitted entirely when TLS is not configured for this service's own
 // server identity (deps.TLS == nil), so a plaintext deployment's /healthz
 // body is identical to before this task.
+//
+// "reason" states why a process that started anyway is not ready — an
+// unconfigured llmrouter, for instance. It exists because the alternative this
+// repo used to practise was `exit 1` during startup, which tells an operator
+// nothing: a container that dies on boot has no health surface to ask. The
+// reason is written for that operator, so it names environment variables and
+// never their values (one of them is the router API key).
 type healthzResponse struct {
 	HealthStatus
-	TLS *transportsecurity.Status `json:"tls,omitempty"`
+	TLS    *transportsecurity.Status `json:"tls,omitempty"`
+	Reason string                    `json:"reason,omitempty"`
 }
 
 func newID(prefix string) string {
@@ -67,6 +75,10 @@ type RouterDeps struct {
 	// status distinctly from readiness, without leaking key material — see
 	// healthzResponse's doc comment.
 	TLS *transportsecurity.Manager
+	// NotReadyReason states why this process started degraded, for /healthz.
+	// Empty means fully composed. It is written by the composition root for an
+	// operator, so it names settings and never values — see healthzResponse.
+	NotReadyReason string
 }
 
 // NewRouter builds the atlas-api HTTP surface (api/openapi/atlas-runtime.yaml).
@@ -91,6 +103,10 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		status := NewHealthStatus("atlas-api",
 			"postgres", "opensearch", "nats", "object-storage", "agentnexus", "llmrouter").MarkReady(true)
 		resp := healthzResponse{HealthStatus: status}
+		if deps.NotReadyReason != "" {
+			resp.HealthStatus = status.MarkReady(false)
+			resp.Reason = deps.NotReadyReason
+		}
 		if deps.TLS != nil {
 			tlsStatus := deps.TLS.Status()
 			resp.TLS = &tlsStatus

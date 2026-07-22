@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
@@ -49,6 +50,12 @@ func run() error {
 
 	cfg, err := config.Load(os.Getenv("ATLAS_CONFIG"))
 	if err != nil {
+		return err
+	}
+	// Configuration is validated BEFORE any irreversible work. storage.Migrate
+	// below applies 22 migrations; a service that refuses to start on its own
+	// configuration must not have mutated the schema on the way out.
+	if err := validateConfig(cfg); err != nil {
 		return err
 	}
 
@@ -133,30 +140,16 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// An unset approval authority is a deployment gap, not a default: the
-	// resolver and the dream handlers all fail closed on it rather than
-	// approving locally, so refuse to start instead of serving a governance
-	// surface that can only ever answer 503.
-	if strings.TrimSpace(cfg.AgentNexus.ApprovalAuthority) == "" {
-		return errors.New("agentnexus.approval_authority is required: name the customer OA/BPM system that decides governed changes")
-	}
 	changes := governance.NewService(changeStore, governance.NexusRouteResolver{Client: rawNexusClient, Now: time.Now, Transmit: rawNexusClient, Authority: cfg.AgentNexus.ApprovalAuthority}, governance.NexusAuditAppender{Client: rawNexusClient}, nil, time.Now)
 	changes.SetAuthorizer(governance.NexusAuthorizer{Client: rawNexusClient})
 
-	defaultModel := cfg.LLMRouter.DefaultModel
-	if defaultModel == "" {
-		defaultModel = "deepseek-v4-flash"
-	}
-	llm, err := llmroutermodel.New(llmroutermodel.Config{
-		BaseURL: cfg.LLMRouter.BaseURL, APIKey: cfg.LLMRouter.APIKey,
-		DefaultModel: defaultModel, Timeout: 120 * time.Second, TLS: tlsLinks.llmRouter,
-	})
+	defaultModel := resolvedDefaultModel(cfg.LLMRouter)
+	agentRunner, llm, modelGap, err := composeAgentRunner(cfg.LLMRouter, defaultModel, tlsLinks.llmRouter)
 	if err != nil {
 		return err
 	}
-	agentRunner, err := agent.NewRunner(llm)
-	if err != nil {
-		return err
+	if modelGap != "" {
+		logger.Warn("knowledge agent is not composed", zap.String("reason", modelGap))
 	}
 	workflowSvc, err := workflow.NewService(queries)
 	if err != nil {
@@ -203,7 +196,8 @@ func run() error {
 		// evidence drill-down unreachable, while the tests stayed green
 		// because each test sets them itself.
 		OrgAuthorization: rawNexusClient, Evidence: rawNexusClient,
-		TLS: tlsLinks.agentAtlas,
+		TLS: tlsLinks.agentAtlas, NotReadyReason: modelGap,
+		Dependencies: readinessProbes(pool, bus, rawNexusClient, llm),
 	}
 	// Refuse to start with a required dependency unwired. These deps fail
 	// closed, so an unset one does not crash - it silently removes a feature,
@@ -224,6 +218,7 @@ func run() error {
 		zap.String("version", app.Version),
 		zap.String("agentnexus", cfg.AgentNexus.BaseURL),
 		zap.String("model", defaultModel),
+		zap.Bool("knowledge_agent", agentRunner != nil),
 		zap.String("tls_mode", string(cfg.TLS.AgentAtlas.Mode)),
 	)
 	server := &http.Server{Addr: addr, Handler: router, ReadHeaderTimeout: 10 * time.Second}
@@ -253,6 +248,94 @@ func run() error {
 		}
 		return nil
 	}
+}
+
+// validateConfig rejects the deployment gaps this binary cannot serve around,
+// before it touches PostgreSQL. Everything checked here is a value an operator
+// sets, so the errors name the setting rather than the code that reads it.
+func validateConfig(cfg *config.Config) error {
+	// An unset approval authority is a deployment gap, not a default: the
+	// resolver and the dream handlers all fail closed on it rather than
+	// approving locally, so refuse to start instead of serving a governance
+	// surface that can only ever answer 503.
+	if strings.TrimSpace(cfg.AgentNexus.ApprovalAuthority) == "" {
+		return errors.New("agentnexus.approval_authority is required: name the customer OA/BPM system that decides governed changes")
+	}
+	return nil
+}
+
+// resolvedDefaultModel applies the model name this deployment requests when the
+// operator has not named one. Unlike the router endpoint it is safe to default:
+// a wrong model name is answered by the router, not silently swallowed.
+func resolvedDefaultModel(router config.LLMRouter) string {
+	if strings.TrimSpace(router.DefaultModel) == "" {
+		return "deepseek-v4-flash"
+	}
+	return router.DefaultModel
+}
+
+// composeAgentRunner builds the Knowledge Agent runner, or explains why it
+// could not.
+//
+// An unconfigured router is a deployment gap, and this binary deliberately does
+// NOT exit on it. Workflow drafting, dream policies, governed changes and the
+// whole Console BFF need no model; only /v1/agent/runs does, and it already
+// answers 503 when the runner is nil. AgentNexus's gateway-agent answers the
+// identical gap the same way (agentnexus/services/agentnexus/cmd/gateway-agent/
+// main.go): start, serve health, report not-ready with a stated reason. Two
+// products in one stack must not answer "no model configured" with `exit 1` and
+// `degrade with a reason` respectively.
+//
+// The reason is served from /healthz and logged, so it names the environment
+// variable rather than any value: one of those values is the router API key,
+// and a health surface is not a place a secret may ever appear.
+// It returns the model alongside the runner because the readiness surface has
+// to probe the same endpoint this binary would actually call. Building a second
+// client for the probe would let the two drift, and a health check that passes
+// against a different endpoint than the work uses is worse than none.
+func composeAgentRunner(router config.LLMRouter, defaultModel string, tls *transportsecurity.Manager) (*agent.Runner, *llmroutermodel.Model, string, error) {
+	if strings.TrimSpace(router.BaseURL) == "" {
+		return nil, nil, "knowledge agent not composed: llmrouter has no endpoint, set ATLAS_LLMROUTER_BASE_URL", nil
+	}
+	llm, err := llmroutermodel.New(llmroutermodel.Config{
+		BaseURL: router.BaseURL, APIKey: router.APIKey,
+		DefaultModel: defaultModel, Timeout: 120 * time.Second, TLS: tls,
+	})
+	if err != nil {
+		return nil, nil, "", err
+	}
+	runner, err := agent.NewRunner(llm)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return runner, llm, "", nil
+}
+
+// readinessProbes pairs every dependency atlas-agent's health surface NAMES
+// with the check that answers for it.
+//
+// The pairing is the point. /healthz used to publish
+// ["postgres","nats","agentnexus","llmrouter"] next to a constant ready:true,
+// which reads as four checked results and was four string literals; the names
+// now come from this list, so one cannot be published without a check behind
+// it. llmrouter is absent when the deployment did not configure it, because a
+// name with no check is exactly what this replaces -- the composition gap is
+// reported through the not-ready reason instead.
+//
+// agentnexus matters most here: atlas-agent makes NO call to AgentNexus during
+// startup, so a wrong ATLAS_NEXUS_BASE_URL used to stay invisible until the
+// first real cross-product request, long after every surface had reported
+// itself healthy.
+func readinessProbes(pool *pgxpool.Pool, bus *tasks.NATSBus, nexus *nexusclient.HTTPClient, llm *llmroutermodel.Model) []app.DependencyProbe {
+	probes := []app.DependencyProbe{
+		{Name: "postgres", Check: pool.Ping},
+		{Name: "nats", Check: bus.Probe},
+		{Name: "agentnexus", Check: nexus.Probe},
+	}
+	if llm != nil {
+		probes = append(probes, app.DependencyProbe{Name: "llmrouter", Check: llm.Probe})
+	}
+	return probes
 }
 
 // tlsManagers is atlas-agent's transport-security composition: one Manager

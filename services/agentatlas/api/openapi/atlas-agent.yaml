@@ -11,6 +11,21 @@ info:
 security:
   - NexusTicket: []
 paths:
+  /readyz:
+    get:
+      security: []
+      operationId: getAtlasAgentReadiness
+      description: >
+        Readiness. Declared rather than left as an undocumented operational
+        endpoint because a peer depends on it: AgentNexus's gateway agent
+        probes peer /readyz targets (AGENTNEXUS_HEALTH_PROBE_TARGETS) and this
+        one used to answer "404 page not found", which its diagnostics reported
+        as an unreachable service. 200 means every dependency named in the body
+        answered; 503 names the ones that did not. Liveness is /healthz, which
+        stays 200 while this is 503 so the container does not flap.
+      responses:
+        '200': {description: Every named dependency answered., content: {application/json: {schema: {$ref: '#/components/schemas/Readiness'}}}}
+        '503': {description: At least one named dependency did not answer, or the process started degraded., content: {application/json: {schema: {$ref: '#/components/schemas/Readiness'}}}}
   /auth/login:
     get:
       security: []
@@ -819,6 +834,23 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
   schemas:
+    Readiness:
+      type: object
+      required: [service, version, ready, dependencies]
+      properties:
+        service: {type: string}
+        version: {type: string}
+        ready: {type: boolean}
+        dependencies:
+          type: array
+          description: The dependencies this service probes. A name appears here only if something checks it.
+          items: {type: string}
+        unready:
+          type: array
+          description: The subset of dependencies whose probe failed. Names only — this endpoint is unauthenticated and a probe error carries internal addresses.
+          items: {type: string}
+        reason: {type: string, description: Why the process started degraded, naming a setting and never a value.}
+        tls: {type: object, description: Certificate lifecycle status; present only when this service has its own TLS identity.}
     BrowserSessionView:
       type: object
       additionalProperties: false

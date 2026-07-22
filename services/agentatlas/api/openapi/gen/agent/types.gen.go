@@ -2532,6 +2532,24 @@ type PublishedChangeVersion struct {
 	Version    int    `json:"version"`
 }
 
+// Readiness defines model for Readiness.
+type Readiness struct {
+	// Dependencies The dependencies this service probes. A name appears here only if something checks it.
+	Dependencies []string `json:"dependencies"`
+	Ready        bool     `json:"ready"`
+
+	// Reason Why the process started degraded
+	Reason  *string `json:"reason,omitempty"`
+	Service string  `json:"service"`
+
+	// Tls Certificate lifecycle status; present only when this service has its own TLS identity.
+	Tls *map[string]interface{} `json:"tls,omitempty"`
+
+	// Unready The subset of dependencies whose probe failed. Names only — this endpoint is unauthenticated and a probe error carries internal addresses.
+	Unready *[]string `json:"unready,omitempty"`
+	Version string    `json:"version"`
+}
+
 // ReviewRoute defines model for ReviewRoute.
 type ReviewRoute struct {
 	ChangeId        string                  `json:"change_id"`

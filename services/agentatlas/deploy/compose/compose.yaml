@@ -12,7 +12,13 @@ x-atlas-env: &atlas-env
   ATLAS_OBJECT_BUCKET: agentatlas
   ATLAS_OBJECT_ACCESS_KEY: ${MINIO_ROOT_USER:-atlas}
   ATLAS_OBJECT_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-atlas-secret-key}
-  ATLAS_LLMROUTER_BASE_URL: ${LLMROUTER_BASE_URL:-http://host.docker.internal:8000/v1}
+  # Model access. There is deliberately NO default endpoint here: the previous
+  # one (host.docker.internal:8000/v1) resolves to nothing in this stack, so it
+  # did not satisfy the requirement, it hid it — the services started, reported
+  # healthy, and failed at the first model call instead of at boot. Left unset,
+  # the services start and report ready=false at /healthz naming this variable,
+  # which is the answer an operator can act on.
+  ATLAS_LLMROUTER_BASE_URL: ${LLMROUTER_BASE_URL:-}
   ATLAS_LLMROUTER_API_KEY: ${LLMROUTER_API_KEY:-}
   ATLAS_NEXUS_BASE_URL: ${NEXUS_BASE_URL:-http://host.docker.internal:8100}
   ATLAS_NEXUS_CLIENT_ID: agentatlas
@@ -271,10 +277,16 @@ services:
       - agentatlas_agentnexus_service_secret
     volumes: *atlas-tls-volume
     ports:
-      - "9091:9091" # metrics/liveness listener (plaintext; not a named TLS link)
+      - "9091:9091" # metrics/health listener (plaintext; not a named TLS link)
     healthcheck:
-      # the worker has no API port; its /metrics listener doubles as liveness
-      test: ["CMD-SHELL", "wget -qO- http://localhost:9091/metrics >/dev/null || exit 1"]
+      # /readyz, not /metrics. The worker has no API port, so its metrics
+      # listener used to double as the healthcheck — but /metrics answers
+      # perfectly on a worker whose AgentNexus org-version subscription is
+      # failing 401 on every attempt, which is exactly what this reported as
+      # `healthy` for ninety seconds. /readyz answers 503 for that state and
+      # says how long it has been failing; /healthz on the same listener stays
+      # 200 so the container does not flap.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9091/readyz >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12

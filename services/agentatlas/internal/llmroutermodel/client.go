@@ -164,6 +164,31 @@ func (c *Client) do(ctx context.Context, req chatRequest) (*http.Response, error
 	return resp, nil
 }
 
+// probe performs the cheapest authenticated round trip an OpenAI-compatible
+// endpoint offers: listing the model shelf. See Model.Probe.
+func (c *Client) probe(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.cfg.BaseURL, "/")+"/models", nil)
+	if err != nil {
+		return err
+	}
+	if c.cfg.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("llmroutermodel: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		// No body snippet: this error reaches an operator log from a readiness
+		// loop that runs forever, and a router error body can echo request
+		// headers.
+		return fmt.Errorf("llmroutermodel: model list returned status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // Complete performs a non-streaming chat completion.
 func (c *Client) Complete(ctx context.Context, req chatRequest) (*chatResponse, error) {
 	req.Stream = false

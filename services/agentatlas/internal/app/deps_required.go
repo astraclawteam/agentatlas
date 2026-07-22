@@ -59,6 +59,14 @@ func (d AgentRouterDeps) MissingRequired() []string {
 			missing = append(missing, field.Name)
 		}
 	}
+	// Dependencies is a slice, so the reflective sweep above cannot see it. It
+	// is checked by hand because an empty one is precisely the false-green this
+	// list exists to catch: the health surface publishes the names of the
+	// probes registered here, so a composition root that registers none serves
+	// an empty dependency list and an unconditional ready:true.
+	if len(d.Dependencies) == 0 {
+		missing = append(missing, "Dependencies")
+	}
 	sort.Strings(missing)
 	return missing
 }

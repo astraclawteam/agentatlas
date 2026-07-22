@@ -10,9 +10,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
+	"google.golang.org/adk/model"
 
 	db "github.com/astraclawteam/agentatlas/services/agentatlas/db/generated"
 	"github.com/astraclawteam/agentatlas/services/agentatlas/internal/app"
@@ -98,16 +100,16 @@ func run() error {
 		logger.Warn("llmrouter api key not configured: retrieval runs KEYWORD-ONLY (no vectors, no rerank)")
 	}
 
-	defaultModel := cfg.LLMRouter.DefaultModel
-	if defaultModel == "" {
-		defaultModel = "deepseek-v4-flash"
-	}
-	llm, err := llmroutermodel.New(llmroutermodel.Config{
-		BaseURL: cfg.LLMRouter.BaseURL, APIKey: cfg.LLMRouter.APIKey,
-		DefaultModel: defaultModel, Timeout: 120 * time.Second, TLS: tlsLinks.llmRouter,
-	})
+	// Model access degrades rather than exits, for the same reason the
+	// keyword-only branch above does: an unconfigured router removes answer
+	// generation, not space/timeline/trace queries or work-brief ingestion.
+	// See composeModel.
+	llm, modelGap, err := composeModel(cfg.LLMRouter, tlsLinks.llmRouter)
 	if err != nil {
 		return err
+	}
+	if modelGap != "" {
+		logger.Warn("answer generation is not composed", zap.String("reason", modelGap))
 	}
 
 	bus, err := tasks.NewNATSBus(ctx, cfg.NATS.URL, tlsLinks.nats)
@@ -147,7 +149,7 @@ func run() error {
 	router := app.NewRouter(app.RouterDeps{
 		Nexus: nexusClient, Retrieval: retrievalSvc, Traces: traceSvc,
 		LLM: llm, Store: queries, Runner: runner, Artifacts: artifactSvc, Metrics: metrics,
-		TLS: tlsLinks.agentAtlas,
+		TLS: tlsLinks.agentAtlas, NotReadyReason: modelGap,
 	})
 
 	addr := os.Getenv("ATLAS_API_ADDR")
@@ -159,6 +161,7 @@ func run() error {
 		zap.String("version", app.Version),
 		zap.String("agentnexus", cfg.AgentNexus.BaseURL),
 		zap.String("retrieval_mode", retrievalMode),
+		zap.Bool("answer_generation", llm != nil),
 		zap.String("tls_mode", string(cfg.TLS.AgentAtlas.Mode)),
 	)
 	server := &http.Server{Addr: addr, Handler: router, ReadHeaderTimeout: 10 * time.Second}
@@ -171,6 +174,39 @@ func run() error {
 		return fmt.Errorf("agentatlas server tls: %w", err)
 	}
 	return server.Serve(ln)
+}
+
+// composeModel builds the OpenAI-compatible model adapter, or explains why it
+// could not.
+//
+// An unconfigured router is a deployment gap, and this binary deliberately does
+// NOT exit on it — for the same reason AgentNexus's gateway-agent does not
+// (agentnexus/services/agentnexus/cmd/gateway-agent/main.go): a container that
+// dies on boot leaves the operator with no health surface to ask, and the rest
+// of this API does not need a model. /v1/answer answers 503 when the model is
+// nil; everything else is unaffected.
+//
+// The gap branch returns a nil INTERFACE, not a typed nil pointer, so the
+// handler's nil check actually fires.
+//
+// The reason is served from /healthz and logged, so it names the environment
+// variable rather than any value: one of those values is the router API key.
+func composeModel(router config.LLMRouter, tls *transportsecurity.Manager) (model.LLM, string, error) {
+	if strings.TrimSpace(router.BaseURL) == "" {
+		return nil, "answer generation not composed: llmrouter has no endpoint, set ATLAS_LLMROUTER_BASE_URL", nil
+	}
+	defaultModel := router.DefaultModel
+	if strings.TrimSpace(defaultModel) == "" {
+		defaultModel = "deepseek-v4-flash"
+	}
+	llm, err := llmroutermodel.New(llmroutermodel.Config{
+		BaseURL: router.BaseURL, APIKey: router.APIKey,
+		DefaultModel: defaultModel, Timeout: 120 * time.Second, TLS: tls,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return llm, "", nil
 }
 
 // tlsManagers is atlas-api's transport-security composition: one Manager

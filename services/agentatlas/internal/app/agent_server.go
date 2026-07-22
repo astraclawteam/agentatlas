@@ -64,6 +64,15 @@ type AgentRouterDeps struct {
 	// status distinctly from readiness, without leaking key material — see
 	// healthzResponse's doc comment in routes.go.
 	TLS *transportsecurity.Manager
+	// NotReadyReason states why this process started degraded, for /healthz.
+	// Empty means fully composed. It is written by the composition root for an
+	// operator, so it names settings and never values — see healthzResponse.
+	NotReadyReason string
+	// Dependencies are the readiness probes /healthz and /readyz answer from,
+	// and the ONLY source of the dependency names those bodies publish. It is
+	// required: an empty set is a process that names nothing it depends on and
+	// reports itself unconditionally ready — see DependencyProbe.
+	Dependencies []DependencyProbe
 }
 
 type dreamBackfiller interface {
@@ -155,18 +164,15 @@ func NewAgentRouter(deps AgentRouterDeps) *chi.Mux {
 		r.Use(deps.Metrics.Middleware)
 		r.Method(http.MethodGet, "/metrics", deps.Metrics.Handler())
 	}
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		status := NewHealthStatus("atlas-agent",
-			"postgres", "nats", "agentnexus", "llmrouter").MarkReady(true)
-		resp := healthzResponse{HealthStatus: status}
-		if deps.TLS != nil {
-			tlsStatus := deps.TLS.Status()
-			resp.TLS = &tlsStatus
-			if !tlsStatus.Ready {
-				resp.HealthStatus = status.MarkReady(false)
-			}
-		}
-		writeJSON(w, http.StatusOK, resp)
+	// The dependency names published here used to be the literal list
+	// "postgres", "nats", "agentnexus", "llmrouter" beside a constant
+	// ready:true, and there was no /readyz at all. They now come from the
+	// probes, so this surface cannot name a dependency nothing checks.
+	mountHealthAndReadiness(r.Get, readinessSurface{
+		Service:        "atlas-agent",
+		Probes:         deps.Dependencies,
+		TLS:            deps.TLS,
+		NotReadyReason: deps.NotReadyReason,
 	})
 
 	wf := &workflowHandler{deps: deps}

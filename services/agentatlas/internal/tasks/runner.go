@@ -192,6 +192,7 @@ const streamName = "AGENTATLAS_JOBS"
 // type) so restarts redeliver unacked work; PG claims keep it idempotent.
 type NATSBus struct {
 	js jetstream.JetStream
+	nc *nats.Conn
 }
 
 // NewNATSBus connects to NATS JetStream. tlsMgr configures the NATS link's
@@ -225,7 +226,28 @@ func NewNATSBus(ctx context.Context, url string, tlsMgr *transportsecurity.Manag
 	if err != nil {
 		return nil, fmt.Errorf("jetstream stream: %w", err)
 	}
-	return &NATSBus{js: js}, nil
+	return &NATSBus{js: js, nc: nc}, nil
+}
+
+// Probe reports whether the bus is usable RIGHT NOW, for readiness surfaces.
+//
+// The connection auto-reconnects, so holding a *NATSBus proves only that the
+// dial succeeded once at boot. That distinction is the whole point: a service
+// that answers "nats" as a checked dependency must check the live link, not the
+// fact that it was constructed.
+func (b *NATSBus) Probe(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if b.nc == nil || !b.nc.IsConnected() {
+		return fmt.Errorf("nats: not connected")
+	}
+	// AccountInfo is a JetStream round trip, so this also proves the stream
+	// layer answers rather than only that a TCP connection is open.
+	if _, err := b.js.AccountInfo(ctx); err != nil {
+		return fmt.Errorf("nats jetstream: %w", err)
+	}
+	return nil
 }
 
 func subjectFor(jobType string) string {

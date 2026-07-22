@@ -207,6 +207,21 @@ func (c *HTTPClient) doGet(ctx context.Context, path string, out any) error {
 	return nil
 }
 
+// Probe reports whether the configured AgentNexus deployment answers, for
+// readiness surfaces.
+//
+// It exists because atlas-agent and atlas-worker resolve this link LAZILY, at
+// first use: a wrong ATLAS_NEXUS_BASE_URL was invisible until the first real
+// cross-product request, while /healthz listed "agentnexus" among its
+// dependencies and reported ready:true. This is a reachability check of the
+// configured base URL against the gateway's own readiness endpoint. It carries
+// the service credential the client was built with, but AgentNexus does not
+// gate /readyz on it, so a success here proves the ADDRESS is right and says
+// nothing about whether the credential is registered.
+func (c *HTTPClient) Probe(ctx context.Context) error {
+	return c.get(ctx, "/readyz", nil)
+}
+
 func loadServiceSecretFile(path string) (string, error) {
 	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return "", fmt.Errorf("secret path must be canonical and absolute")

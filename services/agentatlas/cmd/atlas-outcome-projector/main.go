@@ -18,6 +18,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -121,8 +122,29 @@ func run() error {
 			tickSeconds = n
 		}
 	}
+	// The health surface. This service used to serve NO HTTP listener at all --
+	// no /healthz, no /readyz, no metrics port -- while degrading silently by
+	// design: the ProjectAll failures below are WARN logs and the watermark just
+	// stops advancing. Nothing inside the container could be asked whether the
+	// projection was moving; the image is alpine with one static binary and no
+	// psql. The listener follows atlas-worker's ATLAS_WORKER_METRICS_ADDR
+	// pattern, and carries the lag, which is the number that answers the
+	// question.
+	health := newProjectionHealth()
+	metricsAddr := strings.TrimSpace(os.Getenv("ATLAS_OUTCOME_PROJECTOR_METRICS_ADDR"))
+	if metricsAddr == "" {
+		metricsAddr = defaultMetricsAddr
+	}
+	healthMux, err := newProjectorHealthMux(health)
+	if err != nil {
+		return err
+	}
+	healthSrv := &http.Server{Addr: metricsAddr, Handler: healthMux, ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = healthSrv.ListenAndServe() }()
+	defer func() { _ = healthSrv.Close() }()
+
 	// Initial catch-up so a fresh/recovered projector converges immediately.
-	if err := projector.ProjectAll(ctx); err != nil {
+	if err := observeProjection(ctx, projector, health); err != nil {
 		logger.Warn("initial projection catch-up (degraded until AGE reachable)", zap.Error(err))
 	}
 	go func() {
@@ -133,7 +155,7 @@ func run() error {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if err := projector.ProjectAll(ctx); err != nil {
+				if err := observeProjection(ctx, projector, health); err != nil {
 					logger.Warn("projection catch-up (graph-dependent planning degrades explicitly)", zap.Error(err))
 				}
 			}
@@ -144,6 +166,7 @@ func run() error {
 		zap.String("nats", cfg.NATS.URL),
 		zap.String("graph", graphName),
 		zap.Int("tick_seconds", tickSeconds),
+		zap.String("health_addr", metricsAddr),
 		zap.String("provider", outcomegraph.ProviderName),
 		zap.String("age_release", outcomegraph.AGERelease))
 

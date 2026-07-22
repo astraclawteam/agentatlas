@@ -29,6 +29,14 @@ func (m *Model) Name() string {
 	return m.client.cfg.DefaultModel
 }
 
+// Probe reports whether the configured router answers, for readiness surfaces.
+//
+// It lists models rather than generating anything: a readiness check must not
+// spend tokens or bill a tenant. The API key travels with it, so an endpoint
+// that is reachable but rejects this deployment's credential is reported as a
+// failure -- which is the case a "is the host up" ping would call healthy.
+func (m *Model) Probe(ctx context.Context) error { return m.client.probe(ctx) }
+
 // GenerateContent maps the ADK request to the OpenAI-compatible wire format.
 // In streaming mode, text deltas are yielded as Partial responses and the
 // final response carries the accumulated content including complete tool

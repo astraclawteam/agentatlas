@@ -57,7 +57,20 @@ Notes:
   for smoke runs.
 - On China networks set `GOPROXY_BUILD=https://goproxy.cn,direct` and a
   domestic `PIP_INDEX_URL` in `.env` before `docker compose build`.
-- `LLMROUTER_BASE_URL` accepts any OpenAI-compatible endpoint.
+- `LLMROUTER_BASE_URL` accepts any OpenAI-compatible endpoint. It reaches the
+  services as `ATLAS_LLMROUTER_BASE_URL`, and it has no default: an endpoint
+  that resolves to nothing reads as configured and fails at the first model
+  call instead of at boot.
+- Model access degrades, it does not abort. With `LLMROUTER_BASE_URL` unset,
+  `atlas-agent` and `atlas-api` still start and serve; `/healthz` answers
+  `ready:false` with a `reason` naming the missing variable, `POST
+  /v1/agent/runs` answers 503 `agent_unavailable`, and `POST /v1/answer`
+  answers 503 `generation_unavailable`. Everything that needs no model —
+  workflows, dream policies, governed changes, the Console BFF, space/timeline/
+  trace queries, work-brief ingestion — is unaffected.
+- `LLMROUTER_API_KEY` is separate: with an endpoint but no key, retrieval runs
+  keyword-only (no vectors, no rerank) and `atlas-worker` runs its
+  deterministic path. This is reported in each service's startup log line.
 - The AgentNexus mock server ships with the org-sync work (Goal 5+); until
   then `NEXUS_BASE_URL` is a placeholder.
 

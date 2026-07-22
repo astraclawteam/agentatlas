@@ -7,7 +7,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -235,9 +234,12 @@ func run() error {
 	if metricsAddr == "" {
 		metricsAddr = ":9091"
 	}
-	metricsMux := http.NewServeMux()
-	metricsMux.Handle("/metrics", metrics.Handler())
-	metricsSrv := &http.Server{Addr: metricsAddr, Handler: metricsMux, ReadHeaderTimeout: 10 * time.Second}
+	// The same listener now carries readiness. It used to carry /metrics alone,
+	// which is why a permanently 401ing org-version subscription could run for
+	// ninety seconds behind a green healthcheck: /metrics answers perfectly on a
+	// worker that is not doing its job.
+	cursors := newOrgCursorHealth(orgCursorFailureThreshold)
+	metricsSrv := &http.Server{Addr: metricsAddr, Handler: newWorkerHealthMux(metrics, cursors), ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = metricsSrv.ListenAndServe() }()
 	defer func() { _ = metricsSrv.Close() }()
 
@@ -333,28 +335,13 @@ func run() error {
 			if ent == "" {
 				continue
 			}
-			go func(enterpriseID string) {
-				for ctx.Err() == nil {
-					err := syncer.Run(ctx, enterpriseID, 0)
-					if errors.Is(err, nexusclient.ErrOrgCursorAhead) {
-						// A cursor ahead of the sealed version can never
-						// succeed on retry; looping would hammer the feed
-						// forever. Stop this tenant and say so.
-						logger.Error("org cursor is ahead of the sealed org version; not retrying",
-							zap.String("enterprise_id", enterpriseID), zap.Error(err))
-						return
-					}
-					if err != nil && ctx.Err() == nil {
-						logger.Warn("org version stream ended; retrying",
-							zap.String("enterprise_id", enterpriseID), zap.Error(err))
-					}
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(5 * time.Second):
-					}
-				}
-			}(ent)
+			go runOrgCursor(ctx, orgCursor{
+				Run:          func(ctx context.Context) error { return syncer.Run(ctx, ent, 0) },
+				EnterpriseID: ent,
+				Health:       cursors,
+				Logger:       logger,
+				RetryDelay:   orgCursorRetryDelay,
+			})
 		}
 		logger.Info("org version cursor subscribed", zap.String("enterprises", ents))
 	}

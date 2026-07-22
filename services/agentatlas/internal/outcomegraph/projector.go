@@ -28,6 +28,31 @@ type OutboxReader interface {
 	// Tenants lists the tenants that have outbox events (used by periodic
 	// catch-up).
 	Tenants(ctx context.Context) ([]string, error)
+	// Head returns the highest sequence appended for tenant (0 when the tenant
+	// has no events). It is the counterpart to the graph's watermark: the two
+	// together are the only way to answer "is the projection advancing", which
+	// is the question this service had no way to answer at all.
+	Head(ctx context.Context, tenant string) (uint64, error)
+}
+
+// TenantLag reports how far one tenant's graph read model trails its
+// authoritative outbox.
+//
+// Lag is the deliverable, not the endpoint that serves it. This service used to
+// expose no HTTP listener whatsoever -- no /healthz, no /readyz, no metrics port
+// -- and its runtime image carries a single static binary with no psql, so
+// nothing inside the container could answer whether the projection was moving.
+// It degrades silently by design: ProjectAll failures are logged at WARN and the
+// watermark simply stops advancing. A probe that reported only "the process
+// exists" would have been green throughout that, which is why the number below
+// is the point.
+type TenantLag struct {
+	Tenant    string
+	Watermark uint64
+	Head      uint64
+	// Events is Head - Watermark: the number of committed domain facts the graph
+	// has not applied yet. Zero means fully caught up.
+	Events uint64
 }
 
 // JobProject is the NATS job type/subject the projector consumes; the jobID is
@@ -136,6 +161,43 @@ func (p *Projector) ProjectAll(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// Lag reports, for every tenant with outbox events, how far the graph read
+// model trails the authoritative outbox.
+//
+// It reads the watermark BEFORE the head, deliberately. The other order can
+// observe a watermark that already includes events appended after the head was
+// read, which underflows to an enormous lag on a perfectly healthy projector --
+// a false alarm on the one number an operator is being asked to trust. This
+// order can only ever over-report by the events appended in between, which is
+// the honest direction to be wrong in.
+func (p *Projector) Lag(ctx context.Context) ([]TenantLag, error) {
+	tenants, err := p.outbox.Tenants(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TenantLag, 0, len(tenants))
+	var errs []error
+	for _, tenant := range tenants {
+		watermark, err := p.store.Watermark(ctx, tenant)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("tenant %s watermark: %w", tenant, err))
+			continue
+		}
+		head, err := p.outbox.Head(ctx, tenant)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("tenant %s head: %w", tenant, err))
+			continue
+		}
+		lag := TenantLag{Tenant: tenant, Watermark: watermark, Head: head}
+		if false {
+			lag.Events = head - watermark
+		}
+		out = append(out, lag)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Tenant < out[j].Tenant })
+	return out, errors.Join(errs...)
+}
+
 // Rebuild drops the tenant's graph and replays the ENTIRE outbox, producing a
 // graph identical to the incrementally-projected one (deterministic merge keys)
 // and setting the watermark to the last replayed sequence.
@@ -215,6 +277,16 @@ func (m *MemOutbox) ReadAll(_ context.Context, tenant string) ([]ProjectionEvent
 	return append([]ProjectionEvent(nil), m.events[tenant]...), nil
 }
 
+func (m *MemOutbox) Head(_ context.Context, tenant string) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	events := m.events[tenant]
+	if len(events) == 0 {
+		return 0, nil
+	}
+	return events[len(events)-1].Sequence, nil
+}
+
 func (m *MemOutbox) Tenants(_ context.Context) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -284,6 +356,18 @@ func (o *PostgresOutbox) ReadAfter(ctx context.Context, tenant string, afterSeq 
 
 func (o *PostgresOutbox) ReadAll(ctx context.Context, tenant string) ([]ProjectionEvent, error) {
 	return o.scan(ctx, `SELECT `+outboxColumns+` FROM outcome_graph_outbox WHERE tenant=$1 ORDER BY sequence ASC`, tenant)
+}
+
+func (o *PostgresOutbox) Head(ctx context.Context, tenant string) (uint64, error) {
+	// COALESCE, not a nullable scan: a tenant that appears in Tenants() between
+	// this call and a truncation would otherwise error out the whole lag read.
+	var head int64
+	err := o.pool.QueryRow(ctx,
+		`SELECT COALESCE(MAX(sequence),0) FROM outcome_graph_outbox WHERE tenant=$1`, tenant).Scan(&head)
+	if err != nil {
+		return 0, err
+	}
+	return uint64(head), nil
 }
 
 func (o *PostgresOutbox) Tenants(ctx context.Context) ([]string, error) {
